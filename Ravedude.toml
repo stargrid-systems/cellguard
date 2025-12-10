@@ -1,0 +1,13 @@
+[general]
+
+[board]
+name = "avr128db48"
+
+[board.reset]
+automatic = true
+
+[board.avrdude]
+programmer = "pkobn_updi"
+partno = "avr128db48"
+baudrate = -1
+do-chip-erase = true
