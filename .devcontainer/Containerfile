@@ -1,0 +1,77 @@
+FROM docker.io/library/rust:1-trixie AS ravedude-builder
+SHELL ["/bin/bash", "-c"]
+# Install packages with apt
+RUN \
+    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    <<EOF
+set -euo pipefail
+packages=(
+    'libudev-dev'
+    'pkg-config'
+)
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends "${packages[@]}"
+EOF
+# Compile and install ravedude
+ARG RAVEDUDE_VERSION=0.2.2
+RUN \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
+    --mount=type=cache,target=/usr/local/cargo/registry/ \
+    <<EOF
+set -euo pipefail
+cargo install --locked "ravedude@${RAVEDUDE_VERSION}"
+EOF
+
+FROM docker.io/library/debian:trixie
+SHELL ["/bin/bash", "-c"]
+# Install packages with apt
+RUN \
+    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    <<EOF
+set -euo pipefail
+packages=(
+    'ca-certificates'
+    'curl'
+    'usbutils'
+    # Toolchain
+    'avr-libc'
+    'gcc'
+    'gcc-avr'
+    'libc6-dev'
+    'rustup'
+)
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends "${packages[@]}"
+EOF
+# Install cargo-binstall
+ARG CARGO_BINSTALL_VERSION=1.16.3
+RUN <<EOF
+set -euo pipefail
+export BINSTALL_VERSION="${CARGO_BINSTALL_VERSION}"
+export CARGO_HOME='/usr/local'
+curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+EOF
+# Install avrdude from GitHub releases to get latest version
+ARG AVRDUDE_VERSION=8.1
+RUN \
+    --mount=type=tmpfs,target=/tmp \
+    <<EOF
+set -euo pipefail
+# One of Linux_32bit, Linux_64bit, Linux_ARMv6, Linux_ARM64
+arch=$(dpkg --print-architecture)
+case "${arch}" in    
+    'amd64') arch='Linux_64bit' ;;
+    'armhf') arch='Linux_ARMv6' ;;
+    'arm64') arch='Linux_ARM64' ;;
+    *) echo >&2 "Unsupported architecture: ${arch}"; exit 1 ;;
+esac
+url="https://github.com/avrdudes/avrdude/releases/download/v${AVRDUDE_VERSION}/avrdude_v${AVRDUDE_VERSION}_${arch}.tar.gz"
+curl -L -o /tmp/avrdude.tar.gz "${url}"
+tar -xzf /tmp/avrdude.tar.gz -C /usr/local --strip-components=1
+EOF
+# Install ravedude from the builder stage
+COPY --from=ravedude-builder /usr/local/cargo/bin/ravedude /usr/local/bin/ravedude
