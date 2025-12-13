@@ -1,0 +1,13 @@
+[general]
+
+[board]
+name = "attiny416"
+
+[board.reset]
+automatic = true
+
+[board.avrdude]
+programmer = "xplainedmini_updi"
+partno = "attiny416"
+baudrate = -1
+do-chip-erase = true

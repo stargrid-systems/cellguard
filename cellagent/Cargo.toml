@@ -1,0 +1,29 @@
+[package]
+name = "cellagent"
+version = "0.1.0"
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "cellagent"
+test = false
+bench = false
+
+[dependencies]
+avr-device = { version = "0.8.0", features = ["attiny416", "rt"] }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "8ccb251f1f8fe8d5d4ba0e7b294565dde12e5ac0" }
+
+[profile.dev]
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
