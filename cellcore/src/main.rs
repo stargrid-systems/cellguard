@@ -3,6 +3,7 @@
 #![feature(abi_avr_interrupt)]
 
 use crate::pac::Peripherals;
+use avr_device::asm::delay_cycles;
 use avr_device::avr128db48 as pac;
 
 #[panic_handler]
@@ -18,9 +19,9 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     let p = unsafe { Peripherals::steal() };
     loop {
         set_led(&p.PORTB, true);
-        sleep_ticks(5);
+        delay_cycles(500);
         set_led(&p.PORTB, false);
-        sleep_ticks(100);
+        delay_cycles(1000);
     }
 }
 
@@ -52,10 +53,4 @@ fn set_led(reg: &pac::PORTB, on: bool) {
 
 fn read_switch(reg: &pac::PORTB) -> bool {
     reg.in_().read().pb2().bit_is_clear()
-}
-
-fn sleep_ticks(ticks: u16) {
-    for _ in 0..ticks {
-        avr_device::asm::nop();
-    }
 }
