@@ -1,9 +1,0 @@
-[package]
-name = "cellagent"
-version = "0.1.0"
-authors = ["Simon Berger <simon@siku2.io>"]
-edition = "2024"
-license = "AGPL-3.0-or-later"
-
-[dependencies]
-embedded-hal = "1"
