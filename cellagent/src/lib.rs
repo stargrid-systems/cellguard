@@ -1,8 +1,8 @@
-pub struct CellagentCore {
+pub struct Cellagent {
     _private: (),
 }
 
-impl CellagentCore {}
+impl Cellagent {}
 
 // Required drivers:
 // - ADC (AC)
