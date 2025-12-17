@@ -17,6 +17,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellagent_boot"
+version = "0.1.0"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "cellcore"
 version = "0.1.0"
 
