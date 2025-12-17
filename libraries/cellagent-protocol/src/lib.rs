@@ -6,8 +6,6 @@ use zerocopy::{
 
 pub mod cobs; // TODO: pub to silence unused warning
 
-// TODO: add start of frame marker
-
 #[derive(FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned)]
 #[repr(C)]
 pub struct Packet {
@@ -20,7 +18,6 @@ pub struct Packet {
 pub struct PacketHeader {
     pub id: u8,
     pub raw_kind: u8,
-    pub len: U16<LittleEndian>,
     pub crc: U16<LittleEndian>,
 }
 
