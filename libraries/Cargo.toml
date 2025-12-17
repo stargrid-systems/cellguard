@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["cellagent", "cellagent_boot", "cellagent-protocol", "cellcore"]
+members = ["cellagent", "cellagent_boot", "cellagent_protocol", "cellcore"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]

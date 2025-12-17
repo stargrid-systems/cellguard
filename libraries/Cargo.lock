@@ -10,14 +10,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "cellagent-protocol"
+name = "cellagent_boot"
 version = "0.1.0"
 dependencies = [
  "zerocopy",
 ]
 
 [[package]]
-name = "cellagent_boot"
+name = "cellagent_protocol"
 version = "0.1.0"
 dependencies = [
  "zerocopy",
