@@ -1,3 +1,0 @@
-[build]
-target = "avr-none"
-rustflags = ["-C", "target-cpu=attiny416"]

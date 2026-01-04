@@ -2,9 +2,10 @@
 #![no_main]
 #![feature(abi_avr_interrupt)]
 
-use crate::pac::Peripherals;
 use avr_device::asm::delay_cycles;
 use avr_device::avr128db48 as pac;
+
+use crate::pac::Peripherals;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -13,9 +14,9 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
     // get the peripherals so we can access serial and the LED.
     //
-    // SAFETY: Because main() already has references to the peripherals this is an unsafe
-    // operation - but because no other code can run after the panic handler was called,
-    // we know it is okay.
+    // SAFETY: Because main() already has references to the peripherals this is an
+    //         unsafe operation - but because no other code can run after the panic
+    //         handler was called, we know it is okay.
     let p = unsafe { Peripherals::steal() };
     loop {
         set_led(&p.PORTB, true);

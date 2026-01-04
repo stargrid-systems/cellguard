@@ -83,7 +83,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cellagent"
+name = "cellcore-avr128db28"
 version = "0.1.0"
 dependencies = [
  "avr-device",
