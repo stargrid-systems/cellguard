@@ -1,3 +1,7 @@
+[build]
+target = "avr-none"
+rustflags = ["-C", "target-cpu=avr128db28"]
+
 [target.'cfg(target_arch = "avr")']
 runner = "ravedude"
 
