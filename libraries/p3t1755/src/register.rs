@@ -278,3 +278,129 @@ impl Temperature {
         centi_deg_c as i16
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_default_bits() {
+        let c = Config::RESET;
+        assert!(!c.shutdown_mode());
+        assert!(!c.thermostat_mode());
+        assert!(!c.polarity());
+        assert!(!c.one_shot());
+        assert!(matches!(c.fault_queue(), FaultQueue::Two));
+        assert!(matches!(c.conversion_time(), ConversionTime::Ms55));
+    }
+
+    #[test]
+    fn config_setters_bits() {
+        let c = Config::RESET
+            .with_shutdown_mode(true)
+            .with_thermostat_mode(true)
+            .with_polarity(true)
+            .with_one_shot(true);
+        assert!(c.shutdown_mode());
+        assert!(c.thermostat_mode());
+        assert!(c.polarity());
+        assert!(c.one_shot());
+
+        let c = c
+            .with_shutdown_mode(false)
+            .with_thermostat_mode(false)
+            .with_polarity(false)
+            .with_one_shot(false);
+        assert!(!c.shutdown_mode());
+        assert!(!c.thermostat_mode());
+        assert!(!c.polarity());
+        assert!(!c.one_shot());
+    }
+
+    #[test]
+    fn fault_queue_variants() {
+        let c = Config::RESET
+            .with_fault_queue(FaultQueue::One)
+            .with_fault_queue(FaultQueue::Two)
+            .with_fault_queue(FaultQueue::Four)
+            .with_fault_queue(FaultQueue::Six);
+        assert!(matches!(c.fault_queue(), FaultQueue::Six));
+
+        for fq in [
+            FaultQueue::One,
+            FaultQueue::Two,
+            FaultQueue::Four,
+            FaultQueue::Six,
+        ] {
+            let c = Config::RESET.with_fault_queue(fq);
+            let got = c.fault_queue();
+            assert_eq!(core::mem::discriminant(&got), core::mem::discriminant(&fq));
+        }
+    }
+
+    #[test]
+    fn conversion_time_variants() {
+        for ct in [
+            ConversionTime::Ms27p5,
+            ConversionTime::Ms55,
+            ConversionTime::M110,
+            ConversionTime::M220,
+        ] {
+            let c = Config::RESET.with_conversion_time(ct);
+            let got = c.conversion_time();
+            assert_eq!(core::mem::discriminant(&got), core::mem::discriminant(&ct));
+        }
+    }
+
+    #[test]
+    fn temperature_from_raw_bounds() {
+        assert!(Temperature::from_raw(Temperature::MIN.raw()).is_some());
+        assert!(Temperature::from_raw(Temperature::MAX.raw()).is_some());
+        assert!(Temperature::from_raw(Temperature::MIN.raw() - 1).is_none());
+        assert!(Temperature::from_raw(Temperature::MAX.raw() + 1).is_none());
+    }
+
+    #[test]
+    fn temperature_saturating() {
+        let t = Temperature::saturating_from_raw(Temperature::MIN.raw() - 100);
+        assert_eq!(t.raw(), Temperature::MIN.raw());
+        let t = Temperature::saturating_from_raw(Temperature::MAX.raw() + 100);
+        assert_eq!(t.raw(), Temperature::MAX.raw());
+        let t = Temperature::saturating_from_raw(100);
+        assert_eq!(t.raw(), 100);
+    }
+
+    #[test]
+    fn temperature_roundtrip_positive() {
+        let t = Temperature::from_raw(401).unwrap();
+        let regs = t.to_regs();
+        assert_eq!(regs, [0x19, 0x10]);
+        let t2 = Temperature::from_regs(&regs);
+        assert_eq!(t2.raw(), 401);
+        assert_eq!(t2.degrees_celsius(), 25);
+        assert_eq!(t2.centi_degrees_celsius(), 2506);
+    }
+
+    #[test]
+    fn temperature_roundtrip_negative() {
+        let t = Temperature::from_raw(-168).unwrap();
+        let regs = t.to_regs();
+        assert_eq!(regs, [0xF5, 0x80]);
+        let t2 = Temperature::from_regs(&regs);
+        assert_eq!(t2.raw(), -168);
+        assert_eq!(t2.degrees_celsius(), -11);
+        assert_eq!(t2.centi_degrees_celsius(), -1050);
+    }
+
+    #[test]
+    fn from_centi_degrees_behavior() {
+        let t = Temperature::from_centi_degrees_celsius(2506);
+        assert_eq!(t.raw(), 400);
+        let t = Temperature::from_centi_degrees_celsius(-1050);
+        assert_eq!(t.raw(), -168);
+        let t = Temperature::from_centi_degrees_celsius(-12800);
+        assert_eq!(t.raw(), Temperature::MIN.raw());
+        let t = Temperature::from_centi_degrees_celsius(12794);
+        assert_eq!(t.raw(), Temperature::MAX.raw());
+    }
+}
