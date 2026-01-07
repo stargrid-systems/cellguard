@@ -28,9 +28,9 @@ pub enum Address {
     Addr9 = 0x48,
     /// Address variant 10: A2=0, A1=0, A0=1 -> 0x49
     Addr10 = 0x49,
-    /// Address variant 11: A2=0, A1=0, A0=0 -> 0x4A
+    /// Address variant 11: A2=0, A1=1, A0=0 -> 0x4A
     Addr11 = 0x4A,
-    /// Address variant 12: A2=0, A1=0, A0=1 -> 0x4B
+    /// Address variant 12: A2=0, A1=1, A0=1 -> 0x4B
     Addr12 = 0x4B,
     /// Address variant 13: A2=1, A1=0, A0=0 -> 0x4C
     Addr13 = 0x4C,
@@ -40,37 +40,37 @@ pub enum Address {
     Addr15 = 0x4E,
     /// Address variant 16: A2=1, A1=1, A0=1 -> 0x4F
     Addr16 = 0x4F,
-    /// Address variant 17: A2=0, A1=0, A0=SDA -> 0x50
+    /// Address variant 17: A2=0, A1=SDA, A0=SDA -> 0x50
     Addr17 = 0x50,
-    /// Address variant 18: A2=0, A1=0, A0=SCL -> 0x51
+    /// Address variant 18: A2=0, A1=SDA, A0=SCL -> 0x51
     Addr18 = 0x51,
-    /// Address variant 19: A2=0, A1=1, A0=SDA -> 0x52
+    /// Address variant 19: A2=0, A1=SCL, A0=SDA -> 0x52
     Addr19 = 0x52,
-    /// Address variant 20: A2=0, A1=1, A0=SCL -> 0x53
+    /// Address variant 20: A2=0, A1=SCL, A0=SCL -> 0x53
     Addr20 = 0x53,
-    /// Address variant 21: A2=1, A1=0, A0=SDA -> 0x54
+    /// Address variant 21: A2=1, A1=SDA, A0=SDA -> 0x54
     Addr21 = 0x54,
-    /// Address variant 22: A2=1, A1=0, A0=SCL -> 0x55
+    /// Address variant 22: A2=1, A1=SDA, A0=SCL -> 0x55
     Addr22 = 0x55,
-    /// Address variant 23: A2=1, A1=1, A0=SDA -> 0x56
+    /// Address variant 23: A2=1, A1=SCL, A0=SDA -> 0x56
     Addr23 = 0x56,
-    /// Address variant 24: A2=1, A1=1, A0=SCL -> 0x57
+    /// Address variant 24: A2=1, A1=SCL, A0=SCL -> 0x57
     Addr24 = 0x57,
-    /// Address variant 25: A2=0, A1=0, A0=0 -> 0x58
+    /// Address variant 25: A2=0, A1=SDA, A0=0 -> 0x58
     Addr25 = 0x58,
-    /// Address variant 26: A2=0, A1=0, A0=1 -> 0x59
+    /// Address variant 26: A2=0, A1=SDA, A0=1 -> 0x59
     Addr26 = 0x59,
-    /// Address variant 27: A2=0, A1=1, A0=0 -> 0x5A
+    /// Address variant 27: A2=0, A1=SCL, A0=0 -> 0x5A
     Addr27 = 0x5A,
-    /// Address variant 28: A2=0, A1=1, A0=1 -> 0x5B
+    /// Address variant 28: A2=0, A1=SCL, A0=1 -> 0x5B
     Addr28 = 0x5B,
-    /// Address variant 29: A2=1, A1=0, A0=0 -> 0x5C
+    /// Address variant 29: A2=1, A1=SDA, A0=0 -> 0x5C
     Addr29 = 0x5C,
-    /// Address variant 30: A2=1, A1=0, A0=1 -> 0x5D
+    /// Address variant 30: A2=1, A1=SDA, A0=1 -> 0x5D
     Addr30 = 0x5D,
-    /// Address variant 31: A2=1, A1=1, A0=0 -> 0x5E
+    /// Address variant 31: A2=1, A1=SCL, A0=0 -> 0x5E
     Addr31 = 0x5E,
-    /// Address variant 32: A2=1, A1=1, A0=1 -> 0x5F
+    /// Address variant 32: A2=1, A1=SCL, A0=1 -> 0x5F
     Addr32 = 0x5F,
 }
 
