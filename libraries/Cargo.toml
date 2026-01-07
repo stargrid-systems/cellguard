@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["p3t1755"]
+
+[workspace.package]
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+repository = "https://github.com/stargrid-systems/cellguard"
+rust-version = "1.93"
+
+# See: <https://rust-lang.github.io/rust-clippy/master/index.html>
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+
+[workspace.dependencies]
+embedded-hal = { version = "1", default-features = false }
+embedded-hal-mock = { version = "0.11", default-features = false }
