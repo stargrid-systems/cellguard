@@ -1,5 +1,5 @@
 use core::mem;
-use std::ops::Range;
+use core::ops::Range;
 
 /// I2C device address variants for the P3T1755 temperature sensor.
 ///

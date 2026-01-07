@@ -1,5 +1,7 @@
 //! NXP P3T1755 temperature sensor driver.
 
+#![no_std]
+
 use embedded_hal::i2c::{I2c, Operation};
 
 pub use self::address::Address;
