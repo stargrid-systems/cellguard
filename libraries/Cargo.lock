@@ -21,3 +21,7 @@ dependencies = [
  "embedded-hal",
  "embedded-hal-mock",
 ]
+
+[[package]]
+name = "tca9535"
+version = "0.1.0"
