@@ -262,7 +262,7 @@ fn test_write_config() {
         .with_shutdown_mode(true)
         .with_polarity(true)
         .with_fault_queue(FaultQueue::Four)
-        .with_conversion_time(ConversionTime::M110);
+        .with_conversion_time(ConversionTime::Ms110);
 
     let mock = MockI2c::new(vec![Transaction {
         addr: 0x48,
@@ -418,7 +418,7 @@ fn test_config_all_features() {
         .with_thermostat_mode(true)
         .with_polarity(true)
         .with_fault_queue(FaultQueue::Six)
-        .with_conversion_time(ConversionTime::M220)
+        .with_conversion_time(ConversionTime::Ms220)
         .with_one_shot(true);
 
     let mock = MockI2c::new(vec![Transaction {

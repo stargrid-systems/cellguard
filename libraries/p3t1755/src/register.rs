@@ -170,14 +170,14 @@ impl FaultQueue {
 #[repr(u8)]
 pub enum ConversionTime {
     /// 27.5 ms
-    Ms27p5 = 0b00_00000,
+    Ms27_5 = 0b00_00000,
     /// 55 ms
     #[default]
     Ms55 = 0b01_00000,
     /// 110 ms
-    M110 = 0b10_00000,
+    Ms110 = 0b10_00000,
     /// 220 ms
-    M220 = 0b11_00000,
+    Ms220 = 0b11_00000,
 }
 
 impl ConversionTime {
@@ -341,10 +341,10 @@ mod tests {
     #[test]
     fn conversion_time_variants() {
         for ct in [
-            ConversionTime::Ms27p5,
+            ConversionTime::Ms27_5,
             ConversionTime::Ms55,
-            ConversionTime::M110,
-            ConversionTime::M220,
+            ConversionTime::Ms110,
+            ConversionTime::Ms220,
         ] {
             let c = Config::RESET.with_conversion_time(ct);
             let got = c.conversion_time();
