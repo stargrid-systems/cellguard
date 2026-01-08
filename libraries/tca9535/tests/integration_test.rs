@@ -204,6 +204,27 @@ fn test_polarity_inversion_is_inverted() {
 }
 
 #[test]
+fn test_polarity_inversion_is_normal() {
+    let polarity = PolarityInversion(0b1010_1010_1010_1010);
+    assert!(polarity.is_normal(PinIndex::P0));
+    assert!(!polarity.is_normal(PinIndex::P1));
+    assert!(polarity.is_normal(PinIndex::P2));
+    assert!(!polarity.is_normal(PinIndex::P3));
+    assert!(polarity.is_normal(PinIndex::P4));
+    assert!(!polarity.is_normal(PinIndex::P5));
+    assert!(polarity.is_normal(PinIndex::P6));
+    assert!(!polarity.is_normal(PinIndex::P7));
+    assert!(polarity.is_normal(PinIndex::P8));
+    assert!(!polarity.is_normal(PinIndex::P9));
+    assert!(polarity.is_normal(PinIndex::P10));
+    assert!(!polarity.is_normal(PinIndex::P11));
+    assert!(polarity.is_normal(PinIndex::P12));
+    assert!(!polarity.is_normal(PinIndex::P13));
+    assert!(polarity.is_normal(PinIndex::P14));
+    assert!(!polarity.is_normal(PinIndex::P15));
+}
+
+#[test]
 fn test_configuration_with_input() {
     let config = Configuration(0x0000);
     let config = config.with_input(PinIndex::P0);

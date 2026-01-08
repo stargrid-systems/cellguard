@@ -265,6 +265,13 @@ impl PolarityInversion {
     pub const fn is_inverted(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
+
+    /// Returns true if the specified pin has normal polarity.
+    #[inline]
+    #[must_use]
+    pub const fn is_normal(self, pin: PinIndex) -> bool {
+        self.0 & pin.mask() == 0
+    }
 }
 
 /// Configuration registers.
