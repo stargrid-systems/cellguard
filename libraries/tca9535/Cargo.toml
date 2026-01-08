@@ -1,0 +1,19 @@
+[package]
+name = "tca9535"
+version = "0.1.0"
+description = "Low level driver for the TCA9535 I2C I/O expander."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+embedded-hal = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = { workspace = true, features = ["eh1"] }
+
+[lints]
+workspace = true
