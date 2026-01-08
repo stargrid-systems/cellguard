@@ -1,6 +1,7 @@
 [package]
 name = "tca9535"
 version = "0.1.0"
+description = "Low level driver for the TCA9535 I2C I/O expander."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

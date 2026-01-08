@@ -1,4 +1,8 @@
 //! Low level driver for the TCA9535 I2C I/O expander.
+//!
+//! This library currently opts to provide only a low level interface to the
+//! TCA9535 device. Higher level abstractions like abstracting individual pins
+//! as types implementing the `embedded-hal` traits are not zero-cost.
 
 #![no_std]
 
