@@ -25,3 +25,6 @@ dependencies = [
 [[package]]
 name = "tca9535"
 version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+]
