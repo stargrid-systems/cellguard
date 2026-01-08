@@ -24,6 +24,11 @@ impl<I: I2c> Tca9535<I> {
         Self { i2c, addr }
     }
 
+    /// Releases the I2C bus from the driver.
+    pub fn into_inner(self) -> I {
+        self.i2c
+    }
+
     /// Reads the input registers.
     pub fn read_input(&mut self) -> Result<Input, I::Error> {
         self.read_register_pair(INPUT_PORT0).map(Input)
@@ -79,7 +84,7 @@ impl<I: I2c> Tca9535<I> {
 /// The address is determined by the logic levels applied to pins A2, A1, and
 /// A0. This allows up to 8 different TCA9535 devices to be connected to the
 /// same I2C bus.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Address {
     /// A2=L, A1=L, A0=L (0x20)
@@ -127,7 +132,7 @@ impl Address {
 }
 
 /// Bit-index for a TCA9535 pin.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PinIndex {
     P0,
     P1,
@@ -181,7 +186,7 @@ impl PinIndex {
 }
 
 /// Input registers.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Input(pub u16);
 
 impl Input {
@@ -201,7 +206,7 @@ impl Input {
 }
 
 /// Output registers.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Output(pub u16);
 
 impl Output {
@@ -230,7 +235,7 @@ impl Output {
 }
 
 /// Polarity inversion registers.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PolarityInversion(pub u16);
 
 impl PolarityInversion {
@@ -259,7 +264,7 @@ impl PolarityInversion {
 }
 
 /// Configuration registers.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Configuration(pub u16);
 
 impl Configuration {
