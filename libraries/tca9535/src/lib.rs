@@ -236,6 +236,13 @@ impl Output {
     pub const fn is_high(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
+
+    /// Returns true if the specified pin is low.
+    #[inline]
+    #[must_use]
+    pub const fn is_low(self, pin: PinIndex) -> bool {
+        self.0 & pin.mask() == 0
+    }
 }
 
 /// Polarity inversion registers.
@@ -300,5 +307,12 @@ impl Configuration {
     #[must_use]
     pub const fn is_input(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
+    }
+
+    /// Returns true if the specified pin is configured as output.
+    #[inline]
+    #[must_use]
+    pub const fn is_output(self, pin: PinIndex) -> bool {
+        self.0 & pin.mask() == 0
     }
 }

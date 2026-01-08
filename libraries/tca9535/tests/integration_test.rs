@@ -161,6 +161,27 @@ fn test_output_is_high() {
 }
 
 #[test]
+fn test_output_is_low() {
+    let output = Output(0b1010_1010_1010_1010);
+    assert!(output.is_low(PinIndex::P0));
+    assert!(!output.is_low(PinIndex::P1));
+    assert!(output.is_low(PinIndex::P2));
+    assert!(!output.is_low(PinIndex::P3));
+    assert!(output.is_low(PinIndex::P4));
+    assert!(!output.is_low(PinIndex::P5));
+    assert!(output.is_low(PinIndex::P6));
+    assert!(!output.is_low(PinIndex::P7));
+    assert!(output.is_low(PinIndex::P8));
+    assert!(!output.is_low(PinIndex::P9));
+    assert!(output.is_low(PinIndex::P10));
+    assert!(!output.is_low(PinIndex::P11));
+    assert!(output.is_low(PinIndex::P12));
+    assert!(!output.is_low(PinIndex::P13));
+    assert!(output.is_low(PinIndex::P14));
+    assert!(!output.is_low(PinIndex::P15));
+}
+
+#[test]
 fn test_polarity_inversion_with_inverted() {
     let polarity = PolarityInversion(0x0000);
     let polarity = polarity.with_inverted(PinIndex::P0);
@@ -265,6 +286,27 @@ fn test_configuration_is_input() {
     assert!(config.is_input(PinIndex::P13));
     assert!(!config.is_input(PinIndex::P14));
     assert!(!config.is_input(PinIndex::P15));
+}
+
+#[test]
+fn test_configuration_is_output() {
+    let config = Configuration(0b0011_0011_0011_0011);
+    assert!(!config.is_output(PinIndex::P0));
+    assert!(!config.is_output(PinIndex::P1));
+    assert!(config.is_output(PinIndex::P2));
+    assert!(config.is_output(PinIndex::P3));
+    assert!(!config.is_output(PinIndex::P4));
+    assert!(!config.is_output(PinIndex::P5));
+    assert!(config.is_output(PinIndex::P6));
+    assert!(config.is_output(PinIndex::P7));
+    assert!(!config.is_output(PinIndex::P8));
+    assert!(!config.is_output(PinIndex::P9));
+    assert!(config.is_output(PinIndex::P10));
+    assert!(config.is_output(PinIndex::P11));
+    assert!(!config.is_output(PinIndex::P12));
+    assert!(!config.is_output(PinIndex::P13));
+    assert!(config.is_output(PinIndex::P14));
+    assert!(config.is_output(PinIndex::P15));
 }
 
 #[test]
