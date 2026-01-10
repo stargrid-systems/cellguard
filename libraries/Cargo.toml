@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["p3t1755", "tca9535"]
+members = ["cellagent", "cellagent-boot", "cellcore", "p3t1755", "tca9535"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]
@@ -19,3 +19,4 @@ unnecessary_safety_doc = "warn"
 [workspace.dependencies]
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }
+zerocopy = { version = "0.8", default-features = false }
