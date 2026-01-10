@@ -1,0 +1,9 @@
+pub const ID: u8 = 0x00;
+pub const STATUS: u8 = 0x01;
+pub const MODE: u8 = 0x02;
+pub const CLOCK: u8 = 0x03;
+pub const GAIN1: u8 = 0x04;
+pub const GAIN2: u8 = 0x05;
+pub const CFG: u8 = 0x06;
+pub const THRESHOLD_MSB: u8 = 0x07;
+pub const THRESHOLD_LSB: u8 = 0x08;
