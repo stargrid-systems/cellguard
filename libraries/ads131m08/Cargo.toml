@@ -1,7 +1,7 @@
 [package]
 name = "ads131m08"
 version = "0.1.0"
-description = "Driver for the ADS131M08 ADC."
+description = "Driver for the Texas Instruments ADS131M08 ADC."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

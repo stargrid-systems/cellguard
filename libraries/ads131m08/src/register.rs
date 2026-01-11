@@ -7,3 +7,22 @@ pub const GAIN2: u8 = 0x05;
 pub const CFG: u8 = 0x06;
 pub const THRESHOLD_MSB: u8 = 0x07;
 pub const THRESHOLD_LSB: u8 = 0x08;
+
+const CH_BASE: u8 = 0x09;
+const CH_STRIDE: u8 = 0x05;
+
+const CH_CFG_OFFSET: u8 = 0x00;
+const CH_OCAL_MSB_OFFSET: u8 = 0x01;
+const CH_OCAL_LSB_OFFSET: u8 = 0x02;
+const CH_GCAL_MSB_OFFSET: u8 = 0x03;
+const CH_GCAL_LSB_OFFSET: u8 = 0x04;
+
+pub const fn ch_cfg(channel: u8) -> u8 {
+    ch_reg(channel, CH_CFG_OFFSET)
+}
+
+const fn ch_reg(channel: u8, offset: u8) -> u8 {
+    debug_assert!(channel < 8, "channel out of range");
+    debug_assert!(offset < CH_STRIDE, "channel register offset out of range");
+    CH_BASE + channel * CH_STRIDE + offset
+}

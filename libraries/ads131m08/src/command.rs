@@ -33,8 +33,10 @@ pub const fn wreg(addr: u8, n: u8) -> u16 {
 const ADDR_BITS: u16 = 7;
 const N_BITS: u16 = 6;
 
+/// Returns a read / write register command.
 const fn xreg(cmd: u16, addr: u16, n: u16) -> u16 {
-    debug_assert!(addr < (1 << ADDR_BITS));
-    debug_assert!((n - 1) < (1 << N_BITS));
+    debug_assert!(addr < (1 << ADDR_BITS), "register address out of range");
+    debug_assert!(n > 0, "number of registers must be at least 1");
+    debug_assert!((n - 1) < (1 << N_BITS), "too many registers requested");
     cmd | (addr << N_BITS) | (n - 1)
 }
