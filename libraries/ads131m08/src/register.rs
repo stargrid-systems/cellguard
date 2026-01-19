@@ -21,6 +21,14 @@ pub const fn ch_cfg(channel: u8) -> u8 {
     ch_reg(channel, CH_CFG_OFFSET)
 }
 
+pub const fn ch_ocal_msb(channel: u8) -> u8 {
+    ch_reg(channel, CH_OCAL_MSB_OFFSET)
+}
+
+pub const fn ch_gcal_msb(channel: u8) -> u8 {
+    ch_reg(channel, CH_GCAL_MSB_OFFSET)
+}
+
 const fn ch_reg(channel: u8, offset: u8) -> u8 {
     debug_assert!(channel < 8, "channel out of range");
     debug_assert!(offset < CH_STRIDE, "channel register offset out of range");
