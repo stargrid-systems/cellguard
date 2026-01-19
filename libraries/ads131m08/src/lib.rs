@@ -13,8 +13,9 @@
 #![no_std]
 
 use core::num::NonZeroU8;
+use core::slice;
 
-use embedded_hal::spi::SpiDevice;
+use embedded_hal::spi::{Operation, SpiDevice};
 
 mod command;
 mod register;
@@ -26,15 +27,18 @@ mod register;
 /// `2048 @ 2 MHz = 1024 us`.
 /// We round up to 1500 us to be safe.
 const RESET_PULSE_US: u16 = 1500;
-const ENABLE_CRC: bool = true;
+const ENABLE_INPUT_CRC: bool = true;
 
-pub struct Ads131m08<SpiDevice, SyncReset> {
-    device: SpiDevice,
-    sync_reset: SyncReset,
+const BYTES_PER_WORD: usize = 3;
+const CHANNELS: usize = 8;
+
+pub struct Ads131m08<S, P> {
+    spi: S,
+    sync_reset: P,
 }
 
-impl<SpiDev: SpiDevice> Ads131m08<SpiDev, ()> {
-    pub const fn new(device: SpiDev) -> Self {
+impl<S: SpiDevice> Ads131m08<S, ()> {
+    pub const fn new(device: S) -> Self {
         // Self { device }
         todo!()
     }
@@ -46,27 +50,76 @@ impl<SpiDev: SpiDevice> Ads131m08<SpiDev, ()> {
         // 3.
     }
 
-    pub fn read(&mut self, addr: u8, count: NonZeroU8) {
+    pub fn read_adc_data(&mut self) -> Result<[i32; CHANNELS], S::Error> {
+        const WORDS: usize = 1 // command
+        + CHANNELS // channel data
+        + 1; // output CRC
+
+        let mut buf = const {
+            let mut buf = [0u8; WORDS * BYTES_PER_WORD];
+            write_command_const(&mut buf, &[command::NULL]);
+            buf
+        };
+
+        self.spi.transfer_in_place(&mut buf)?;
+
+        // the first word is the response
+        // followed by CHANNELS words of channel data
+        // followed by the CRC word
+
         todo!()
     }
 }
 
-const fn write_buf_const(buf: &mut [u8], words: &[u16], bytes_per_word: u8) {
-    assert!(bytes_per_word == 2 || bytes_per_word == 3 || bytes_per_word == 4);
-    let expected_len = (words.len() + ENABLE_CRC as usize) * (bytes_per_word as usize);
+const fn crc16_ccitt_const(data: &[u8]) -> u16 {
+    const POLY: u16 = 0x1021;
+    let mut crc: u16 = 0xFFFF;
+    let mut byte_idx = 0;
+    while byte_idx < data.len() {
+        crc ^= (data[byte_idx] as u16) << 8;
+        let mut bit_idx = 0;
+        while bit_idx < 8 {
+            if (crc & 0x8000) != 0 {
+                crc = (crc << 1) ^ POLY;
+            } else {
+                crc <<= 1;
+            }
+            bit_idx += 1;
+        }
+        byte_idx += 1;
+    }
+    crc
+}
+
+const fn write_word_const(buf: &mut [u8], word_idx: usize, word: u16) {
+    assert!(BYTES_PER_WORD == 2 || BYTES_PER_WORD == 3 || BYTES_PER_WORD == 4);
+    assert!(buf.len() >= (word_idx + 1) * BYTES_PER_WORD);
+    let word_bytes = word.to_be_bytes();
+    let buf_offset = word_idx * BYTES_PER_WORD;
+    buf[buf_offset] = word_bytes[0];
+    buf[buf_offset + 1] = word_bytes[1];
+    if BYTES_PER_WORD > 2 {
+        buf[buf_offset + 2] = 0;
+    }
+    if BYTES_PER_WORD > 3 {
+        buf[buf_offset + 3] = 0;
+    }
+}
+
+const fn write_command_const(buf: &mut [u8], words: &[u16]) {
+    let expected_len = (words.len() + ENABLE_INPUT_CRC as usize) * BYTES_PER_WORD;
     assert!(buf.len() == expected_len);
 
     let mut word_idx = 0;
     while word_idx < words.len() {
         let word = words[word_idx];
-        let word_bytes = word.to_be_bytes();
-        let buf_offset = word_idx * (bytes_per_word as usize);
-        buf[buf_offset] = word_bytes[0];
-        buf[buf_offset + 1] = word_bytes[1];
+        write_word_const(buf, word_idx, word);
         word_idx += 1;
     }
 
-    if ENABLE_CRC {
-        todo!()
+    if ENABLE_INPUT_CRC {
+        let data_len = words.len() * BYTES_PER_WORD;
+        let (data, remaining) = buf.split_at_mut(data_len);
+        write_word_const(remaining, 0, crc16_ccitt_const(data));
     }
 }
