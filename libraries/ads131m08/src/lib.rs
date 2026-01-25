@@ -17,7 +17,10 @@ use core::slice;
 
 use embedded_hal::spi::{Operation, SpiDevice};
 
+pub use self::error::{Error, ErrorKind};
+
 mod command;
+mod error;
 mod register;
 
 /// Reset pulse width in microseconds.
@@ -29,48 +32,106 @@ mod register;
 const RESET_PULSE_US: u16 = 1500;
 const ENABLE_INPUT_CRC: bool = true;
 
+// 24 bits is the default.
 const BYTES_PER_WORD: usize = 3;
 const CHANNELS: usize = 8;
 
-pub struct Ads131m08<S, P> {
-    spi: S,
-    sync_reset: P,
-}
-
-impl<S: SpiDevice> Ads131m08<S, ()> {
-    pub const fn new(device: S) -> Self {
-        // Self { device }
-        todo!()
-    }
-
-    pub fn init(&mut self) {
-        // 1. reset using SYNC/RESET pin
-        // 2. validate initial null command
-        // 2. disable all channels
-        // 3.
-    }
-
-    pub fn read_adc_data(&mut self) -> Result<[i32; CHANNELS], S::Error> {
-        const WORDS: usize = 1 // command
+/// The number of words in a normal frame.
+const NORMAL_FRAME_WORDS: usize = 1 // command / response
         + CHANNELS // channel data
         + 1; // output CRC
 
+type Ads131m08Result<T, S: SpiDevice> = Result<T, Error<S::Error>>;
+
+pub struct Ads131m08<S> {
+    spi: S,
+}
+
+impl<S: SpiDevice> Ads131m08<S> {
+    pub const fn new(spi: S) -> Self {
+        Self { spi }
+    }
+
+    pub fn reset_device(&mut self) -> Ads131m08Result<(), S> {
+        // self.spi.transaction(operations).map_err(Error::spi)?;
+        todo!()
+    }
+
+    pub fn lock_registers(&mut self) -> Ads131m08Result<(), S> {
+        todo!()
+    }
+
+    pub fn unlock_registers(&mut self) -> Ads131m08Result<(), S> {
+        todo!()
+    }
+
+    pub fn standby(&mut self) -> Ads131m08Result<(), S> {
+        todo!()
+    }
+
+    pub fn wakeup(&mut self) -> Ads131m08Result<(), S> {
+        todo!()
+    }
+
+    fn read_single_register(&mut self) {
+        todo!()
+    }
+
+    pub fn read_adc_data(&mut self, channels: &mut [i32; CHANNELS]) -> Ads131m08Result<(), S> {
         let mut buf = const {
-            let mut buf = [0u8; WORDS * BYTES_PER_WORD];
+            let mut buf = [0u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD];
             write_command_const(&mut buf, &[command::NULL]);
             buf
         };
 
-        self.spi.transfer_in_place(&mut buf)?;
+        self.spi.transfer_in_place(&mut buf).map_err(Error::spi)?;
+        let data = get_verified_data(&buf)?;
 
-        // the first word is the response
-        // followed by CHANNELS words of channel data
-        // followed by the CRC word
+        let (_response_words, channel_words) = data.split_at(const { BYTES_PER_WORD });
+        let values = channel_words.chunks_exact(BYTES_PER_WORD).map(|word| {
+            let mut value = [0; 4];
+            value[..BYTES_PER_WORD].copy_from_slice(word);
+            i32::from_be_bytes(value) >> const { (4 - BYTES_PER_WORD) * 8 }
+        });
 
+        channels
+            .iter_mut()
+            .zip(values)
+            .for_each(|(channel, value)| {
+                *channel = value;
+            });
+
+        Ok(())
+    }
+
+    fn transfer_normal_frame<'a>(
+        &mut self,
+        buf: &'a mut [u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD],
+    ) -> Ads131m08Result<&'a [u8], S> {
+        self.spi.transfer_in_place(buf).map_err(Error::spi)?;
+        let data = get_verified_data(buf)?;
+        Ok(data)
+    }
+
+
+    fn write_registers(&mut self, addr: u8, values: &[u16]) -> Ads131m08Result<(), S> {
         todo!()
     }
 }
 
+/// Returns the data portion of `buf` if the CRC matches, or an error if not.
+fn get_verified_data(buf: &[u8]) -> Result<&[u8], ErrorKind> {
+    let (data, crc_word) = buf.split_at(buf.len() - BYTES_PER_WORD);
+    let received_crc = u16::from_be_bytes([crc_word[0], crc_word[1]]);
+    let calculated_crc = crc16_ccitt_const(data);
+    if received_crc == calculated_crc {
+        Ok(data)
+    } else {
+        Err(ErrorKind::CrcMismatch)
+    }
+}
+
+/// Calculates the CRC-16-CCITT checksum for the given data.
 const fn crc16_ccitt_const(data: &[u8]) -> u16 {
     const POLY: u16 = 0x1021;
     let mut crc: u16 = 0xFFFF;
@@ -92,8 +153,8 @@ const fn crc16_ccitt_const(data: &[u8]) -> u16 {
 }
 
 const fn write_word_const(buf: &mut [u8], word_idx: usize, word: u16) {
-    assert!(BYTES_PER_WORD == 2 || BYTES_PER_WORD == 3 || BYTES_PER_WORD == 4);
-    assert!(buf.len() >= (word_idx + 1) * BYTES_PER_WORD);
+    debug_assert!(BYTES_PER_WORD == 2 || BYTES_PER_WORD == 3 || BYTES_PER_WORD == 4);
+    debug_assert!(buf.len() >= (word_idx + 1) * BYTES_PER_WORD);
     let word_bytes = word.to_be_bytes();
     let buf_offset = word_idx * BYTES_PER_WORD;
     buf[buf_offset] = word_bytes[0];
@@ -108,7 +169,7 @@ const fn write_word_const(buf: &mut [u8], word_idx: usize, word: u16) {
 
 const fn write_command_const(buf: &mut [u8], words: &[u16]) {
     let expected_len = (words.len() + ENABLE_INPUT_CRC as usize) * BYTES_PER_WORD;
-    assert!(buf.len() == expected_len);
+    debug_assert!(buf.len() == expected_len);
 
     let mut word_idx = 0;
     while word_idx < words.len() {
@@ -122,4 +183,10 @@ const fn write_command_const(buf: &mut [u8], words: &[u16]) {
         let (data, remaining) = buf.split_at_mut(data_len);
         write_word_const(remaining, 0, crc16_ccitt_const(data));
     }
+}
+
+const fn build_normal_command_frame(command: u16) -> [u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD] {
+    let mut buf = [0u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD];
+    write_command_const(&mut buf, &[command]);
+    buf
 }
