@@ -38,3 +38,11 @@ const fn ch_reg(channel: u8, offset: u8) -> u8 {
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Status(pub u16);
+
+impl Status {
+    const LOCK_MASK: u16 = 1 << 15;
+
+    pub const fn locked(self) -> bool {
+        (self.0 & Self::LOCK_MASK) != 0
+    }
+}

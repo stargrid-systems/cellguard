@@ -17,11 +17,14 @@ use core::slice;
 
 use embedded_hal::spi::{Operation, SpiDevice};
 
-pub use self::error::{Error, ErrorKind};
+pub use self::error::{
+    CommunicationError, CommunicationErrorKind, LockError, ResetError, WriteError,
+};
 pub use self::register::Status;
 
 mod command;
 mod error;
+mod frame;
 mod register;
 
 /// Reset pulse width in microseconds.
@@ -41,8 +44,6 @@ const ENABLE_INPUT_CRC: bool = true;
 const BYTES_PER_WORD: usize = 3;
 const CHANNELS: usize = 8;
 
-type Ads131m08Result<T, S: SpiDevice> = Result<T, Error<S::Error>>;
-
 pub struct Ads131m08<S> {
     spi: S,
 }
@@ -58,12 +59,11 @@ impl<S: SpiDevice> Ads131m08<S> {
     /// Calling this function merely sends the reset command. To confirm that
     /// the reset took place, call
     /// [`reset_device_complete`][Self::reset_device_complete] after waiting for
-    /// at least 5 microseconds.
-    /// Use [`REGISTER_AQUISITION_TIME_US`].
-    pub fn reset_device_start(&mut self) -> Ads131m08Result<(), S> {
+    /// at least 5 microseconds ([`REGISTER_AQUISITION_TIME_US`]).
+    pub fn reset_device_start(&mut self) -> Result<(), CommunicationError<S::Error>> {
         // As per the datasheet, a reset command must always use a full frame.
-        let buf = const { build_normal_frame(command::RESET) };
-        self.spi.write(&buf).map_err(Error::spi)?;
+        let buf = const { frame::build_normal(command::RESET) };
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
         Ok(())
     }
 
@@ -71,52 +71,81 @@ impl<S: SpiDevice> Ads131m08<S> {
     ///
     /// See [`reset_device_start`][Self::reset_device_start] for details on the
     /// reset process.
-    pub fn reset_device_complete(&mut self) -> Ads131m08Result<(), S> {
-        let mut buf = const { build_short_frame(command::NULL) };
-        self.spi.transfer_in_place(&mut buf).map_err(Error::spi)?;
+    pub fn reset_device_complete(
+        &mut self,
+    ) -> Result<Result<(), ResetError>, CommunicationError<S::Error>> {
+        const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
 
-        todo!()
+        let mut buf = const { frame::build_short(command::NULL) };
+        self.spi
+            .transfer_in_place(&mut buf)
+            .map_err(CommunicationError::spi)?;
+        let response = u16::from_be_bytes([buf[0], buf[1]]);
+        if response == EXPECTED_RESPONSE {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(ResetError))
+        }
     }
 
-    pub fn lock_registers(&mut self) -> Ads131m08Result<(), S> {
-        todo!()
+    /// Locks the device registers.
+    pub fn lock_registers(
+        &mut self,
+    ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
+        let buf = const { frame::build_short(command::LOCK) };
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+        let status = self.read_single_register(register::STATUS)?;
+        let status = Status(status);
+        if status.locked() {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(LockError))
+        }
     }
 
-    pub fn unlock_registers(&mut self) -> Ads131m08Result<(), S> {
-        todo!()
+    /// Unlocks the device registers.
+    pub fn unlock_registers(
+        &mut self,
+    ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
+        let buf = const { frame::build_short(command::UNLOCK) };
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+        let status = self.read_single_register(register::STATUS)?;
+        let status = Status(status);
+        if status.locked() {
+            Ok(Err(LockError))
+        } else {
+            Ok(Ok(()))
+        }
     }
 
     /// Places the device into standby mode.
     ///
     /// Returns the status register corresponding to the previous operation.
-    pub fn standby(&mut self) -> Ads131m08Result<(), S> {
-        let buf = const { build_short_frame(command::STANDBY) };
-        self.spi.write(&buf).map_err(Error::spi)?;
+    pub fn standby(&mut self) -> Result<(), CommunicationError<S::Error>> {
+        let buf = const { frame::build_short(command::STANDBY) };
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
         Ok(())
     }
 
     /// Wakes the device from standby mode to conversion mode.
     ///
     /// Returns the status register corresponding to the previous operation.
-    pub fn wakeup(&mut self) -> Ads131m08Result<(), S> {
-        let buf = const { build_short_frame(command::WAKEUP) };
-        self.spi.write(&buf).map_err(Error::spi)?;
+    pub fn wakeup(&mut self) -> Result<(), CommunicationError<S::Error>> {
+        let buf = const { frame::build_short(command::WAKEUP) };
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
         Ok(())
     }
 
-    fn read_single_register(&mut self) {
-        todo!()
-    }
-
-    pub fn read_adc_data(&mut self, channels: &mut [i32; CHANNELS]) -> Ads131m08Result<(), S> {
-        let mut buf = const {
-            let mut buf = [0u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD];
-            write_command_const(&mut buf, &[command::NULL]);
-            buf
-        };
-
-        self.spi.transfer_in_place(&mut buf).map_err(Error::spi)?;
-        let data = get_verified_data(&buf)?;
+    /// Reads conversion data from all channels into the provided array.
+    pub fn read_data(
+        &mut self,
+        channels: &mut [i32; CHANNELS],
+    ) -> Result<(), CommunicationError<S::Error>> {
+        let mut buf = const { frame::build_normal(command::NULL) };
+        self.spi
+            .transfer_in_place(&mut buf)
+            .map_err(CommunicationError::spi)?;
+        let data = frame::get_verified_data(&buf)?;
 
         let (_response_words, channel_words) = data.split_at(const { BYTES_PER_WORD });
         let values = channel_words.chunks_exact(BYTES_PER_WORD).map(|word| {
@@ -135,99 +164,30 @@ impl<S: SpiDevice> Ads131m08<S> {
         Ok(())
     }
 
-    fn transfer_normal_frame<'a>(
+    fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
+        let buf = frame::build_short(command::rreg(addr, 1));
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+
+        let mut buf = const { frame::build_short(command::NULL) };
+        self.spi
+            .transfer_in_place(&mut buf)
+            .map_err(CommunicationError::spi)?;
+        let reg_val = u16::from_be_bytes([buf[0], buf[1]]);
+        Ok(reg_val)
+    }
+
+    fn write_single_register(
         &mut self,
-        buf: &'a mut [u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD],
-    ) -> Ads131m08Result<&'a [u8], S> {
-        self.spi.transfer_in_place(buf).map_err(Error::spi)?;
-        let data = get_verified_data(buf)?;
-        Ok(data)
-    }
-}
-
-/// Returns the data portion of `buf` if the CRC matches, or an error if not.
-fn get_verified_data(buf: &[u8]) -> Result<&[u8], ErrorKind> {
-    let (data, crc_word) = buf.split_at(buf.len() - BYTES_PER_WORD);
-    let received_crc = u16::from_be_bytes([crc_word[0], crc_word[1]]);
-    let calculated_crc = crc16_ccitt_const(data);
-    if received_crc == calculated_crc {
-        Ok(data)
-    } else {
-        Err(ErrorKind::CrcMismatch)
-    }
-}
-
-/// Calculates the CRC-16-CCITT checksum for the given data.
-const fn crc16_ccitt_const(data: &[u8]) -> u16 {
-    const POLY: u16 = 0x1021;
-    let mut crc: u16 = 0xFFFF;
-    let mut byte_idx = 0;
-    while byte_idx < data.len() {
-        crc ^= (data[byte_idx] as u16) << 8;
-        let mut bit_idx = 0;
-        while bit_idx < 8 {
-            if (crc & 0x8000) != 0 {
-                crc = (crc << 1) ^ POLY;
-            } else {
-                crc <<= 1;
-            }
-            bit_idx += 1;
+        addr: u8,
+        value: u16,
+    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
+        let buf = frame::build_write_one(addr, value);
+        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+        let readback = self.read_single_register(addr)?;
+        if readback == value {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(WriteError))
         }
-        byte_idx += 1;
     }
-    crc
-}
-
-const fn write_word_const(buf: &mut [u8], word_idx: usize, word: u16) {
-    debug_assert!(BYTES_PER_WORD == 2 || BYTES_PER_WORD == 3 || BYTES_PER_WORD == 4);
-    debug_assert!(buf.len() >= (word_idx + 1) * BYTES_PER_WORD);
-    let word_bytes = word.to_be_bytes();
-    let buf_offset = word_idx * BYTES_PER_WORD;
-    buf[buf_offset] = word_bytes[0];
-    buf[buf_offset + 1] = word_bytes[1];
-    if BYTES_PER_WORD > 2 {
-        buf[buf_offset + 2] = 0;
-    }
-    if BYTES_PER_WORD > 3 {
-        buf[buf_offset + 3] = 0;
-    }
-}
-
-const fn write_command_const(buf: &mut [u8], words: &[u16]) {
-    let expected_len = (words.len() + ENABLE_INPUT_CRC as usize) * BYTES_PER_WORD;
-    debug_assert!(buf.len() == expected_len);
-
-    let mut word_idx = 0;
-    while word_idx < words.len() {
-        let word = words[word_idx];
-        write_word_const(buf, word_idx, word);
-        word_idx += 1;
-    }
-
-    if ENABLE_INPUT_CRC {
-        let data_len = words.len() * BYTES_PER_WORD;
-        let (data, remaining) = buf.split_at_mut(data_len);
-        write_word_const(remaining, 0, crc16_ccitt_const(data));
-    }
-}
-
-const SHORT_FRAME_WORDS: usize = 1 + (ENABLE_INPUT_CRC as usize);
-const SHORT_FRAME_BYTES: usize = SHORT_FRAME_WORDS * BYTES_PER_WORD;
-
-const fn build_short_frame(command: u16) -> [u8; SHORT_FRAME_BYTES] {
-    let mut buf = [0; SHORT_FRAME_BYTES];
-    write_command_const(&mut buf, &[command]);
-    buf
-}
-
-/// The number of words in a normal frame.
-const NORMAL_FRAME_WORDS: usize = 1 // command / response
-        + CHANNELS // channel data
-        + 1; // output CRC
-const NORMAL_FRAME_BYTES: usize = NORMAL_FRAME_WORDS * BYTES_PER_WORD;
-
-const fn build_normal_frame(command: u16) -> [u8; NORMAL_FRAME_BYTES] {
-    let mut buf = [0; NORMAL_FRAME_BYTES];
-    write_command_const(&mut buf, &[command]);
-    buf
 }
