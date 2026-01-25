@@ -18,6 +18,7 @@ use core::slice;
 use embedded_hal::spi::{Operation, SpiDevice};
 
 pub use self::error::{Error, ErrorKind};
+pub use self::register::Status;
 
 mod command;
 mod error;
@@ -30,16 +31,15 @@ mod register;
 /// `2048 @ 2 MHz = 1024 us`.
 /// We round up to 1500 us to be safe.
 const RESET_PULSE_US: u16 = 1500;
+
+/// Time required after a reset for the device to be ready for normal
+/// operation, in microseconds.
+pub const REGISTER_AQUISITION_TIME_US: u16 = 5;
 const ENABLE_INPUT_CRC: bool = true;
 
 // 24 bits is the default.
 const BYTES_PER_WORD: usize = 3;
 const CHANNELS: usize = 8;
-
-/// The number of words in a normal frame.
-const NORMAL_FRAME_WORDS: usize = 1 // command / response
-        + CHANNELS // channel data
-        + 1; // output CRC
 
 type Ads131m08Result<T, S: SpiDevice> = Result<T, Error<S::Error>>;
 
@@ -48,12 +48,33 @@ pub struct Ads131m08<S> {
 }
 
 impl<S: SpiDevice> Ads131m08<S> {
+    /// Creates a new driver instance.
     pub const fn new(spi: S) -> Self {
         Self { spi }
     }
 
-    pub fn reset_device(&mut self) -> Ads131m08Result<(), S> {
-        // self.spi.transaction(operations).map_err(Error::spi)?;
+    /// Sends a reset command to the device.
+    ///
+    /// Calling this function merely sends the reset command. To confirm that
+    /// the reset took place, call
+    /// [`reset_device_complete`][Self::reset_device_complete] after waiting for
+    /// at least 5 microseconds.
+    /// Use [`REGISTER_AQUISITION_TIME_US`].
+    pub fn reset_device_start(&mut self) -> Ads131m08Result<(), S> {
+        // As per the datasheet, a reset command must always use a full frame.
+        let buf = const { build_normal_frame(command::RESET) };
+        self.spi.write(&buf).map_err(Error::spi)?;
+        Ok(())
+    }
+
+    /// Completes a reset operation by checking if the device has reset.
+    ///
+    /// See [`reset_device_start`][Self::reset_device_start] for details on the
+    /// reset process.
+    pub fn reset_device_complete(&mut self) -> Ads131m08Result<(), S> {
+        let mut buf = const { build_short_frame(command::NULL) };
+        self.spi.transfer_in_place(&mut buf).map_err(Error::spi)?;
+
         todo!()
     }
 
@@ -65,12 +86,22 @@ impl<S: SpiDevice> Ads131m08<S> {
         todo!()
     }
 
+    /// Places the device into standby mode.
+    ///
+    /// Returns the status register corresponding to the previous operation.
     pub fn standby(&mut self) -> Ads131m08Result<(), S> {
-        todo!()
+        let buf = const { build_short_frame(command::STANDBY) };
+        self.spi.write(&buf).map_err(Error::spi)?;
+        Ok(())
     }
 
+    /// Wakes the device from standby mode to conversion mode.
+    ///
+    /// Returns the status register corresponding to the previous operation.
     pub fn wakeup(&mut self) -> Ads131m08Result<(), S> {
-        todo!()
+        let buf = const { build_short_frame(command::WAKEUP) };
+        self.spi.write(&buf).map_err(Error::spi)?;
+        Ok(())
     }
 
     fn read_single_register(&mut self) {
@@ -111,11 +142,6 @@ impl<S: SpiDevice> Ads131m08<S> {
         self.spi.transfer_in_place(buf).map_err(Error::spi)?;
         let data = get_verified_data(buf)?;
         Ok(data)
-    }
-
-
-    fn write_registers(&mut self, addr: u8, values: &[u16]) -> Ads131m08Result<(), S> {
-        todo!()
     }
 }
 
@@ -185,8 +211,23 @@ const fn write_command_const(buf: &mut [u8], words: &[u16]) {
     }
 }
 
-const fn build_normal_command_frame(command: u16) -> [u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD] {
-    let mut buf = [0u8; NORMAL_FRAME_WORDS * BYTES_PER_WORD];
+const SHORT_FRAME_WORDS: usize = 1 + (ENABLE_INPUT_CRC as usize);
+const SHORT_FRAME_BYTES: usize = SHORT_FRAME_WORDS * BYTES_PER_WORD;
+
+const fn build_short_frame(command: u16) -> [u8; SHORT_FRAME_BYTES] {
+    let mut buf = [0; SHORT_FRAME_BYTES];
+    write_command_const(&mut buf, &[command]);
+    buf
+}
+
+/// The number of words in a normal frame.
+const NORMAL_FRAME_WORDS: usize = 1 // command / response
+        + CHANNELS // channel data
+        + 1; // output CRC
+const NORMAL_FRAME_BYTES: usize = NORMAL_FRAME_WORDS * BYTES_PER_WORD;
+
+const fn build_normal_frame(command: u16) -> [u8; NORMAL_FRAME_BYTES] {
+    let mut buf = [0; NORMAL_FRAME_BYTES];
     write_command_const(&mut buf, &[command]);
     buf
 }

@@ -34,3 +34,7 @@ const fn ch_reg(channel: u8, offset: u8) -> u8 {
     debug_assert!(offset < CH_STRIDE, "channel register offset out of range");
     CH_BASE + channel * CH_STRIDE + offset
 }
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct Status(pub u16);
