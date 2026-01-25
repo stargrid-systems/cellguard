@@ -1,4 +1,4 @@
-use crate::{BYTES_PER_WORD, CHANNELS, CommunicationErrorKind, ENABLE_INPUT_CRC};
+use crate::{BYTES_PER_WORD, CHANNELS, CommunicationErrorKind, ENABLE_INPUT_CRC, command};
 
 // command + optional CRC
 const SHORT_WORDS: usize = 1 + (ENABLE_INPUT_CRC as usize);
@@ -16,7 +16,7 @@ const WRITE_ONE_BYTES: usize = WRITE_ONE_WORDS * BYTES_PER_WORD;
 
 pub const fn build_write_one(addr: u8, value: u16) -> [u8; WRITE_ONE_BYTES] {
     let mut buf = [0; WRITE_ONE_BYTES];
-    write_command_const(&mut buf, &[crate::command::wreg(addr, 1), value]);
+    write_command_const(&mut buf, &[command::wreg(addr, 1), value]);
     buf
 }
 

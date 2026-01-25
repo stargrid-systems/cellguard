@@ -12,10 +12,7 @@
 
 #![no_std]
 
-use core::num::NonZeroU8;
-use core::slice;
-
-use embedded_hal::spi::{Operation, SpiDevice};
+use embedded_hal::spi::SpiDevice;
 
 pub use self::error::{
     CommunicationError, CommunicationErrorKind, LockError, ResetError, WriteError,
@@ -33,7 +30,7 @@ mod register;
 /// 2048 cycles to reset the device.
 /// `2048 @ 2 MHz = 1024 us`.
 /// We round up to 1500 us to be safe.
-const RESET_PULSE_US: u16 = 1500;
+pub const RESET_PULSE_DURATION_US: u16 = 1500;
 
 /// Time required after a reset for the device to be ready for normal
 /// operation, in microseconds.

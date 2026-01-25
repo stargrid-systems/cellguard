@@ -35,6 +35,7 @@ const fn ch_reg(channel: u8, offset: u8) -> u8 {
     CH_BASE + channel * CH_STRIDE + offset
 }
 
+/// Status register.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Status(pub u16);
@@ -42,6 +43,7 @@ pub struct Status(pub u16);
 impl Status {
     const LOCK_MASK: u16 = 1 << 15;
 
+    /// Returns true if the device registers are locked.
     pub const fn locked(self) -> bool {
         (self.0 & Self::LOCK_MASK) != 0
     }
