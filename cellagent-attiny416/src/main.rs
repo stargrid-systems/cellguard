@@ -9,6 +9,8 @@ use avr_device::attiny416 as pac;
 
 use crate::pac::Peripherals;
 
+mod hal;
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     // disable interrupts - firmware has panicked so no ISRs should continue running
