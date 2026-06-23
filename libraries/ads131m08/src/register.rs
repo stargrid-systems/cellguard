@@ -35,6 +35,20 @@ const fn ch_reg(channel: u8, offset: u8) -> u8 {
     CH_BASE + channel * CH_STRIDE + offset
 }
 
+/// ID register.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct Id(pub u16);
+
+impl Id {
+    const CHANNEL_COUNT_MASK: u16 = 0x0F00;
+
+    /// Returns the number of channels supported by the device.
+    pub const fn channel_count(self) -> u8 {
+        ((self.0 & Self::CHANNEL_COUNT_MASK) >> 8) as u8
+    }
+}
+
 /// Status register.
 #[derive(Clone, Copy)]
 #[repr(transparent)]

@@ -17,7 +17,7 @@ use embedded_hal::spi::SpiDevice;
 pub use self::error::{
     CommunicationError, CommunicationErrorKind, LockError, ResetError, WriteError,
 };
-pub use self::register::Status;
+pub use self::register::{Id, Status};
 
 mod command;
 mod error;
@@ -131,6 +131,11 @@ impl<S: SpiDevice> Ads131m08<S> {
         let buf = const { frame::build_short(command::WAKEUP) };
         self.spi.write(&buf).map_err(CommunicationError::spi)?;
         Ok(())
+    }
+
+    /// Reads the device ID register.
+    pub fn read_id(&mut self) -> Result<Id, CommunicationError<S::Error>> {
+        self.read_single_register(register::ID).map(Id)
     }
 
     /// Reads conversion data from all channels into the provided array.
