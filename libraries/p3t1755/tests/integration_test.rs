@@ -34,7 +34,7 @@ enum MockOperation {
 struct MockError(ErrorKind);
 
 impl MockError {
-    fn new(kind: ErrorKind) -> Self {
+    const fn new(kind: ErrorKind) -> Self {
         Self(kind)
     }
 }
@@ -51,58 +51,51 @@ impl ErrorType for MockI2c {
 
 impl I2c for MockI2c {
     fn read(&mut self, addr: u8, buf: &mut [u8]) -> Result<(), Self::Error> {
-        if self.current >= self.expectations.len() {
-            panic!("Unexpected I2C read to address 0x{:02X}", addr);
-        }
-
-        let expected = &self.expectations[self.current];
+        let Some(expected) = self.expectations.get(self.current) else {
+            panic!("Unexpected I2C read to address 0x{addr:02X}");
+        };
         self.current += 1;
 
-        if addr != expected.addr {
-            panic!(
-                "I2C address mismatch: expected 0x{:02X}, got 0x{:02X}",
-                expected.addr, addr
-            );
-        }
+        assert!(
+            addr == expected.addr,
+            "I2C address mismatch: expected 0x{:02X}, got 0x{:02X}",
+            expected.addr,
+            addr
+        );
 
-        if expected.operations.len() != 1 {
+        let [operation] = expected.operations.as_slice() else {
             panic!(
                 "Operation count mismatch for read: expected 1, got {}",
                 expected.operations.len()
             );
-        }
+        };
 
-        match expected.operations[0].clone() {
+        match operation.clone() {
             MockOperation::Read(expected_data) => {
-                if buf.len() != expected_data.len() {
-                    panic!(
-                        "Read buffer size mismatch: expected {}, got {}",
-                        expected_data.len(),
-                        buf.len()
-                    );
-                }
+                assert!(
+                    buf.len() == expected_data.len(),
+                    "Read buffer size mismatch: expected {}, got {}",
+                    expected_data.len(),
+                    buf.len()
+                );
                 buf.copy_from_slice(&expected_data);
                 Ok(())
             }
             MockOperation::ReadNackAddress => Err(MockError::new(ErrorKind::NoAcknowledge(
                 NoAcknowledgeSource::Address,
             ))),
-            other => panic!("Unexpected operation for read: {:?}", other),
+            other @ MockOperation::Write(_) => {
+                panic!("Unexpected operation for read: {other:?}")
+            }
         }
     }
 
     fn write(&mut self, addr: u8, _bytes: &[u8]) -> Result<(), Self::Error> {
-        panic!(
-            "Unexpected write without expectations to addr 0x{:02X}",
-            addr
-        );
+        panic!("Unexpected write without expectations to addr 0x{addr:02X}");
     }
 
     fn write_read(&mut self, addr: u8, _bytes: &[u8], _buf: &mut [u8]) -> Result<(), Self::Error> {
-        panic!(
-            "Unexpected write_read without expectations to addr 0x{:02X}",
-            addr
-        );
+        panic!("Unexpected write_read without expectations to addr 0x{addr:02X}");
     }
 
     fn transaction(
@@ -110,27 +103,24 @@ impl I2c for MockI2c {
         addr: u8,
         operations: &mut [Operation<'_>],
     ) -> Result<(), Self::Error> {
-        if self.current >= self.expectations.len() {
-            panic!("Unexpected I2C transaction to address 0x{:02X}", addr);
-        }
-
-        let expected = &self.expectations[self.current];
+        let Some(expected) = self.expectations.get(self.current) else {
+            panic!("Unexpected I2C transaction to address 0x{addr:02X}");
+        };
         self.current += 1;
 
-        if addr != expected.addr {
-            panic!(
-                "I2C address mismatch: expected 0x{:02X}, got 0x{:02X}",
-                expected.addr, addr
-            );
-        }
+        assert!(
+            addr == expected.addr,
+            "I2C address mismatch: expected 0x{:02X}, got 0x{:02X}",
+            expected.addr,
+            addr
+        );
 
-        if operations.len() != expected.operations.len() {
-            panic!(
-                "Operation count mismatch: expected {}, got {}",
-                expected.operations.len(),
-                operations.len()
-            );
-        }
+        assert!(
+            operations.len() == expected.operations.len(),
+            "Operation count mismatch: expected {}, got {}",
+            expected.operations.len(),
+            operations.len()
+        );
 
         for (i, (op, expected_op)) in operations
             .iter_mut()
@@ -139,22 +129,20 @@ impl I2c for MockI2c {
         {
             match (op, expected_op) {
                 (Operation::Write(data), MockOperation::Write(expected_data)) => {
-                    if *data != expected_data.as_slice() {
-                        panic!(
-                            "Write data mismatch at operation {}: expected {:?}, got {:?}",
-                            i, expected_data, data
-                        );
-                    }
+                    assert!(
+                        *data == expected_data.as_slice(),
+                        "Write data mismatch at operation {i}: expected {expected_data:?}, got \
+                         {data:?}"
+                    );
                 }
                 (Operation::Read(buf), MockOperation::Read(expected_data)) => {
-                    if buf.len() != expected_data.len() {
-                        panic!(
-                            "Read buffer size mismatch at operation {}: expected {}, got {}",
-                            i,
-                            expected_data.len(),
-                            buf.len()
-                        );
-                    }
+                    assert!(
+                        buf.len() == expected_data.len(),
+                        "Read buffer size mismatch at operation {}: expected {}, got {}",
+                        i,
+                        expected_data.len(),
+                        buf.len()
+                    );
                     buf.copy_from_slice(expected_data);
                 }
                 (_, MockOperation::ReadNackAddress) => {
@@ -162,7 +150,7 @@ impl I2c for MockI2c {
                         NoAcknowledgeSource::Address,
                     )));
                 }
-                _ => panic!("Operation type mismatch at operation {}", i),
+                _ => panic!("Operation type mismatch at operation {i}"),
             }
         }
 
@@ -171,7 +159,7 @@ impl I2c for MockI2c {
 }
 
 impl MockI2c {
-    fn new(expectations: Vec<Transaction>) -> Self {
+    const fn new(expectations: Vec<Transaction>) -> Self {
         Self {
             expectations,
             current: 0,
@@ -179,13 +167,12 @@ impl MockI2c {
     }
 
     fn done(&self) {
-        if self.current != self.expectations.len() {
-            panic!(
-                "Not all expected transactions were executed: {}/{}",
-                self.current,
-                self.expectations.len()
-            );
-        }
+        assert!(
+            self.current == self.expectations.len(),
+            "Not all expected transactions were executed: {}/{}",
+            self.current,
+            self.expectations.len()
+        );
     }
 }
 
@@ -395,7 +382,7 @@ fn test_different_addresses() {
         (Address::Addr32, 0x5F),
     ];
 
-    for (addr_enum, addr_val) in addresses.iter() {
+    for (addr_enum, addr_val) in &addresses {
         let mock = MockI2c::new(vec![Transaction {
             addr: *addr_val,
             operations: vec![

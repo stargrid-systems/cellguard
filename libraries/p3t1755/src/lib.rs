@@ -1,6 +1,7 @@
 //! NXP P3T1755 temperature sensor driver.
 
 #![no_std]
+#![warn(missing_docs)]
 
 use embedded_hal::i2c::{I2c, Operation};
 
@@ -37,6 +38,10 @@ impl<I: I2c> P3t1755<I> {
     }
 
     /// Reads the configuration register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_config(&mut self) -> Result<Config, I::Error> {
         let mut buf = [0u8; 1];
         self.read_register(Register::Conf, &mut buf)?;
@@ -44,39 +49,63 @@ impl<I: I2c> P3t1755<I> {
     }
 
     /// Writes the configuration register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_config(&mut self, config: Config) -> Result<(), I::Error> {
         self.write_register(Register::Conf, &[config.to_reg()])
     }
 
     /// Reads the `TLOW` register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_t_low(&mut self) -> Result<Temperature, I::Error> {
         let mut buf = [0u8; 2];
         self.read_register(Register::TLow, &mut buf)?;
-        Ok(Temperature::from_regs(&buf))
+        Ok(Temperature::from_regs(buf))
     }
 
     /// Writes the `TLOW` register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_t_low(&mut self, temp: Temperature) -> Result<(), I::Error> {
         self.write_register(Register::TLow, &temp.to_regs())
     }
 
     /// Reads the `THIGH` register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_t_high(&mut self) -> Result<Temperature, I::Error> {
         let mut buf = [0u8; 2];
         self.read_register(Register::THigh, &mut buf)?;
-        Ok(Temperature::from_regs(&buf))
+        Ok(Temperature::from_regs(buf))
     }
 
     /// Writes the `THIGH` register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_t_high(&mut self, temp: Temperature) -> Result<(), I::Error> {
         self.write_register(Register::THigh, &temp.to_regs())
     }
 
     /// Reads the temperature register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_temperature(&mut self) -> Result<Temperature, I::Error> {
         let mut buf = [0u8; 2];
         self.read_register(Register::Temp, &mut buf)?;
-        Ok(Temperature::from_regs(&buf))
+        Ok(Temperature::from_regs(buf))
     }
 
     fn read_register(&mut self, reg: Register, buf: &mut [u8]) -> Result<(), I::Error> {
