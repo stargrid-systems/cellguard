@@ -34,7 +34,9 @@ impl Register {
     }
 }
 
+/// Contents of the configuration register.
 #[derive(Clone, Copy)]
+#[must_use]
 pub struct Config(u8);
 
 impl Config {
@@ -51,12 +53,10 @@ impl Config {
         self.0
     }
 
-    #[inline]
     const fn bit(self, bit: u8) -> bool {
         self.0 & bit != 0
     }
 
-    #[inline]
     const fn with_bit(mut self, bit: u8, enable: bool) -> Self {
         if enable {
             self.0 |= bit;
@@ -78,6 +78,7 @@ impl Config {
     const OS_BIT: u8 = 0b1000_0000;
 
     /// Returns true if shutdown mode is enabled.
+    #[must_use]
     pub const fn shutdown_mode(self) -> bool {
         self.bit(Self::SD_BIT)
     }
@@ -88,6 +89,7 @@ impl Config {
     }
 
     /// Returns true if thermostat mode is enabled.
+    #[must_use]
     pub const fn thermostat_mode(self) -> bool {
         self.bit(Self::TM_BIT)
     }
@@ -98,6 +100,7 @@ impl Config {
     }
 
     /// Returns true if the polarity is active high.
+    #[must_use]
     pub const fn polarity(self) -> bool {
         self.bit(Self::POL_BIT)
     }
@@ -108,6 +111,7 @@ impl Config {
     }
 
     /// Returns the fault queue setting.
+    #[must_use]
     pub const fn fault_queue(self) -> FaultQueue {
         FaultQueue::from_reg(self.0)
     }
@@ -120,6 +124,7 @@ impl Config {
     }
 
     /// Returns the conversion time setting.
+    #[must_use]
     pub const fn conversion_time(self) -> ConversionTime {
         ConversionTime::from_reg(self.0)
     }
@@ -132,6 +137,7 @@ impl Config {
     }
 
     /// Returns true if one-shot mode is enabled.
+    #[must_use]
     pub const fn one_shot(self) -> bool {
         self.bit(Self::OS_BIT)
     }
@@ -142,13 +148,18 @@ impl Config {
     }
 }
 
+/// Number of consecutive faults required before the alert is asserted.
 #[derive(Clone, Copy, Default)]
 #[repr(u8)]
 pub enum FaultQueue {
+    /// One fault.
     One = 0b00_000,
+    /// Two faults.
     #[default]
     Two = 0b01_000,
+    /// Four faults.
     Four = 0b10_000,
+    /// Six faults.
     Six = 0b11_000,
 }
 
@@ -166,6 +177,7 @@ impl FaultQueue {
     }
 }
 
+/// Temperature conversion time.
 #[derive(Clone, Copy, Default)]
 #[repr(u8)]
 pub enum ConversionTime {
@@ -199,6 +211,7 @@ impl ConversionTime {
 /// The value is internally stored in 1/16°C. The valid range is -2048 to 2047
 /// representing -128.0°C to +127.9375°C.
 #[derive(Clone, Copy)]
+#[must_use]
 pub struct Temperature(i16);
 
 impl Temperature {
@@ -207,9 +220,9 @@ impl Temperature {
     /// Maximum temperature (+127.9375 °C).
     pub const MAX: Self = Self(2047);
 
-    pub(crate) const fn from_regs(regs: &[u8; 2]) -> Self {
+    pub(crate) const fn from_regs(regs: [u8; 2]) -> Self {
         // MSByte first (big-endian)
-        let raw = i16::from_be_bytes(*regs);
+        let raw = i16::from_be_bytes(regs);
         // Only the 12 MSBs are valid temperature data.
         Self(raw >> 4)
     }
@@ -222,6 +235,7 @@ impl Temperature {
     /// Creates a temperature from a raw value in 1/16 °C units.
     ///
     /// Returns `None` if the value is out of range.
+    #[must_use]
     pub const fn from_raw(raw: i16) -> Option<Self> {
         if raw < Self::MIN.0 || raw > Self::MAX.0 {
             None
@@ -253,6 +267,10 @@ impl Temperature {
     /// The resulting value is an approximation since the sensor has a
     /// resolution of 0.0625 °C. If the value is out of range, it saturates
     /// to the min/max valid range.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "raw is bounded by the i16 input to +/-5243, which fits in i16"
+    )]
     pub const fn from_centi_degrees_celsius(centi_deg_c: i16) -> Self {
         // We need i32 to avoid overflow when multiplying by 16.
         let raw = (centi_deg_c as i32 * 16) / 100;
@@ -260,11 +278,17 @@ impl Temperature {
     }
 
     /// Returns the raw temperature value in 1/16 °C.
+    #[must_use]
     pub const fn raw(self) -> i16 {
         self.0
     }
 
     /// Returns the temperature truncated to degrees Celsius (°C).
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the 12-bit value shifted right by 4 fits in i8"
+    )]
     pub const fn degrees_celsius(self) -> i8 {
         // The value only has 12 bits, so shifting right by 4 leaves us with exactly 8
         // bits.
@@ -272,6 +296,11 @@ impl Temperature {
     }
 
     /// Returns the temperature in centi-degrees Celsius (1/100 °C).
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the 12-bit input bounds the result to +/-12800, which fits in i16"
+    )]
     pub const fn centi_degrees_celsius(self) -> i16 {
         // We need i32 to avoid overflow when multiplying by 625.
         let centi_deg_c = (self.0 as i32 * 625) / 100;
@@ -375,7 +404,7 @@ mod tests {
         let t = Temperature::from_raw(401).unwrap();
         let regs = t.to_regs();
         assert_eq!(regs, [0x19, 0x10]);
-        let t2 = Temperature::from_regs(&regs);
+        let t2 = Temperature::from_regs(regs);
         assert_eq!(t2.raw(), 401);
         assert_eq!(t2.degrees_celsius(), 25);
         assert_eq!(t2.centi_degrees_celsius(), 2506);
@@ -386,7 +415,7 @@ mod tests {
         let t = Temperature::from_raw(-168).unwrap();
         let regs = t.to_regs();
         assert_eq!(regs, [0xF5, 0x80]);
-        let t2 = Temperature::from_regs(&regs);
+        let t2 = Temperature::from_regs(regs);
         assert_eq!(t2.raw(), -168);
         assert_eq!(t2.degrees_celsius(), -11);
         assert_eq!(t2.centi_degrees_celsius(), -1050);

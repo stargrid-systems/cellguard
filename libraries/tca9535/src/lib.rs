@@ -5,6 +5,8 @@
 //! as types implementing the `embedded-hal` traits are not zero-cost.
 
 #![no_std]
+// Set per-crate so it lints the library only, not the test crates.
+#![warn(missing_docs)]
 
 use core::mem;
 use core::ops::Range;
@@ -34,38 +36,66 @@ impl<I: I2c> Tca9535<I> {
     }
 
     /// Reads the input registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_input(&mut self) -> Result<Input, I::Error> {
         self.read_register_pair(INPUT_PORT0).map(Input)
     }
 
     /// Reads the output registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_output(&mut self) -> Result<Output, I::Error> {
         self.read_register_pair(OUTPUT_PORT0).map(Output)
     }
 
     /// Writes the output registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_output(&mut self, value: Output) -> Result<(), I::Error> {
         self.write_register_pair(OUTPUT_PORT0, value.0)
     }
 
     /// Reads the polarity inversion registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_polarity_inversion(&mut self) -> Result<PolarityInversion, I::Error> {
         self.read_register_pair(POLARITY_INVERSION_PORT0)
             .map(PolarityInversion)
     }
 
     /// Writes the polarity inversion registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_polarity_inversion(&mut self, value: PolarityInversion) -> Result<(), I::Error> {
         self.write_register_pair(POLARITY_INVERSION_PORT0, value.0)
     }
 
     /// Reads the configuration registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn read_configuration(&mut self) -> Result<Configuration, I::Error> {
         self.read_register_pair(CONFIGURATION_PORT0)
             .map(Configuration)
     }
 
     /// Writes the configuration registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the I2C transaction fails.
     pub fn write_configuration(&mut self, value: Configuration) -> Result<(), I::Error> {
         self.write_register_pair(CONFIGURATION_PORT0, value.0)
     }
@@ -122,7 +152,7 @@ impl Address {
             // - `Address` is `#[repr(u8)]`.
             // - Each variant of `Address` is in the `Self::RANGE`.
             // - All values in `Self::RANGE` correspond to a variant of `Address`.
-            Some(unsafe { mem::transmute::<u8, Address>(value) })
+            Some(unsafe { mem::transmute::<u8, Self>(value) })
         } else {
             None
         }
@@ -138,27 +168,42 @@ impl Address {
 /// Bit-index for a TCA9535 pin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PinIndex {
+    /// Pin 0 (port 0, bit 0).
     P0,
+    /// Pin 1 (port 0, bit 1).
     P1,
+    /// Pin 2 (port 0, bit 2).
     P2,
+    /// Pin 3 (port 0, bit 3).
     P3,
+    /// Pin 4 (port 0, bit 4).
     P4,
+    /// Pin 5 (port 0, bit 5).
     P5,
+    /// Pin 6 (port 0, bit 6).
     P6,
+    /// Pin 7 (port 0, bit 7).
     P7,
+    /// Pin 8 (port 1, bit 0).
     P8,
+    /// Pin 9 (port 1, bit 1).
     P9,
+    /// Pin 10 (port 1, bit 2).
     P10,
+    /// Pin 11 (port 1, bit 3).
     P11,
+    /// Pin 12 (port 1, bit 4).
     P12,
+    /// Pin 13 (port 1, bit 5).
     P13,
+    /// Pin 14 (port 1, bit 6).
     P14,
+    /// Pin 15 (port 1, bit 7).
     P15,
 }
 
 impl PinIndex {
     /// Returns the bit position of this pin (0-15).
-    #[inline]
     #[must_use]
     pub const fn bit(self) -> u8 {
         match self {
@@ -182,7 +227,6 @@ impl PinIndex {
     }
 
     /// Returns a bitmask with only this pin set.
-    #[inline]
     #[must_use]
     pub const fn mask(self) -> u16 {
         1 << self.bit()
@@ -195,14 +239,12 @@ pub struct Input(pub u16);
 
 impl Input {
     /// Returns true if the specified pin is high.
-    #[inline]
     #[must_use]
     pub const fn is_high(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
 
     /// Returns true if the specified pin is low.
-    #[inline]
     #[must_use]
     pub const fn is_low(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() == 0
@@ -211,34 +253,29 @@ impl Input {
 
 /// Output registers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[must_use]
 pub struct Output(pub u16);
 
 impl Output {
     /// Returns a new value with the specified pin set high.
-    #[inline]
-    #[must_use]
     pub const fn with_high(mut self, pin: PinIndex) -> Self {
         self.0 |= pin.mask();
         self
     }
 
     /// Returns a new value with the specified pin set low.
-    #[inline]
-    #[must_use]
     pub const fn with_low(mut self, pin: PinIndex) -> Self {
         self.0 &= !pin.mask();
         self
     }
 
     /// Returns true if the specified pin is high.
-    #[inline]
     #[must_use]
     pub const fn is_high(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
 
     /// Returns true if the specified pin is low.
-    #[inline]
     #[must_use]
     pub const fn is_low(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() == 0
@@ -247,34 +284,29 @@ impl Output {
 
 /// Polarity inversion registers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[must_use]
 pub struct PolarityInversion(pub u16);
 
 impl PolarityInversion {
     /// Returns a new value with the specified pin inverted.
-    #[inline]
-    #[must_use]
     pub const fn with_inverted(mut self, pin: PinIndex) -> Self {
         self.0 |= pin.mask();
         self
     }
 
     /// Returns a new value with the specified pin set to normal polarity.
-    #[inline]
-    #[must_use]
     pub const fn with_normal(mut self, pin: PinIndex) -> Self {
         self.0 &= !pin.mask();
         self
     }
 
     /// Returns true if the specified pin is inverted.
-    #[inline]
     #[must_use]
     pub const fn is_inverted(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
 
     /// Returns true if the specified pin has normal polarity.
-    #[inline]
     #[must_use]
     pub const fn is_normal(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() == 0
@@ -283,34 +315,29 @@ impl PolarityInversion {
 
 /// Configuration registers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[must_use]
 pub struct Configuration(pub u16);
 
 impl Configuration {
     /// Returns a new value with the specified pin configured as input.
-    #[inline]
-    #[must_use]
     pub const fn with_input(mut self, pin: PinIndex) -> Self {
         self.0 |= pin.mask();
         self
     }
 
     /// Returns a new value with the specified pin configured as output.
-    #[inline]
-    #[must_use]
     pub const fn with_output(mut self, pin: PinIndex) -> Self {
         self.0 &= !pin.mask();
         self
     }
 
     /// Returns true if the specified pin is configured as input.
-    #[inline]
     #[must_use]
     pub const fn is_input(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() != 0
     }
 
     /// Returns true if the specified pin is configured as output.
-    #[inline]
     #[must_use]
     pub const fn is_output(self, pin: PinIndex) -> bool {
         self.0 & pin.mask() == 0

@@ -78,6 +78,7 @@ impl Address {
     const RANGE: Range<u8> = 0x40..0x60;
 
     /// Creates an address from a u8 value if it is in the valid range.
+    #[must_use]
     pub const fn new(value: u8) -> Option<Self> {
         if value >= Self::RANGE.start && value < Self::RANGE.end {
             // SAFETY:
@@ -86,13 +87,14 @@ impl Address {
             //   `Address` variants (Addr1 through Addr32).
             // - `Self::RANGE` is 0x40..0x60, so any `value` passing the check is guaranteed
             //   to be a valid `Address` discriminant.
-            Some(unsafe { mem::transmute::<u8, Address>(value) })
+            Some(unsafe { mem::transmute::<u8, Self>(value) })
         } else {
             None
         }
     }
 
     /// Returns the u8 value of the address.
+    #[must_use]
     pub const fn get(self) -> u8 {
         self as u8
     }
