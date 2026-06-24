@@ -21,7 +21,6 @@ pub use self::register::{BlockProtection, Status};
 
 mod command;
 mod error;
-mod instruction;
 mod model;
 mod register;
 
@@ -116,7 +115,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     /// status write that selects the page, [`Error::Timeout`] if that write
     /// does not finish in time, or [`Error::Spi`] if a SPI transaction fails.
     pub fn read_id_page(&mut self, offset: u32, data: &mut [u8]) -> Result<(), Error<S::Error>> {
-        if !range_in_bounds(offset, data.len(), u32::from(self.model.id_page_size())) {
+        if !range_in_bounds(offset, data.len(), u32::from(self.model.page_size())) {
             return Err(Error::OutOfBounds);
         }
         self.select_id_page()?;
@@ -139,7 +138,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
         if data.is_empty() {
             return Ok(());
         }
-        if !range_in_bounds(offset, data.len(), u32::from(self.model.id_page_size())) {
+        if !range_in_bounds(offset, data.len(), u32::from(self.model.page_size())) {
             return Err(Error::OutOfBounds);
         }
         self.select_id_page()?;
@@ -216,7 +215,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     fn write_status_register(&mut self, status: Status) -> Result<(), Error<S::Error>> {
         self.write_enable().map_err(Error::Spi)?;
         self.spi
-            .write(&[instruction::WRSR, status.bits()])
+            .write(&[command::WRSR, status.bits()])
             .map_err(Error::Spi)?;
         self.wait_written()
     }
@@ -228,7 +227,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
         }
         self.write_enable().map_err(Error::Spi)?;
         let mut buf = [0u8; HEADER_MAX];
-        let header = encode_header(self.model, &mut buf, instruction::WRITE, address);
+        let header = encode_header(self.model, &mut buf, command::WRITE, address);
         self.spi
             .transaction(&mut [Operation::Write(header), Operation::Write(data)])
             .map_err(Error::Spi)?;
@@ -236,7 +235,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     }
 
     fn write_enable(&mut self) -> Result<(), S::Error> {
-        self.spi.write(&[instruction::WREN])
+        self.spi.write(&[command::WREN])
     }
 
     fn read_memory(&mut self, address: u32, data: &mut [u8]) -> Result<(), S::Error> {
@@ -244,7 +243,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
             return Ok(());
         }
         let mut buf = [0u8; HEADER_MAX];
-        let header = encode_header(self.model, &mut buf, instruction::READ, address);
+        let header = encode_header(self.model, &mut buf, command::READ, address);
         self.spi
             .transaction(&mut [Operation::Write(header), Operation::Read(data)])
     }
@@ -252,7 +251,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     fn read_status(&mut self) -> Result<Status, S::Error> {
         let mut buf = [0u8; 1];
         self.spi.transaction(&mut [
-            Operation::Write(&[instruction::RDSR]),
+            Operation::Write(&[command::RDSR]),
             Operation::Read(&mut buf),
         ])?;
         Ok(Status::from_bits(buf[0]))

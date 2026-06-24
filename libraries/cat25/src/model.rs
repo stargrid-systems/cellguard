@@ -25,15 +25,6 @@ impl Model {
         self.page_size
     }
 
-    /// Returns the identification page size in bytes.
-    ///
-    /// On the supported parts the identification page is exactly one regular
-    /// page.
-    #[must_use]
-    pub const fn id_page_size(self) -> u16 {
-        self.page_size
-    }
-
     /// Encodes an address into the buffer using the correct number of bytes for
     /// the model.
     ///
@@ -44,12 +35,10 @@ impl Model {
     /// Returns the number of bytes written to the buffer.
     pub(crate) fn encode_address(self, buf: &mut [u8], address: u32) -> usize {
         let n = usize::from(self.address_bytes());
+        debug_assert!(buf.len() >= n, "buffer too small for address");
         let bytes = address.to_be_bytes();
-        // The model uses the low `n` bytes, which are the last `n` big-endian
-        // bytes of the address.
-        for (dst, src) in buf.iter_mut().zip(bytes.iter().skip(bytes.len() - n)) {
-            *dst = *src;
-        }
+        let bytes = bytes.iter().skip(bytes.len() - n);
+        buf.iter_mut().zip(bytes).for_each(|(dst, src)| *dst = *src);
         n
     }
 }
@@ -75,12 +64,10 @@ mod tests {
         assert_eq!(CAT25128.size(), 16_384);
         assert_eq!(CAT25128.address_bytes(), 2);
         assert_eq!(CAT25128.page_size(), 64);
-        assert_eq!(CAT25128.id_page_size(), 64);
 
         assert_eq!(CAT25M01.size(), 131_072);
         assert_eq!(CAT25M01.address_bytes(), 3);
         assert_eq!(CAT25M01.page_size(), 256);
-        assert_eq!(CAT25M01.id_page_size(), 256);
     }
 
     #[test]

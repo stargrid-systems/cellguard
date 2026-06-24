@@ -1,13 +1,21 @@
 use crate::Model;
 
+/// Enable Write Operations
+pub const WREN: u8 = 0b0000_0110;
+/// Read Status Register
+pub const RDSR: u8 = 0b0000_0101;
+/// Write Status Register
+pub const WRSR: u8 = 0b0000_0001;
+/// Read Data from Memory
+pub const READ: u8 = 0b0000_0011;
+/// Write Data to Memory
+pub const WRITE: u8 = 0b0000_0010;
+
 /// Largest command header: opcode plus up to three address bytes.
 pub const HEADER_MAX: usize = 4;
 
 /// Returns true if a `len`-byte access starting at `address` stays within
 /// `limit` bytes.
-///
-/// All arithmetic is done in `u32` with overflow treated as out of bounds, so
-/// the check is correct on targets with a 16-bit `usize` (AVR).
 pub fn range_in_bounds(address: u32, len: usize, limit: u32) -> bool {
     u32::try_from(len).is_ok_and(|len| address.checked_add(len).is_some_and(|end| end <= limit))
 }
@@ -15,10 +23,6 @@ pub fn range_in_bounds(address: u32, len: usize, limit: u32) -> bool {
 /// Encodes `opcode` followed by the model's address bytes into `buf`.
 ///
 /// Returns the populated prefix of `buf`.
-#[expect(
-    clippy::indexing_slicing,
-    reason = "buf is HEADER_MAX bytes and holds the opcode plus up to three address bytes"
-)]
 pub fn encode_header(
     model: Model,
     buf: &mut [u8; HEADER_MAX],
@@ -27,6 +31,10 @@ pub fn encode_header(
 ) -> &mut [u8] {
     buf[0] = opcode;
     let n = model.encode_address(&mut buf[1..], address);
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "n is guaranteed to be in bounds of buf[1..]"
+    )]
     &mut buf[..=n]
 }
 
@@ -36,17 +44,17 @@ pub fn encode_header(
 /// write that crosses a page boundary must be issued as separate page writes.
 /// Each item is the device address of the chunk and its length in bytes.
 pub struct PageChunks {
-    address: u32,
+    start: u32,
     remaining: usize,
-    page: u32,
+    page_size: u32,
 }
 
 impl PageChunks {
-    pub fn new(address: u32, len: usize, page_size: u16) -> Self {
+    pub const fn new(start: u32, len: usize, page_size: u16) -> Self {
         Self {
-            address,
+            start,
             remaining: len,
-            page: u32::from(page_size),
+            page_size: page_size as u32,
         }
     }
 }
@@ -56,16 +64,16 @@ impl Iterator for PageChunks {
 
     #[expect(
         clippy::cast_possible_truncation,
-        reason = "a page is at most 256 bytes, so a chunk fits in both usize and u32"
+        reason = "chunk <= page_size, which originated from u16 and fits in u32"
     )]
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
             return None;
         }
-        let space = (self.page - self.address % self.page) as usize;
-        let chunk = space.min(self.remaining);
-        let address = self.address;
-        self.address += chunk as u32;
+        let left_in_page = (self.page_size - self.start % self.page_size) as usize;
+        let chunk = left_in_page.min(self.remaining);
+        let address = self.start;
+        self.start += chunk as u32;
         self.remaining -= chunk;
         Some((address, chunk))
     }
