@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "cat25"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+ "embedded-hal-mock",
+]
+
+[[package]]
 name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
