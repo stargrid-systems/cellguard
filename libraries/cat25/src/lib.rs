@@ -66,6 +66,23 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
         self.read_status().map_err(Error::Spi)
     }
 
+    /// Clears the write enable latch (WRDI).
+    ///
+    /// You rarely need this. The driver enables writes right before each write,
+    /// and the device clears the latch on its own once a write cycle finishes.
+    /// So a successful write never leaves it set. Reads do not touch it.
+    ///
+    /// The one exception is a rejected write. When a write is blocked (see
+    /// [`Error::WriteProtected`]) no write cycle runs, so the latch stays set.
+    /// Call this to clear it defensively after such a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Spi`] if the SPI transaction fails.
+    pub fn write_disable(&mut self) -> Result<(), Error<S::Error>> {
+        self.spi.write(&[command::WRDI]).map_err(Error::Spi)
+    }
+
     /// Reads `data.len()` bytes from the main array starting at `address`.
     ///
     /// # Errors
@@ -338,6 +355,18 @@ mod tests {
         let status = cat.status().unwrap();
         assert!(status.ready());
         assert!(status.write_enabled());
+        finish(cat);
+    }
+
+    #[test]
+    fn write_disable_sends_wrdi() {
+        let expected = [
+            SpiTransaction::transaction_start(),
+            SpiTransaction::write_vec(vec![0x04]),
+            SpiTransaction::transaction_end(),
+        ];
+        let mut cat = build(CAT25128, &expected);
+        cat.write_disable().unwrap();
         finish(cat);
     }
 

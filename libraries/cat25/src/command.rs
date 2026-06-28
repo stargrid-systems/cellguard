@@ -2,6 +2,8 @@ use crate::Model;
 
 /// Enable Write Operations
 pub const WREN: u8 = 0b0000_0110;
+/// Disable Write Operations
+pub const WRDI: u8 = 0b0000_0100;
 /// Read Status Register
 pub const RDSR: u8 = 0b0000_0101;
 /// Write Status Register

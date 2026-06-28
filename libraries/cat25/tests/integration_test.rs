@@ -47,6 +47,14 @@ fn wrsr(value: u8) -> Vec<SpiTransaction<u8>> {
     ]
 }
 
+fn wrdi() -> Vec<SpiTransaction<u8>> {
+    vec![
+        SpiTransaction::transaction_start(),
+        SpiTransaction::write_vec(vec![0x04]),
+        SpiTransaction::transaction_end(),
+    ]
+}
+
 fn read_cmd(header: Vec<u8>, data: Vec<u8>) -> Vec<SpiTransaction<u8>> {
     vec![
         SpiTransaction::transaction_start(),
@@ -154,6 +162,27 @@ fn write_rejected_reports_protected() {
 
     let mut cat = build(CAT25128, &expected);
     assert_eq!(cat.write(0, &[0x01]), Err(Error::WriteProtected));
+    finish(cat);
+}
+
+#[test]
+fn write_disable_sends_wrdi() {
+    let mut cat = build(CAT25128, &wrdi());
+    cat.write_disable().unwrap();
+    finish(cat);
+}
+
+#[test]
+fn write_disable_clears_latch_after_rejected_write() {
+    let mut expected = Vec::new();
+    expected.extend(wren());
+    expected.extend(write_cmd(vec![0x02, 0x00, 0x00], vec![0x01]));
+    expected.extend(rdsr(0b0000_0010)); // ready, but write enable still set
+    expected.extend(wrdi());
+
+    let mut cat = build(CAT25128, &expected);
+    assert_eq!(cat.write(0, &[0x01]), Err(Error::WriteProtected));
+    cat.write_disable().unwrap();
     finish(cat);
 }
 
