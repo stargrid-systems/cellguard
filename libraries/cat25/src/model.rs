@@ -25,14 +25,10 @@ impl Model {
         self.page_size
     }
 
-    /// Encodes an address into the buffer using the correct number of bytes for
-    /// the model.
+    /// Encodes an address into `buf` using the model's address byte count and
+    /// returns how many bytes were written.
     ///
-    /// This does not validate that the address is in range (that depends on
-    /// whether the access targets the id page or the main array) and assumes
-    /// the buffer is large enough to hold the address bytes.
-    ///
-    /// Returns the number of bytes written to the buffer.
+    /// Does not range-check the address and assumes `buf` is large enough.
     pub(crate) fn encode_address(self, buf: &mut [u8], address: u32) -> usize {
         let n = usize::from(self.address_bytes());
         debug_assert!(buf.len() >= n, "buffer too small for address");

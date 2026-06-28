@@ -129,6 +129,9 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     /// status write that selects the page, [`Error::Timeout`] if that write
     /// does not finish in time, or [`Error::Spi`] if a SPI transaction fails.
     pub fn read_id_page(&mut self, offset: u32, data: &mut [u8]) -> Result<(), Error<S::Error>> {
+        if data.is_empty() {
+            return Ok(());
+        }
         if !range_in_bounds(offset, data.len(), u32::from(self.model.page_size())) {
             return Err(Error::OutOfBounds);
         }
@@ -206,11 +209,10 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
     /// Selects the identification page for the next read or write.
     ///
     /// The latch stays set until the next read or write, which the device then
-    /// directs to the identification page. The payload clears the lock bit so
-    /// it never sets the latch and the lock at the same time, which the device
-    /// would reject. The lock is non-volatile, so this does not unlock it.
+    /// directs to the identification page. The lock bit is left untouched, so a
+    /// locked page stays locked and still readable.
     fn select_id_page(&mut self) -> Result<(), Error<S::Error>> {
-        self.modify_status(|s| s.with_id_page_latch(true).with_lock_id_page(false))
+        self.modify_status(|s| s.with_id_page_latch(true))
     }
 
     /// Reads the current status, applies `change`, and writes it back.

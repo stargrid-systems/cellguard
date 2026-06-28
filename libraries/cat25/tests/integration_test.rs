@@ -220,6 +220,33 @@ fn read_id_page_selects_then_reads() {
 }
 
 #[test]
+fn read_id_page_preserves_lock_bit() {
+    let mut expected = Vec::new();
+    // The page is already locked. Selecting it must keep LIP set so the read
+    // still reaches the locked-but-readable page.
+    expected.extend(rdsr(0x10)); // LIP set
+    expected.extend(wren());
+    expected.extend(wrsr(0x50)); // IPL set, LIP preserved
+    expected.extend(rdsr(0x00));
+    expected.extend(read_cmd(vec![0x03, 0x00, 0x00, 0x00], vec![0xAB]));
+
+    let mut cat = build(CAT25M01, &expected);
+    let mut buf = [0u8; 1];
+    cat.read_id_page(0, &mut buf).unwrap();
+    assert_eq!(buf, [0xAB]);
+    finish(cat);
+}
+
+#[test]
+fn read_id_page_empty_does_not_select() {
+    // An empty read must not assert the latch, or the next access would be
+    // misdirected to the identification page. No SPI traffic is expected.
+    let mut cat = build(CAT25M01, &[]);
+    cat.read_id_page(0, &mut []).unwrap();
+    finish(cat);
+}
+
+#[test]
 fn write_id_page_selects_then_writes() {
     let mut expected = Vec::new();
     expected.extend(rdsr(0x00));
