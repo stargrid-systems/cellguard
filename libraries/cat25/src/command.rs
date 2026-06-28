@@ -47,16 +47,16 @@ pub fn encode_header(
 /// Each item is the device address of the chunk and its length in bytes.
 pub struct PageChunks {
     start: u32,
-    remaining: usize,
+    end: u32,
     page_size: u32,
 }
 
 impl PageChunks {
-    pub const fn new(start: u32, len: usize, page_size: u16) -> Self {
+    pub fn new(start: u32, len: usize, page_size: u16) -> Self {
         Self {
             start,
-            remaining: len,
-            page_size: page_size as u32,
+            end: start.saturating_add(u32::try_from(len).unwrap_or(u32::MAX)),
+            page_size: u32::from(page_size),
         }
     }
 }
@@ -64,20 +64,19 @@ impl PageChunks {
 impl Iterator for PageChunks {
     type Item = (u32, usize);
 
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "chunk <= page_size, which originated from u16 and fits in u32"
-    )]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining == 0 {
+        if self.start >= self.end {
             return None;
         }
-        let left_in_page = (self.page_size - self.start % self.page_size) as usize;
-        let chunk = left_in_page.min(self.remaining);
         let address = self.start;
-        self.start += chunk as u32;
-        self.remaining -= chunk;
-        Some((address, chunk))
+        let left_in_page = self.page_size - self.start % self.page_size;
+        let chunk_end = self.end.min(self.start.saturating_add(left_in_page));
+        self.start = chunk_end;
+        // The chunk spans at most one page, so its length fits in a usize.
+        Some((
+            address,
+            usize::try_from(chunk_end - address).unwrap_or(usize::MAX),
+        ))
     }
 }
 
