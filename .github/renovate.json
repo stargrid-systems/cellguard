@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:best-practices"]
+  "extends": ["config:best-practices"],
+  "packageRules": [
+    {
+      "matchFileNames": ["rust-toolchain.toml"],
+      "automerge": false,
+      "description": "Pinning the latest nightly daily is too much churn. Keep toolchain bumps as manual PRs."
+    }
+  ]
 }
