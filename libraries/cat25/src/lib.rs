@@ -4,9 +4,6 @@
 //! command, and waits for the self-timed write cycle to finish. There is no way
 //! to issue a half-finished write sequence, so the usual protocol mistakes
 //! cannot happen.
-//!
-//! The protocol framing lives in an I/O-free core (`command`), so an async
-//! client can reuse it later without duplicating the tricky logic.
 
 #![no_std]
 #![warn(missing_docs)]
