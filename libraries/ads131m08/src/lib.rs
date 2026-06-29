@@ -16,6 +16,16 @@
 //! current detection when in current-detect mode. Connect the `DRDY` pin to a
 //! digital input on the host to trigger periodic data retrieval in conversion
 //! mode.
+//!
+//! ## Synchronization
+//!
+//! Conversion synchronization is driven entirely by the `SYNC/RESET` pin: the
+//! host pulses it low to realign the digital filters to an external event.
+//! There is no SPI command for it, so this SPI-only driver does not perform
+//! synchronization itself. The host toggles the pin, and
+//! [`Status::resynchronized`] reports that a resync occurred. To realign data
+//! reads after a pause without the pin, see
+//! [`read_data_after_pause`][Ads131m08::<S, Ready>::read_data_after_pause].
 
 #![no_std]
 
