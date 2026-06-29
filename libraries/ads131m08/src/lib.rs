@@ -34,21 +34,25 @@ pub const RESET_PULSE_DURATION_US: u16 = 1500;
 
 /// Time required after a reset for the device to be ready for normal
 /// operation, in microseconds.
-pub const REGISTER_AQUISITION_TIME_US: u16 = 5;
-const ENABLE_INPUT_CRC: bool = true;
-
-// 24 bits is the default.
-const BYTES_PER_WORD: usize = 3;
+pub const REGISTER_ACQUISITION_TIME_US: u16 = 5;
 const CHANNELS: usize = 8;
 
 pub struct Ads131m08<S> {
     spi: S,
+    format: frame::FrameFormat,
 }
 
 impl<S: SpiDevice> Ads131m08<S> {
     /// Creates a new driver instance.
+    ///
+    /// The driver assumes the device is in its post-reset state: 24-bit words
+    /// with input CRC disabled. Call [`configure`][Self::configure] to change
+    /// the frame format.
     pub const fn new(spi: S) -> Self {
-        Self { spi }
+        Self {
+            spi,
+            format: frame::FrameFormat::reset_default(),
+        }
     }
 
     /// Sends a reset command to the device.
@@ -56,11 +60,18 @@ impl<S: SpiDevice> Ads131m08<S> {
     /// Calling this function merely sends the reset command. To confirm that
     /// the reset took place, call
     /// [`reset_device_complete`][Self::reset_device_complete] after waiting for
-    /// at least 5 microseconds ([`REGISTER_AQUISITION_TIME_US`]).
+    /// at least 5 microseconds ([`REGISTER_ACQUISITION_TIME_US`]).
     pub fn reset_device_start(&mut self) -> Result<(), CommunicationError<S::Error>> {
         // As per the datasheet, a reset command must always use a full frame.
-        let buf = const { frame::build_normal(command::RESET) };
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(
+            self.format,
+            &[command::RESET],
+            frame::FULL_FRAME_WORDS,
+            &mut buf,
+        );
+        let (out, _) = buf.split_at(len);
+        self.spi.write(out).map_err(CommunicationError::spi)?;
         Ok(())
     }
 
@@ -73,11 +84,13 @@ impl<S: SpiDevice> Ads131m08<S> {
     ) -> Result<Result<(), ResetError>, CommunicationError<S::Error>> {
         const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
 
-        let mut buf = const { frame::build_short(command::NULL) };
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(self.format, &[command::NULL], 0, &mut buf);
+        let (rx, _) = buf.split_at_mut(len);
         self.spi
-            .transfer_in_place(&mut buf)
+            .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let response = u16::from_be_bytes([buf[0], buf[1]]);
+        let response = frame::read_word(rx, self.format.word_bytes(), 0);
         if response == EXPECTED_RESPONSE {
             Ok(Ok(()))
         } else {
@@ -89,10 +102,8 @@ impl<S: SpiDevice> Ads131m08<S> {
     pub fn lock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
-        let buf = const { frame::build_short(command::LOCK) };
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
-        let status = self.read_single_register(register::STATUS)?;
-        let status = Status(status);
+        self.write_command(command::LOCK)?;
+        let status = Status(self.read_single_register(register::STATUS)?);
         if status.locked() {
             Ok(Ok(()))
         } else {
@@ -104,10 +115,8 @@ impl<S: SpiDevice> Ads131m08<S> {
     pub fn unlock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
-        let buf = const { frame::build_short(command::UNLOCK) };
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
-        let status = self.read_single_register(register::STATUS)?;
-        let status = Status(status);
+        self.write_command(command::UNLOCK)?;
+        let status = Status(self.read_single_register(register::STATUS)?);
         if status.locked() {
             Ok(Err(LockError))
         } else {
@@ -119,18 +128,14 @@ impl<S: SpiDevice> Ads131m08<S> {
     ///
     /// Returns the status register corresponding to the previous operation.
     pub fn standby(&mut self) -> Result<(), CommunicationError<S::Error>> {
-        let buf = const { frame::build_short(command::STANDBY) };
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
-        Ok(())
+        self.write_command(command::STANDBY)
     }
 
     /// Wakes the device from standby mode to conversion mode.
     ///
     /// Returns the status register corresponding to the previous operation.
     pub fn wakeup(&mut self) -> Result<(), CommunicationError<S::Error>> {
-        let buf = const { frame::build_short(command::WAKEUP) };
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
-        Ok(())
+        self.write_command(command::WAKEUP)
     }
 
     /// Reads the device ID register.
@@ -143,39 +148,49 @@ impl<S: SpiDevice> Ads131m08<S> {
         &mut self,
         channels: &mut [i32; CHANNELS],
     ) -> Result<(), CommunicationError<S::Error>> {
-        let mut buf = const { frame::build_normal(command::NULL) };
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(
+            self.format,
+            &[command::NULL],
+            frame::FULL_FRAME_WORDS,
+            &mut buf,
+        );
+        let (rx, _) = buf.split_at_mut(len);
         self.spi
-            .transfer_in_place(&mut buf)
+            .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let data = frame::get_verified_data(&buf)?;
+        let payload = frame::verify_output(self.format, rx)?;
 
-        let (_response_words, channel_words) = data.split_at(const { BYTES_PER_WORD });
-        let values = channel_words.chunks_exact(BYTES_PER_WORD).map(|word| {
-            let mut value = [0; 4];
-            value[..BYTES_PER_WORD].copy_from_slice(word);
-            i32::from_be_bytes(value) >> const { (4 - BYTES_PER_WORD) * 8 }
-        });
-
-        channels
+        let word_bytes = self.format.word_bytes();
+        let (_response, channel_words) = payload.split_at(word_bytes);
+        for (channel, word) in channels
             .iter_mut()
-            .zip(values)
-            .for_each(|(channel, value)| {
-                *channel = value;
-            });
+            .zip(channel_words.chunks_exact(word_bytes))
+        {
+            *channel = decode_sample(word);
+        }
 
         Ok(())
     }
 
-    fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
-        let buf = frame::build_short(command::rreg(addr, 1));
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+    /// Sends a single command in a short frame, clocking out no ADC data.
+    fn write_command(&mut self, command: u16) -> Result<(), CommunicationError<S::Error>> {
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(self.format, &[command], 0, &mut buf);
+        let (out, _) = buf.split_at(len);
+        self.spi.write(out).map_err(CommunicationError::spi)
+    }
 
-        let mut buf = const { frame::build_short(command::NULL) };
+    fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
+        self.write_command(command::rreg(addr, 1))?;
+
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(self.format, &[command::NULL], 0, &mut buf);
+        let (rx, _) = buf.split_at_mut(len);
         self.spi
-            .transfer_in_place(&mut buf)
+            .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let reg_val = u16::from_be_bytes([buf[0], buf[1]]);
-        Ok(reg_val)
+        Ok(frame::read_word(rx, self.format.word_bytes(), 0))
     }
 
     fn write_single_register(
@@ -183,8 +198,10 @@ impl<S: SpiDevice> Ads131m08<S> {
         addr: u8,
         value: u16,
     ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
-        let buf = frame::build_write_one(addr, value);
-        self.spi.write(&buf).map_err(CommunicationError::spi)?;
+        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
+        let len = frame::build(self.format, &[command::wreg(addr, 1), value], 0, &mut buf);
+        let (out, _) = buf.split_at(len);
+        self.spi.write(out).map_err(CommunicationError::spi)?;
         let readback = self.read_single_register(addr)?;
         if readback == value {
             Ok(Ok(()))
@@ -192,4 +209,13 @@ impl<S: SpiDevice> Ads131m08<S> {
             Ok(Err(WriteError))
         }
     }
+}
+
+/// Decodes one 24-bit two's complement conversion sample from its word bytes.
+const fn decode_sample(word: &[u8]) -> i32 {
+    let mut bytes = [0u8; 4];
+    let (dst, _) = bytes.split_at_mut(3);
+    let (src, _) = word.split_at(3);
+    dst.copy_from_slice(src);
+    i32::from_be_bytes(bytes) >> 8
 }

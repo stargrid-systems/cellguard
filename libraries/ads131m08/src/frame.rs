@@ -1,98 +1,203 @@
-use crate::{BYTES_PER_WORD, CHANNELS, CommunicationErrorKind, ENABLE_INPUT_CRC, command};
+use crate::{CHANNELS, CommunicationErrorKind};
 
-// command + optional CRC
-const SHORT_WORDS: usize = 1 + (ENABLE_INPUT_CRC as usize);
-const SHORT_BYTES: usize = SHORT_WORDS * BYTES_PER_WORD;
+const MAX_WORD_BYTES: usize = 4;
 
-pub const fn build_short(command: u16) -> [u8; SHORT_BYTES] {
-    let mut buf = [0; SHORT_BYTES];
-    write_command_const(&mut buf, &[command]);
-    buf
+/// Words in a standard full frame: the response word, one word per channel,
+/// and the trailing output CRC word.
+pub const FULL_FRAME_WORDS: usize = 1 + CHANNELS + 1;
+
+/// Worst-case length of a standard full frame in bytes (32-bit words).
+pub const MAX_FRAME_BYTES: usize = FULL_FRAME_WORDS * MAX_WORD_BYTES;
+
+/// CRC polynomial, selected by `CRC_TYPE` in the MODE register.
+///
+/// Both types use a seed of `0xFFFF`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CrcKind {
+    Ccitt,
+    Ansi,
 }
 
-// command + value + optional CRC
-const WRITE_ONE_WORDS: usize = 2 + (ENABLE_INPUT_CRC as usize);
-const WRITE_ONE_BYTES: usize = WRITE_ONE_WORDS * BYTES_PER_WORD;
-
-pub const fn build_write_one(addr: u8, value: u16) -> [u8; WRITE_ONE_BYTES] {
-    let mut buf = [0; WRITE_ONE_BYTES];
-    write_command_const(&mut buf, &[command::wreg(addr, 1), value]);
-    buf
+impl CrcKind {
+    const fn polynomial(self) -> u16 {
+        match self {
+            Self::Ccitt => 0x1021,
+            Self::Ansi => 0x8005,
+        }
+    }
 }
 
-const NORMAL_WORDS: usize = 1 // command / response
-        + CHANNELS // channel data
-        + 1; // output CRC
-const NORMAL_BYTES: usize = NORMAL_WORDS * BYTES_PER_WORD;
-
-pub const fn build_normal(command: u16) -> [u8; NORMAL_BYTES] {
-    let mut buf = [0; NORMAL_BYTES];
-    write_command_const(&mut buf, &[command]);
-    buf
+/// Runtime SPI frame format.
+///
+/// Mirrors the device's current WLENGTH, `RX_CRC_EN`, and `CRC_TYPE` settings
+/// so host frames always match what the device expects.
+#[derive(Clone, Copy)]
+pub struct FrameFormat {
+    word_bytes: usize,
+    input_crc: bool,
+    crc: CrcKind,
 }
 
-/// Returns the data portion of `buf` if the CRC matches, or an error if not.
-pub fn get_verified_data(buf: &[u8]) -> Result<&[u8], CommunicationErrorKind> {
-    let (data, crc_word) = buf.split_at(buf.len() - BYTES_PER_WORD);
-    let received_crc = u16::from_be_bytes([crc_word[0], crc_word[1]]);
-    let calculated_crc = crc16_ccitt_const(data);
-    if received_crc == calculated_crc {
-        Ok(data)
+impl FrameFormat {
+    /// Format right after a power-on or command reset: 24-bit words, input CRC
+    /// disabled, CCITT polynomial.
+    pub const fn reset_default() -> Self {
+        Self {
+            word_bytes: 3,
+            input_crc: false,
+            crc: CrcKind::Ccitt,
+        }
+    }
+
+    pub const fn word_bytes(self) -> usize {
+        self.word_bytes
+    }
+}
+
+/// Builds an input frame into `buf` and returns the number of bytes to send.
+///
+/// `words` holds the logical 16-bit words: the command followed by any data.
+/// When the format enables input CRC, a CRC word is appended over those words.
+/// The frame is then zero-padded to at least `min_words` total words so the
+/// host clocks out all of the device's response.
+pub fn build(fmt: FrameFormat, words: &[u16], min_words: usize, buf: &mut [u8]) -> usize {
+    for (idx, &word) in words.iter().enumerate() {
+        write_word(buf, fmt.word_bytes, idx, word);
+    }
+
+    let mut written = words.len();
+    if fmt.input_crc {
+        let (data, _) = buf.split_at(written * fmt.word_bytes);
+        let crc = crc16(fmt.crc, data);
+        write_word(buf, fmt.word_bytes, written, crc);
+        written += 1;
+    }
+
+    let total = if written > min_words {
+        written
+    } else {
+        min_words
+    };
+    zero_words(buf, fmt.word_bytes, written, total);
+    total * fmt.word_bytes
+}
+
+/// Verifies the output CRC of a received `frame` and returns the payload, that
+/// is every word except the trailing CRC word.
+pub fn verify_output(fmt: FrameFormat, frame: &[u8]) -> Result<&[u8], CommunicationErrorKind> {
+    let (payload, crc_word) = frame.split_at(frame.len() - fmt.word_bytes);
+    let &[hi, lo, ..] = crc_word else {
+        return Err(CommunicationErrorKind::CrcMismatch);
+    };
+    let received = u16::from_be_bytes([hi, lo]);
+    if received == crc16(fmt.crc, payload) {
+        Ok(payload)
     } else {
         Err(CommunicationErrorKind::CrcMismatch)
     }
 }
 
-/// Calculates the CRC-16-CCITT checksum for the given data.
-const fn crc16_ccitt_const(data: &[u8]) -> u16 {
-    const POLY: u16 = 0x1021;
-    let mut crc: u16 = 0xFFFF;
-    let mut byte_idx = 0;
-    while byte_idx < data.len() {
-        crc ^= (data[byte_idx] as u16) << 8;
-        let mut bit_idx = 0;
-        while bit_idx < 8 {
-            if (crc & 0x8000) != 0 {
-                crc = (crc << 1) ^ POLY;
+/// Reads the 16-bit value held in word `idx` of `frame`.
+///
+/// Commands, responses, and register contents are 16 bits MSB-aligned, so only
+/// the first two bytes of the word carry data.
+pub fn read_word(frame: &[u8], word_bytes: usize, idx: usize) -> u16 {
+    let (_, rest) = frame.split_at(idx * word_bytes);
+    let &[hi, lo, ..] = rest else {
+        return 0;
+    };
+    u16::from_be_bytes([hi, lo])
+}
+
+/// Writes a 16-bit value MSB-aligned into word `idx`, zeroing the padding
+/// bytes.
+fn write_word(buf: &mut [u8], word_bytes: usize, idx: usize, value: u16) {
+    let (_, rest) = buf.split_at_mut(idx * word_bytes);
+    let (word, _) = rest.split_at_mut(word_bytes);
+    let (high, low) = word.split_at_mut(2);
+    high.copy_from_slice(&value.to_be_bytes());
+    low.fill(0);
+}
+
+/// Zeroes the words in the half-open range `[from, to)`.
+fn zero_words(buf: &mut [u8], word_bytes: usize, from: usize, to: usize) {
+    if to <= from {
+        return;
+    }
+    let (_, rest) = buf.split_at_mut(from * word_bytes);
+    let (pad, _) = rest.split_at_mut((to - from) * word_bytes);
+    pad.fill(0);
+}
+
+/// Computes the 16-bit CRC over `data` using the selected polynomial.
+fn crc16(kind: CrcKind, data: &[u8]) -> u16 {
+    let poly = kind.polynomial();
+    data.iter().fold(0xFFFF, |seed, &byte| {
+        let mut crc = seed ^ (u16::from(byte) << 8);
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ poly
             } else {
-                crc <<= 1;
-            }
-            bit_idx += 1;
+                crc << 1
+            };
         }
-        byte_idx += 1;
-    }
-    crc
+        crc
+    })
 }
 
-const fn write_word_const(buf: &mut [u8], word_idx: usize, word: u16) {
-    debug_assert!(BYTES_PER_WORD == 2 || BYTES_PER_WORD == 3 || BYTES_PER_WORD == 4);
-    debug_assert!(buf.len() >= (word_idx + 1) * BYTES_PER_WORD);
-    let word_bytes = word.to_be_bytes();
-    let buf_offset = word_idx * BYTES_PER_WORD;
-    buf[buf_offset] = word_bytes[0];
-    buf[buf_offset + 1] = word_bytes[1];
-    if BYTES_PER_WORD > 2 {
-        buf[buf_offset + 2] = 0;
-    }
-    if BYTES_PER_WORD > 3 {
-        buf[buf_offset + 3] = 0;
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{CrcKind, FrameFormat, MAX_FRAME_BYTES, build, crc16, verify_output};
 
-const fn write_command_const(buf: &mut [u8], words: &[u16]) {
-    let expected_len = (words.len() + ENABLE_INPUT_CRC as usize) * BYTES_PER_WORD;
-    debug_assert!(buf.len() == expected_len);
+    const PLAIN: FrameFormat = FrameFormat::reset_default();
+    const WITH_CRC: FrameFormat = FrameFormat {
+        word_bytes: 3,
+        input_crc: true,
+        crc: CrcKind::Ccitt,
+    };
 
-    let mut word_idx = 0;
-    while word_idx < words.len() {
-        let word = words[word_idx];
-        write_word_const(buf, word_idx, word);
-        word_idx += 1;
+    #[test]
+    fn crc_seed_for_empty_input() {
+        assert_eq!(crc16(CrcKind::Ccitt, &[]), 0xFFFF);
+        assert_eq!(crc16(CrcKind::Ansi, &[]), 0xFFFF);
     }
 
-    if ENABLE_INPUT_CRC {
-        let data_len = words.len() * BYTES_PER_WORD;
-        let (data, remaining) = buf.split_at_mut(data_len);
-        write_word_const(remaining, 0, crc16_ccitt_const(data));
+    #[test]
+    fn build_writes_msb_aligned_word_with_padding() {
+        let mut buf = [0xAA; MAX_FRAME_BYTES];
+        let len = build(PLAIN, &[0x1234], 0, &mut buf);
+        assert_eq!(len, 3);
+        let (frame, _) = buf.split_at(len);
+        assert_eq!(frame, [0x12, 0x34, 0x00]);
+    }
+
+    #[test]
+    fn build_pads_to_full_frame() {
+        let mut buf = [0xAA; MAX_FRAME_BYTES];
+        let len = build(PLAIN, &[0x0011], 10, &mut buf);
+        assert_eq!(len, 30);
+        let (frame, _) = buf.split_at(len);
+        let (first, rest) = frame.split_at(3);
+        assert_eq!(first, [0x00, 0x11, 0x00]);
+        assert!(rest.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn build_appends_input_crc_word() {
+        let mut buf = [0; MAX_FRAME_BYTES];
+        let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
+        assert_eq!(len, 6);
+        let (frame, _) = buf.split_at(len);
+        assert!(verify_output(WITH_CRC, frame).is_ok());
+    }
+
+    #[test]
+    fn verify_output_detects_corruption() {
+        let mut buf = [0; MAX_FRAME_BYTES];
+        let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
+        let [first, ..] = &mut buf;
+        *first ^= 0xFF;
+        let (frame, _) = buf.split_at(len);
+        assert!(verify_output(WITH_CRC, frame).is_err());
     }
 }

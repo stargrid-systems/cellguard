@@ -30,8 +30,8 @@ pub const fn wreg(addr: u8, n: u8) -> u16 {
 }
 
 // 0bccca_aaaa_annn_nnnn
-const ADDR_BITS: u16 = 7;
-const N_BITS: u16 = 6;
+const ADDR_BITS: u16 = 6;
+const N_BITS: u16 = 7;
 
 /// Returns a read / write register command.
 const fn xreg(cmd: u16, addr: u16, n: u16) -> u16 {
