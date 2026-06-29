@@ -250,6 +250,43 @@ fn configure_writes_block_and_verifies() {
 }
 
 #[test]
+fn failed_configure_returns_recoverable_device() {
+    const WREG_BLOCK: u16 = 0x612E;
+    const RREG_BLOCK: u16 = 0xA12E;
+
+    // The block write, then a readback that does not match the written image so
+    // verification fails.
+    let mut block: Vec<u8> = word(WREG_BLOCK).to_vec();
+    for &value in &DEFAULT_IMAGE {
+        block.extend_from_slice(&word(value));
+    }
+    let mut txns = write(block);
+
+    txns.extend(write(word(RREG_BLOCK).to_vec()));
+    let mut response_words = vec![0xE12E];
+    response_words.extend(vec![0u16; DEFAULT_IMAGE.len()]); // wrong contents
+    let read_words = 1 + DEFAULT_IMAGE.len() + 1;
+    txns.extend(transfer(
+        vec![0; read_words * WORD_BYTES],
+        response(&response_words),
+    ));
+
+    // The recovered driver is still usable on the bus.
+    txns.extend(read_single(ID_ADDR, 0x2800));
+
+    run(&txns, |device| {
+        let Err(err) = device.configure(Config::default()) else {
+            panic!("configure should have failed verification");
+        };
+        let mut device = err.device;
+        let Ok(id) = device.read_id() else {
+            panic!("read_id failed after recovery");
+        };
+        assert_eq!(id.channel_count(), 8);
+    });
+}
+
+#[test]
 fn set_gain_does_read_modify_write() {
     use ads131m08::Gain;
 

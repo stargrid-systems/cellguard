@@ -16,8 +16,12 @@
 //! use embedded_hal::spi::SpiDevice;
 //!
 //! fn sample<S: SpiDevice>(spi: S) -> Result<[i32; 8], ConfigError<S::Error>> {
-//!     // Configure with defaults, then start converting.
-//!     let mut device = Ads131m08::new(spi).configure(Config::default())?;
+//!     // Configure with defaults, then start converting. On failure the driver
+//!     // comes back in `err.device` so the caller can recover; here we just
+//!     // forward the error.
+//!     let mut device = Ads131m08::new(spi)
+//!         .configure(Config::default())
+//!         .map_err(|err| err.error)?;
 //!     device.wakeup()?;
 //!
 //!     // The status carries per-channel data-ready flags.
@@ -59,7 +63,8 @@ pub use self::config::{
     Reference, WordLength,
 };
 pub use self::error::{
-    CommunicationError, CommunicationErrorKind, ConfigError, LockError, ResetError, WriteError,
+    CommunicationError, CommunicationErrorKind, ConfigError, LockError, ResetError,
+    TransitionError, WriteError,
 };
 pub use self::register::{Id, Status};
 
@@ -131,6 +136,30 @@ pub struct Ads131m08<S, State = Unconfigured> {
     /// register-block read or write).
     scratch: [u8; self::frame::MAX_REGISTER_FRAME_BYTES],
     _state: PhantomData<State>,
+}
+
+/// Result of a lifecycle transition.
+///
+/// On success the driver is in the `Next` state. On failure it is handed back
+/// in its original `Prev` state inside a [`TransitionError`], so the caller
+/// keeps the bus and can recover.
+pub type TransitionResult<S, Next, Prev> = Result<
+    Ads131m08<S, Next>,
+    TransitionError<Ads131m08<S, Prev>, ConfigError<<S as embedded_hal::spi::ErrorType>::Error>>,
+>;
+
+impl<S, State> Ads131m08<S, State> {
+    /// Re-tags the driver with a new lifecycle state, keeping all of its data.
+    /// This is a zero-cost change of the `State` marker.
+    fn with_state<Next>(self) -> Ads131m08<S, Next> {
+        Ads131m08 {
+            spi: self.spi,
+            format: self.format,
+            word_length: self.word_length,
+            scratch: self.scratch,
+            _state: PhantomData,
+        }
+    }
 }
 
 impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
@@ -219,14 +248,26 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// changes take effect on the following frame, so the readback uses the new
     /// format.
     ///
+    /// On failure the driver is returned unchanged in its [`Unconfigured`]
+    /// state inside the [`TransitionError`], so the caller keeps the bus
+    /// and can retry or reset.
+    ///
     /// # Errors
     ///
     /// Returns an error if SPI communication fails or the register block does
     /// not read back as written.
-    pub fn configure(
-        mut self,
-        config: Config,
-    ) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+    )]
+    pub fn configure(mut self, config: Config) -> TransitionResult<S, Ready, Unconfigured> {
+        match self.try_configure(config) {
+            Ok(()) => Ok(self.with_state()),
+            Err(error) => Err(TransitionError::new(self, error)),
+        }
+    }
+
+    fn try_configure(&mut self, config: Config) -> Result<(), ConfigError<S::Error>> {
         let image = config.to_registers();
 
         let cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
@@ -240,17 +281,14 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
+        // The write succeeded, so the device now uses the new frame format.
+        // Track it for the readback. If anything fails from here the recovered
+        // driver still reflects the device's actual format.
         self.format = config.frame_format();
         self.word_length = config.word_length;
 
         if self.registers_match(self::register::MODE, &image)? {
-            Ok(Ads131m08 {
-                spi: self.spi,
-                format: self.format,
-                word_length: self.word_length,
-                scratch: self.scratch,
-                _state: PhantomData,
-            })
+            Ok(())
         } else {
             Err(ConfigError::Verify)
         }
@@ -345,14 +383,32 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// mode. Call [`exit`][Ads131m08::<S, CurrentDetect>::exit] to return
     /// to [`Ready`].
     ///
+    /// On failure the driver is returned unchanged in its [`Ready`] state
+    /// inside the [`TransitionError`], so the caller can keep streaming
+    /// data or retry.
+    ///
     /// # Errors
     ///
     /// Returns an error if SPI communication fails or the registers do not read
     /// back as written.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+    )]
     pub fn enter_current_detect(
         mut self,
         config: CurrentDetectConfig,
-    ) -> Result<Ads131m08<S, CurrentDetect>, ConfigError<S::Error>> {
+    ) -> TransitionResult<S, CurrentDetect, Ready> {
+        match self.try_enter_current_detect(config) {
+            Ok(()) => Ok(self.with_state()),
+            Err(error) => Err(TransitionError::new(self, error)),
+        }
+    }
+
+    fn try_enter_current_detect(
+        &mut self,
+        config: CurrentDetectConfig,
+    ) -> Result<(), ConfigError<S::Error>> {
         let cfg = self.read_single_register(self::register::CFG)?;
         let thr_lsb = self.read_single_register(self::register::THRESHOLD_LSB)?;
 
@@ -366,13 +422,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
             return Err(ConfigError::Verify);
         }
         self.write_command(self::command::STANDBY)?;
-        Ok(Ads131m08 {
-            spi: self.spi,
-            format: self.format,
-            word_length: self.word_length,
-            scratch: self.scratch,
-            _state: PhantomData,
-        })
+        Ok(())
     }
 
     /// Reads conversion data from all channels into the provided array and
@@ -442,11 +492,25 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
     ///
     /// Clears `CD_EN` and issues a wakeup command.
     ///
+    /// On failure the driver is returned unchanged in its [`CurrentDetect`]
+    /// state inside the [`TransitionError`], so the caller can retry.
+    ///
     /// # Errors
     ///
     /// Returns an error if SPI communication fails or the register does not
     /// read back as written.
-    pub fn exit(mut self) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
+    #[expect(
+        clippy::result_large_err,
+        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+    )]
+    pub fn exit(mut self) -> TransitionResult<S, Ready, CurrentDetect> {
+        match self.try_exit() {
+            Ok(()) => Ok(self.with_state()),
+            Err(error) => Err(TransitionError::new(self, error)),
+        }
+    }
+
+    fn try_exit(&mut self) -> Result<(), ConfigError<S::Error>> {
         let cfg = self.read_single_register(self::register::CFG)?;
         if self
             .write_single_register(self::register::CFG, cfg & !1)?
@@ -455,13 +519,7 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
             return Err(ConfigError::Verify);
         }
         self.write_command(self::command::WAKEUP)?;
-        Ok(Ads131m08 {
-            spi: self.spi,
-            format: self.format,
-            word_length: self.word_length,
-            scratch: self.scratch,
-            _state: PhantomData,
-        })
+        Ok(())
     }
 }
 
@@ -525,9 +583,9 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         ))
     }
 
-    /// Reads `expected.len()` registers from `addr` and reports whether each one
-    /// matches. Compares the readback word by word in the scratch buffer, so no
-    /// separate readback array is allocated.
+    /// Reads `expected.len()` registers from `addr` and reports whether each
+    /// one matches. Compares the readback word by word in the scratch
+    /// buffer, so no separate readback array is allocated.
     fn registers_match(
         &mut self,
         addr: u8,
@@ -535,10 +593,9 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
     ) -> Result<bool, CommunicationError<S::Error>> {
         let skip = self.fetch_registers(addr, expected.len())?;
         let word_bytes = self.format.word_bytes();
-        let matches = expected
-            .iter()
-            .enumerate()
-            .all(|(i, &value)| self::frame::read_word(&self.scratch, word_bytes, skip + i) == value);
+        let matches = expected.iter().enumerate().all(|(i, &value)| {
+            self::frame::read_word(&self.scratch, word_bytes, skip + i) == value
+        });
         Ok(matches)
     }
 

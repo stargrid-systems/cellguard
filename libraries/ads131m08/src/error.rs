@@ -45,3 +45,21 @@ impl<E: SpiError> From<CommunicationError<E>> for ConfigError<E> {
         Self::Communication(err)
     }
 }
+
+/// A failed state transition.
+///
+/// State transitions consume the driver. When one fails it would otherwise drop
+/// the driver and with it access to the SPI bus. This carries the driver back
+/// in its original state so the caller can inspect the error, retry, or reset.
+pub struct TransitionError<D, E> {
+    /// The driver, still in the state it had before the transition.
+    pub device: D,
+    /// Why the transition failed.
+    pub error: E,
+}
+
+impl<D, E> TransitionError<D, E> {
+    pub(crate) const fn new(device: D, error: E) -> Self {
+        Self { device, error }
+    }
+}
