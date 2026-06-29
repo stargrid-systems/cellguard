@@ -1,5 +1,7 @@
 //! Register addresses and the typed `ID` and `STATUS` register views.
 
+use crate::CrcType;
+
 pub const ID: u8 = 0x00;
 pub const STATUS: u8 = 0x01;
 pub const MODE: u8 = 0x02;
@@ -60,10 +62,14 @@ impl Status {
         self.bit(12)
     }
 
-    /// Returns true if the CRC type is ANSI rather than CCITT.
+    /// Returns the CRC polynomial the device currently expects.
     #[must_use]
-    pub const fn crc_type_ansi(self) -> bool {
-        self.bit(11)
+    pub const fn crc_type(self) -> CrcType {
+        if self.bit(11) {
+            CrcType::Ansi
+        } else {
+            CrcType::Ccitt
+        }
     }
 
     /// Returns true if a reset occurred since the last status read.
@@ -86,6 +92,7 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::Status;
+    use crate::CrcType;
 
     #[test]
     fn status_decodes_flags_and_drdy() {
@@ -93,6 +100,8 @@ mod tests {
         assert!(status.locked());
         assert!(status.reset_occurred());
         assert!(!status.resynchronized());
+        assert_eq!(status.crc_type(), CrcType::Ccitt);
+        assert_eq!(Status(0x0800).crc_type(), CrcType::Ansi);
         assert!(status.data_ready(0));
         assert!(!status.data_ready(1));
         assert!(status.data_ready(2));
