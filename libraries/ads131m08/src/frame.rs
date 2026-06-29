@@ -9,6 +9,13 @@ pub const FULL_FRAME_WORDS: usize = 1 + CHANNELS + 1;
 /// Worst-case length of a standard full frame in bytes (32-bit words).
 pub const MAX_FRAME_BYTES: usize = FULL_FRAME_WORDS * MAX_WORD_BYTES;
 
+/// Number of registers in the writable block, `02h` through `30h`.
+pub const WRITABLE_REGISTERS: usize = 47;
+
+/// Worst-case length of a register block transfer in bytes: a command or
+/// acknowledgment word, every writable register, and the output CRC word.
+pub const MAX_REGISTER_FRAME_BYTES: usize = (1 + WRITABLE_REGISTERS + 1) * MAX_WORD_BYTES;
+
 /// CRC polynomial, selected by `CRC_TYPE` in the MODE register.
 ///
 /// Both types use a seed of `0xFFFF`.

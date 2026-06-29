@@ -182,15 +182,44 @@ impl<S: SpiDevice> Ads131m08<S> {
     }
 
     fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
-        self.write_command(command::rreg(addr, 1))?;
+        let mut value = [0u16; 1];
+        self.read_registers(addr, &mut value)?;
+        let [value] = value;
+        Ok(value)
+    }
 
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(self.format, &[command::NULL], 0, &mut buf);
+    /// Reads `out.len()` consecutive registers starting at `addr`.
+    ///
+    /// A single-register read returns the value in the response word and the
+    /// device still streams conversion data, so the frame is a full data frame
+    /// (datasheet figure 8-23). A multi-register read prepends an
+    /// acknowledgment word and suppresses conversion data (figure 8-24).
+    fn read_registers(
+        &mut self,
+        addr: u8,
+        out: &mut [u16],
+    ) -> Result<(), CommunicationError<S::Error>> {
+        let count = out.len();
+        self.write_command(command::rreg(addr, reg_count(count)))?;
+
+        let (skip, total_words) = if count == 1 {
+            (0, frame::FULL_FRAME_WORDS)
+        } else {
+            (1, 1 + count + 1)
+        };
+        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
+        let len = frame::build(self.format, &[command::NULL], total_words, &mut buf);
         let (rx, _) = buf.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        Ok(frame::read_word(rx, self.format.word_bytes(), 0))
+        frame::verify_output(self.format, rx)?;
+
+        let word_bytes = self.format.word_bytes();
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = frame::read_word(rx, word_bytes, skip + i);
+        }
+        Ok(())
     }
 
     fn write_single_register(
@@ -198,17 +227,48 @@ impl<S: SpiDevice> Ads131m08<S> {
         addr: u8,
         value: u16,
     ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(self.format, &[command::wreg(addr, 1), value], 0, &mut buf);
+        self.write_registers(addr, &[value])
+    }
+
+    /// Writes `values` to consecutive registers starting at `addr`, then reads
+    /// the block back to confirm the write took effect.
+    fn write_registers(
+        &mut self,
+        addr: u8,
+        values: &[u16],
+    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
+        let count = values.len();
+        let mut words = [0u16; 1 + frame::WRITABLE_REGISTERS];
+        let [cmd, data @ ..] = &mut words;
+        *cmd = command::wreg(addr, reg_count(count));
+        let (data, _) = data.split_at_mut(count);
+        data.copy_from_slice(values);
+
+        let (frame_words, _) = words.split_at(count + 1);
+        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
+        let len = frame::build(self.format, frame_words, frame::FULL_FRAME_WORDS, &mut buf);
         let (out, _) = buf.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
-        let readback = self.read_single_register(addr)?;
-        if readback == value {
+
+        let mut readback = [0u16; frame::WRITABLE_REGISTERS];
+        let (readback, _) = readback.split_at_mut(count);
+        self.read_registers(addr, readback)?;
+        if readback == values {
             Ok(Ok(()))
         } else {
             Ok(Err(WriteError))
         }
     }
+}
+
+/// Casts a register count to the `u8` the RREG / WREG command words expect.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "count is bounded by WRITABLE_REGISTERS (47)"
+)]
+const fn reg_count(count: usize) -> u8 {
+    debug_assert!(count >= 1 && count <= frame::WRITABLE_REGISTERS);
+    count as u8
 }
 
 /// Decodes one 24-bit two's complement conversion sample from its word bytes.
