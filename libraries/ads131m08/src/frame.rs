@@ -56,6 +56,15 @@ impl FrameFormat {
         }
     }
 
+    /// Builds a format from configured word length, input CRC, and CRC type.
+    pub const fn new(word_bytes: usize, input_crc: bool, crc: CrcKind) -> Self {
+        Self {
+            word_bytes,
+            input_crc,
+            crc,
+        }
+    }
+
     pub const fn word_bytes(self) -> usize {
         self.word_bytes
     }

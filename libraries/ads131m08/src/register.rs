@@ -8,6 +8,9 @@ pub const CFG: u8 = 0x06;
 pub const THRESHOLD_MSB: u8 = 0x07;
 pub const THRESHOLD_LSB: u8 = 0x08;
 
+/// Channels whose PGA gain lives in a single GAIN register (GAIN1, GAIN2).
+pub const CHANNELS_PER_GAIN_REGISTER: usize = 4;
+
 const CH_BASE: u8 = 0x09;
 const CH_STRIDE: u8 = 0x05;
 

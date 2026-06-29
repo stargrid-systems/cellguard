@@ -23,12 +23,16 @@ use core::marker::PhantomData;
 
 use embedded_hal::spi::SpiDevice;
 
+pub use self::config::{
+    ChannelConfig, Config, CrcType, Gain, Osr, PowerMode, Reference, WordLength,
+};
 pub use self::error::{
-    CommunicationError, CommunicationErrorKind, LockError, ResetError, WriteError,
+    CommunicationError, CommunicationErrorKind, ConfigError, LockError, ResetError, WriteError,
 };
 pub use self::register::{Id, Status};
 
 mod command;
+mod config;
 mod error;
 mod frame;
 mod register;
@@ -127,13 +131,41 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
 
     /// Configures the device and transitions it to [`Ready`].
     ///
-    /// Register configuration is applied by a later step. For now this performs
-    /// the lifecycle transition only.
-    pub fn configure(self) -> Ads131m08<S, Ready> {
-        Ads131m08 {
-            spi: self.spi,
-            format: self.format,
-            _state: PhantomData,
+    /// Writes the whole writable register block in one transaction, switches to
+    /// the frame format the configuration selects, then reads the block back to
+    /// confirm every register took the intended value.
+    ///
+    /// The register write uses the current frame format. Word length and CRC
+    /// changes take effect on the following frame, so the readback uses the new
+    /// format.
+    pub fn configure(
+        mut self,
+        config: Config,
+    ) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
+        let image = config.to_registers();
+
+        let mut words = [0u16; 1 + frame::WRITABLE_REGISTERS];
+        let [cmd, data @ ..] = &mut words;
+        *cmd = command::wreg(register::MODE, reg_count(image.len()));
+        data.copy_from_slice(&image);
+
+        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
+        let len = frame::build(self.format, &words, frame::FULL_FRAME_WORDS, &mut buf);
+        let (out, _) = buf.split_at(len);
+        self.spi.write(out).map_err(CommunicationError::spi)?;
+
+        self.format = config.frame_format();
+
+        let mut readback = [0u16; frame::WRITABLE_REGISTERS];
+        self.read_registers(register::MODE, &mut readback)?;
+        if readback == image {
+            Ok(Ads131m08 {
+                spi: self.spi,
+                format: self.format,
+                _state: PhantomData,
+            })
+        } else {
+            Err(ConfigError::Verify)
         }
     }
 }

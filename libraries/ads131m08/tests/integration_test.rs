@@ -3,7 +3,7 @@
 //! The device always streams an output CRC, so the response helpers compute a
 //! valid CCITT CRC over each assembled frame.
 
-use ads131m08::Ads131m08;
+use ads131m08::{Ads131m08, Config};
 use embedded_hal_mock::eh1::spi::{Mock as SpiMock, Transaction as SpiTransaction};
 
 type Spi = SpiMock<u8>;
@@ -100,6 +100,43 @@ fn read_single(addr: u16, value: u16) -> Vec<Txn> {
     txns
 }
 
+/// The register image produced by [`Config::default`], `02h` through `30h`.
+const DEFAULT_IMAGE: [u16; 47] = [
+    0x0110, 0xFF0E, 0x0000, 0x0000, 0x0600, 0x0000, 0x0000, // MODE..THRSHLD_LSB
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 0
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 1
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 2
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 3
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 4
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 5
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 6
+    0x0000, 0x0000, 0x0000, 0x8000, 0x0000, // channel 7
+];
+
+/// Transactions for `configure(Config::default())`: the block write followed by
+/// the verifying block read.
+fn configure_default() -> Vec<Txn> {
+    // WREG and RREG of all 47 writable registers starting at MODE (02h).
+    const WREG_BLOCK: u16 = 0x612E;
+    const RREG_BLOCK: u16 = 0xA12E;
+
+    let mut block: Vec<u8> = word(WREG_BLOCK).to_vec();
+    for &value in &DEFAULT_IMAGE {
+        block.extend_from_slice(&word(value));
+    }
+    let mut txns = write(block);
+
+    txns.extend(write(word(RREG_BLOCK).to_vec()));
+    let mut response_words = vec![0xE12E];
+    response_words.extend_from_slice(&DEFAULT_IMAGE);
+    let read_words = 1 + DEFAULT_IMAGE.len() + 1;
+    txns.extend(transfer(
+        vec![0; read_words * WORD_BYTES],
+        response(&response_words),
+    ));
+    txns
+}
+
 fn run(txns: &[Txn], body: impl FnOnce(Ads131m08<Spi>)) {
     let mut spi = SpiMock::new(txns);
     let device = Ads131m08::new(spi.clone());
@@ -139,11 +176,27 @@ fn read_id_reports_channel_count() {
 }
 
 #[test]
+fn configure_writes_block_and_verifies() {
+    let txns = configure_default();
+    run(&txns, |device| {
+        let Ok(_device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
+    });
+}
+
+#[test]
 fn read_data_decodes_all_channels() {
     let samples = [1, -1, 0x7F_FFFF, -0x80_0000, 0x1234, -0x1234, 2, -2];
-    let txns = transfer(vec![0; FULL_FRAME_BYTES], data_response(0x0500, samples));
+    let mut txns = configure_default();
+    txns.extend(transfer(
+        vec![0; FULL_FRAME_BYTES],
+        data_response(0x0500, samples),
+    ));
     run(&txns, |device| {
-        let mut device = device.configure();
+        let Ok(mut device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
         let mut channels = [0i32; 8];
         let Ok(()) = device.read_data(&mut channels) else {
             panic!("read_data failed");
@@ -154,10 +207,13 @@ fn read_data_decodes_all_channels() {
 
 #[test]
 fn lock_confirms_via_status_register() {
-    let mut txns = write(word(LOCK).to_vec());
+    let mut txns = configure_default();
+    txns.extend(write(word(LOCK).to_vec()));
     txns.extend(read_single(STATUS_ADDR, 0x8000));
     run(&txns, |device| {
-        let mut device = device.configure();
+        let Ok(mut device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
         let Ok(Ok(())) = device.lock_registers() else {
             panic!("lock not confirmed");
         };
@@ -166,10 +222,13 @@ fn lock_confirms_via_status_register() {
 
 #[test]
 fn unlock_confirms_via_status_register() {
-    let mut txns = write(word(UNLOCK).to_vec());
+    let mut txns = configure_default();
+    txns.extend(write(word(UNLOCK).to_vec()));
     txns.extend(read_single(STATUS_ADDR, 0x0000));
     run(&txns, |device| {
-        let mut device = device.configure();
+        let Ok(mut device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
         let Ok(Ok(())) = device.unlock_registers() else {
             panic!("unlock not confirmed");
         };

@@ -31,3 +31,17 @@ pub struct LockError;
 
 /// Failed to write to registers.
 pub struct WriteError;
+
+/// Failed to configure the device.
+pub enum ConfigError<E: SpiError> {
+    /// SPI communication failed.
+    Communication(CommunicationError<E>),
+    /// The configuration did not read back as written.
+    Verify,
+}
+
+impl<E: SpiError> From<CommunicationError<E>> for ConfigError<E> {
+    fn from(err: CommunicationError<E>) -> Self {
+        Self::Communication(err)
+    }
+}
