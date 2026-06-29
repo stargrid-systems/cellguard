@@ -302,6 +302,54 @@ impl DcBlock {
     }
 }
 
+/// Global-chop measurement delay in modulator clock periods (`GC_DLY`).
+///
+/// The delay is the settling time before each chopped measurement begins.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum GcDelay {
+    Cycles2,
+    Cycles4,
+    Cycles8,
+    /// 16 cycles (the reset value).
+    #[default]
+    Cycles16,
+    Cycles32,
+    Cycles64,
+    Cycles128,
+    Cycles256,
+    Cycles512,
+    Cycles1024,
+    Cycles2048,
+    Cycles4096,
+    Cycles8192,
+    Cycles16384,
+    Cycles32768,
+    Cycles65536,
+}
+
+impl GcDelay {
+    const fn code(self) -> u16 {
+        match self {
+            Self::Cycles2 => 0,
+            Self::Cycles4 => 1,
+            Self::Cycles8 => 2,
+            Self::Cycles16 => 3,
+            Self::Cycles32 => 4,
+            Self::Cycles64 => 5,
+            Self::Cycles128 => 6,
+            Self::Cycles256 => 7,
+            Self::Cycles512 => 8,
+            Self::Cycles1024 => 9,
+            Self::Cycles2048 => 10,
+            Self::Cycles4096 => 11,
+            Self::Cycles8192 => 12,
+            Self::Cycles16384 => 13,
+            Self::Cycles32768 => 14,
+            Self::Cycles65536 => 15,
+        }
+    }
+}
+
 /// Voltage reference and clock source selection in the CLOCK register.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Reference {
@@ -361,8 +409,6 @@ impl Default for ChannelConfig {
     }
 }
 
-/// Reset value of the CFG register (global-chop delay 16, all detection off).
-const CFG_RESET: u16 = 0x0600;
 /// Registers per channel: CFG, `OCAL_MSB`, `OCAL_LSB`, `GCAL_MSB`, `GCAL_LSB`.
 const CHANNEL_REGISTERS: usize = 5;
 
@@ -392,6 +438,8 @@ pub struct Config {
     pub power_mode: PowerMode,
     /// Reference and clock source.
     pub reference: Reference,
+    /// Global-chop mode. `None` disables it; `Some` enables it with a delay.
+    pub global_chop: Option<GcDelay>,
     /// Global DC-block filter corner.
     pub dc_block: DcBlock,
     /// Per-channel settings.
@@ -407,6 +455,7 @@ impl Default for Config {
             osr: Osr::default(),
             power_mode: PowerMode::default(),
             reference: Reference::default(),
+            global_chop: None,
             dc_block: DcBlock::DISABLED,
             channels: [ChannelConfig::default(); CHANNELS],
         }
@@ -445,7 +494,7 @@ impl Config {
         *clock = self.clock_register();
         *gain1 = self.gain_register(0);
         *gain2 = self.gain_register(register::CHANNELS_PER_GAIN_REGISTER);
-        *cfg = CFG_RESET;
+        *cfg = self.cfg_register();
         *thr_msb = 0;
         *thr_lsb = self.dc_block.bits();
 
@@ -459,6 +508,16 @@ impl Config {
             (*gcal_msb, *gcal_lsb) = split_24(channel.gain_cal.raw());
         }
         regs
+    }
+
+    fn cfg_register(&self) -> u16 {
+        // Default GC_DLY matches the reset value when global-chop is disabled.
+        const DEFAULT_DELAY: u16 = GcDelay::Cycles16.code();
+        let (delay, gc_en) = self
+            .global_chop
+            .map_or((DEFAULT_DELAY, 0), |delay| (delay.code(), 1 << 8));
+        // Current-detect fields are added by a later task.
+        (delay << 9) | gc_en
     }
 
     fn mode_register(&self) -> u16 {
@@ -509,7 +568,21 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelConfig, Config, DcBlock, GainCal, Mux, OffsetCal, Phase, WordLength};
+    use super::{
+        ChannelConfig, Config, DcBlock, GainCal, GcDelay, Mux, OffsetCal, Phase, WordLength,
+    };
+
+    #[test]
+    fn global_chop_serializes_into_cfg() {
+        let config = Config {
+            global_chop: Some(GcDelay::Cycles256),
+            ..Config::default()
+        };
+        let regs = config.to_registers();
+        let (header, _) = regs.split_at(5);
+        // CFG: GC_DLY code 7 << 9 | GC_EN bit 8.
+        assert_eq!(header.last(), Some(&0x0F00));
+    }
 
     #[test]
     fn channel_settings_serialize() {
