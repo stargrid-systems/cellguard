@@ -7,6 +7,16 @@
 use crate::frame::{self, CrcKind};
 use crate::{CHANNELS, register};
 
+// The register image is a flat array; this enforces the address layout it
+// assumes, namely a contiguous writable block from MODE through the channels.
+const _: () = {
+    assert!(register::CLOCK == register::MODE + 1);
+    assert!(register::GAIN1 == register::MODE + 2);
+    assert!(register::THRESHOLD_MSB == register::CFG + 1);
+    assert!(register::THRESHOLD_LSB == register::CFG + 2);
+    assert!(register::CHANNEL_BASE == register::THRESHOLD_LSB + 1);
+};
+
 /// SPI word length, programmed into `WLENGTH` of the MODE register.
 ///
 /// Commands, responses, and registers always carry 16 bits of data MSB

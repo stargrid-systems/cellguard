@@ -8,6 +8,24 @@
 //! driver starts [`Unconfigured`]. Calling [`configure`][Ads131m08::configure]
 //! moves it to [`Ready`], where conversion data can be read. This makes it a
 //! compile error to read data from a device that was never configured.
+//! [`enter_current_detect`][Ads131m08::<S, Ready>::enter_current_detect] arms
+//! current-detect mode and yields a [`CurrentDetect`]-state driver.
+//!
+//! ```
+//! use ads131m08::{Ads131m08, Config, ConfigError};
+//! use embedded_hal::spi::SpiDevice;
+//!
+//! fn sample<S: SpiDevice>(spi: S) -> Result<[i32; 8], ConfigError<S::Error>> {
+//!     // Configure with defaults, then start converting.
+//!     let mut device = Ads131m08::new(spi).configure(Config::default())?;
+//!     device.wakeup()?;
+//!
+//!     // The status carries per-channel data-ready flags.
+//!     let mut channels = [0i32; 8];
+//!     let _status = device.read_data(&mut channels)?;
+//!     Ok(channels)
+//! }
+//! ```
 //!
 //! ## Data ready
 //!
@@ -131,6 +149,10 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// the reset took place, call
     /// [`reset_device_complete`][Self::reset_device_complete] after waiting for
     /// at least 5 microseconds ([`REGISTER_ACQUISITION_TIME_US`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn reset_device_start(&mut self) -> Result<(), CommunicationError<S::Error>> {
         // As per the datasheet, a reset command must always use a full frame.
         let mut buf = [0u8; frame::MAX_FRAME_BYTES];
@@ -149,9 +171,17 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     ///
     /// See [`reset_device_start`][Self::reset_device_start] for details on the
     /// reset process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn reset_device_complete(
         &mut self,
     ) -> Result<Result<(), ResetError>, CommunicationError<S::Error>> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "CHANNELS is 8, well within u16"
+        )]
         const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
 
         let mut buf = [0u8; frame::MAX_FRAME_BYTES];
@@ -177,6 +207,11 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// The register write uses the current frame format. Word length and CRC
     /// changes take effect on the following frame, so the readback uses the new
     /// format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails or the register block does
+    /// not read back as written.
     pub fn configure(
         mut self,
         config: Config,
@@ -213,6 +248,10 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
 
 impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// Locks the device registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn lock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
@@ -226,6 +265,10 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     }
 
     /// Unlocks the device registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn unlock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
@@ -239,11 +282,19 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     }
 
     /// Places the device into standby mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn standby(&mut self) -> Result<(), CommunicationError<S::Error>> {
         self.write_command(command::STANDBY)
     }
 
     /// Wakes the device from standby mode to conversion mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn wakeup(&mut self) -> Result<(), CommunicationError<S::Error>> {
         self.write_command(command::WAKEUP)
     }
@@ -252,6 +303,10 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     ///
     /// This reads the relevant GAIN register, replaces the channel's field, and
     /// writes it back, leaving the other channels untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn set_gain(
         &mut self,
         channel: usize,
@@ -278,6 +333,11 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// device to standby. Conversion results are not host-readable in this
     /// mode. Call [`exit`][Ads131m08::<S, CurrentDetect>::exit] to return
     /// to [`Ready`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails or the registers do not read
+    /// back as written.
     pub fn enter_current_detect(
         mut self,
         config: CurrentDetectConfig,
@@ -308,6 +368,11 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     ///
     /// The status carries the per-channel data-ready flags, so the caller can
     /// tell which channels produced fresh samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails or the output CRC
+    /// mismatches.
     pub fn read_data(
         &mut self,
         channels: &mut [i32; CHANNELS],
@@ -346,6 +411,10 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// returns a stale sample. This reads two frames in quick succession and
     /// returns the second, aligned one (datasheet 8.5.1.9.1). Use
     /// [`read_data`][Self::read_data] for steady-state collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails or an output CRC mismatches.
     pub fn read_data_after_pause(
         &mut self,
         channels: &mut [i32; CHANNELS],
@@ -360,6 +429,11 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
     /// Disarms current-detect mode and returns the device to [`Ready`].
     ///
     /// Clears `CD_EN` and issues a wakeup command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails or the register does not
+    /// read back as written.
     pub fn exit(mut self) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
         let cfg = self.read_single_register(register::CFG)?;
         if self
@@ -380,6 +454,10 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
 
 impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
     /// Reads the device ID register.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if SPI communication fails.
     pub fn read_id(&mut self) -> Result<Id, CommunicationError<S::Error>> {
         self.read_single_register(register::ID).map(Id)
     }
