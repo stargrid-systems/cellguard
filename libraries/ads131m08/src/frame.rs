@@ -69,16 +69,23 @@ impl FrameFormat {
 
 /// Builds an input frame into `buf` and returns the number of bytes to send.
 ///
-/// `words` holds the logical 16-bit words: the command followed by any data.
-/// When the format enables input CRC, a CRC word is appended over those words.
-/// The frame is then zero-padded to at least `min_words` total words so the
-/// host clocks out all of the device's response.
-pub fn build(fmt: FrameFormat, words: &[u16], min_words: usize, buf: &mut [u8]) -> usize {
-    for (idx, &word) in words.iter().enumerate() {
-        write_word(buf, fmt.word_bytes, idx, word);
+/// The frame is the `command` word followed by any `data` words. When the
+/// format enables input CRC, a CRC word is appended over them. The frame is
+/// then zero-padded to at least `min_words` total words so the host clocks out
+/// all of the device's response.
+pub fn build(
+    fmt: FrameFormat,
+    command: u16,
+    data: &[u16],
+    min_words: usize,
+    buf: &mut [u8],
+) -> usize {
+    write_word(buf, fmt.word_bytes, 0, command);
+    for (idx, &word) in data.iter().enumerate() {
+        write_word(buf, fmt.word_bytes, 1 + idx, word);
     }
 
-    let mut written = words.len();
+    let mut written = 1 + data.len();
     if fmt.input_crc {
         let (data, _) = buf.split_at(written * fmt.word_bytes);
         let crc = crc16(fmt.crc, data);
@@ -181,7 +188,7 @@ mod tests {
     #[test]
     fn build_writes_msb_aligned_word_with_padding() {
         let mut buf = [0xAA; BUF];
-        let len = build(PLAIN, &[0x1234], 0, &mut buf);
+        let len = build(PLAIN, 0x1234, &[], 0, &mut buf);
         assert_eq!(len, 3);
         let (frame, _) = buf.split_at(len);
         assert_eq!(frame, [0x12, 0x34, 0x00]);
@@ -190,7 +197,7 @@ mod tests {
     #[test]
     fn build_pads_to_full_frame() {
         let mut buf = [0xAA; BUF];
-        let len = build(PLAIN, &[0x0011], 10, &mut buf);
+        let len = build(PLAIN, 0x0011, &[], 10, &mut buf);
         assert_eq!(len, 30);
         let (frame, _) = buf.split_at(len);
         let (first, rest) = frame.split_at(3);
@@ -199,9 +206,18 @@ mod tests {
     }
 
     #[test]
+    fn build_writes_command_and_data_words() {
+        let mut buf = [0xAA; BUF];
+        let len = build(PLAIN, 0x6000, &[0x1122, 0x3344], 0, &mut buf);
+        assert_eq!(len, 9);
+        let (frame, _) = buf.split_at(len);
+        assert_eq!(frame, [0x60, 0x00, 0x00, 0x11, 0x22, 0x00, 0x33, 0x44, 0x00]);
+    }
+
+    #[test]
     fn build_appends_input_crc_word() {
         let mut buf = [0; BUF];
-        let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
+        let len = build(WITH_CRC, 0x1234, &[], 0, &mut buf);
         assert_eq!(len, 6);
         let (frame, _) = buf.split_at(len);
         assert!(verify_output(WITH_CRC, frame).is_ok());
@@ -210,7 +226,7 @@ mod tests {
     #[test]
     fn verify_output_detects_corruption() {
         let mut buf = [0; BUF];
-        let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
+        let len = build(WITH_CRC, 0x1234, &[], 0, &mut buf);
         let [first, ..] = &mut buf;
         *first ^= 0xFF;
         let (frame, _) = buf.split_at(len);

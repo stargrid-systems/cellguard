@@ -162,7 +162,8 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         // As per the datasheet, a reset command must always use a full frame.
         let len = self::frame::build(
             self.format,
-            &[self::command::RESET],
+            self::command::RESET,
+            &[],
             self::frame::FULL_FRAME_WORDS,
             &mut self.scratch,
         );
@@ -190,7 +191,8 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
 
         let len = self::frame::build(
             self.format,
-            &[self::command::NULL],
+            self::command::NULL,
+            &[],
             self::frame::FULL_FRAME_WORDS,
             &mut self.scratch,
         );
@@ -227,14 +229,11 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     ) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
         let image = config.to_registers();
 
-        let mut words = [0u16; 1 + self::frame::WRITABLE_REGISTERS];
-        let [cmd, data @ ..] = &mut words;
-        *cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
-        data.copy_from_slice(&image);
-
+        let cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
         let len = self::frame::build(
             self.format,
-            &words,
+            cmd,
+            &image,
             self::frame::FULL_FRAME_WORDS,
             &mut self.scratch,
         );
@@ -244,9 +243,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         self.format = config.frame_format();
         self.word_length = config.word_length;
 
-        let mut readback = [0u16; self::frame::WRITABLE_REGISTERS];
-        self.read_registers(self::register::MODE, &mut readback)?;
-        if readback == image {
+        if self.registers_match(self::register::MODE, &image)? {
             Ok(Ads131m08 {
                 spi: self.spi,
                 format: self.format,
@@ -394,7 +391,8 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     ) -> Result<Status, CommunicationError<S::Error>> {
         let len = self::frame::build(
             self.format,
-            &[self::command::NULL],
+            self::command::NULL,
+            &[],
             self::frame::FULL_FRAME_WORDS,
             &mut self.scratch,
         );
@@ -479,30 +477,23 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
 
     /// Sends a single command in a short frame, clocking out no ADC data.
     fn write_command(&mut self, command: u16) -> Result<(), CommunicationError<S::Error>> {
-        let len = self::frame::build(self.format, &[command], 0, &mut self.scratch);
+        let len = self::frame::build(self.format, command, &[], 0, &mut self.scratch);
         let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)
     }
 
-    fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
-        let mut value = [0u16; 1];
-        self.read_registers(addr, &mut value)?;
-        let [value] = value;
-        Ok(value)
-    }
-
-    /// Reads `out.len()` consecutive registers starting at `addr`.
+    /// Reads `count` consecutive registers starting at `addr` into the reused
+    /// scratch buffer and returns the word index of the first register value.
     ///
     /// A single-register read returns the value in the response word and the
     /// device still streams conversion data, so the frame is a full data frame
     /// (datasheet figure 8-23). A multi-register read prepends an
     /// acknowledgment word and suppresses conversion data (figure 8-24).
-    fn read_registers(
+    fn fetch_registers(
         &mut self,
         addr: u8,
-        out: &mut [u16],
-    ) -> Result<(), CommunicationError<S::Error>> {
-        let count = out.len();
+        count: usize,
+    ) -> Result<usize, CommunicationError<S::Error>> {
         self.write_command(self::command::rreg(addr, reg_count(count)))?;
 
         let (skip, total_words) = if count == 1 {
@@ -512,7 +503,8 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         };
         let len = self::frame::build(
             self.format,
-            &[self::command::NULL],
+            self::command::NULL,
+            &[],
             total_words,
             &mut self.scratch,
         );
@@ -521,12 +513,33 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
         self::frame::verify_output(self.format, rx)?;
+        Ok(skip)
+    }
 
+    fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
+        let skip = self.fetch_registers(addr, 1)?;
+        Ok(self::frame::read_word(
+            &self.scratch,
+            self.format.word_bytes(),
+            skip,
+        ))
+    }
+
+    /// Reads `expected.len()` registers from `addr` and reports whether each one
+    /// matches. Compares the readback word by word in the scratch buffer, so no
+    /// separate readback array is allocated.
+    fn registers_match(
+        &mut self,
+        addr: u8,
+        expected: &[u16],
+    ) -> Result<bool, CommunicationError<S::Error>> {
+        let skip = self.fetch_registers(addr, expected.len())?;
         let word_bytes = self.format.word_bytes();
-        for (i, slot) in out.iter_mut().enumerate() {
-            *slot = self::frame::read_word(rx, word_bytes, skip + i);
-        }
-        Ok(())
+        let matches = expected
+            .iter()
+            .enumerate()
+            .all(|(i, &value)| self::frame::read_word(&self.scratch, word_bytes, skip + i) == value);
+        Ok(matches)
     }
 
     fn write_single_register(
@@ -544,27 +557,18 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         addr: u8,
         values: &[u16],
     ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
-        let count = values.len();
-        let mut words = [0u16; 1 + self::frame::WRITABLE_REGISTERS];
-        let [cmd, data @ ..] = &mut words;
-        *cmd = self::command::wreg(addr, reg_count(count));
-        let (data, _) = data.split_at_mut(count);
-        data.copy_from_slice(values);
-
-        let (frame_words, _) = words.split_at(count + 1);
+        let cmd = self::command::wreg(addr, reg_count(values.len()));
         let len = self::frame::build(
             self.format,
-            frame_words,
+            cmd,
+            values,
             self::frame::FULL_FRAME_WORDS,
             &mut self.scratch,
         );
         let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
-        let mut readback = [0u16; self::frame::WRITABLE_REGISTERS];
-        let (readback, _) = readback.split_at_mut(count);
-        self.read_registers(addr, readback)?;
-        if readback == values {
+        if self.registers_match(addr, values)? {
             Ok(Ok(()))
         } else {
             Ok(Err(WriteError))
