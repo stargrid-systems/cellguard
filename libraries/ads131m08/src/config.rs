@@ -177,6 +177,131 @@ impl Gain {
     }
 }
 
+/// Channel input multiplexer selection (`MUX` in `CHx_CFG`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mux {
+    /// Normal differential analog input (default).
+    #[default]
+    Normal,
+    /// ADC inputs shorted together, for offset measurement.
+    Shorted,
+    /// Positive DC test signal.
+    PositiveTest,
+    /// Negative DC test signal.
+    NegativeTest,
+}
+
+impl Mux {
+    const fn code(self) -> u16 {
+        match self {
+            Self::Normal => 0,
+            Self::Shorted => 1,
+            Self::PositiveTest => 2,
+            Self::NegativeTest => 3,
+        }
+    }
+}
+
+/// Channel phase delay in modulator clock cycles.
+///
+/// Programmed into `PHASE` (10-bit two's complement), so the range is
+/// `-512..=511`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Phase(i16);
+
+impl Phase {
+    /// No phase delay.
+    pub const ZERO: Self = Self(0);
+
+    /// Creates a phase delay, clamped to the representable range.
+    #[must_use]
+    pub const fn new(cycles: i16) -> Self {
+        let clamped = if cycles < -512 {
+            -512
+        } else if cycles > 511 {
+            511
+        } else {
+            cycles
+        };
+        Self(clamped)
+    }
+
+    const fn bits(self) -> u16 {
+        self.0.cast_unsigned() & 0x03FF
+    }
+}
+
+/// Channel offset calibration in output counts.
+///
+/// Programmed into `OCAL` (24-bit two's complement), subtracted from each
+/// conversion result.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct OffsetCal(i32);
+
+impl OffsetCal {
+    /// No offset correction (the reset value).
+    pub const ZERO: Self = Self(0);
+
+    /// Creates an offset calibration from a count value.
+    #[must_use]
+    pub const fn new(counts: i32) -> Self {
+        Self(counts)
+    }
+
+    const fn raw(self) -> u32 {
+        self.0.cast_unsigned() & 0x00FF_FFFF
+    }
+}
+
+/// Channel gain calibration.
+///
+/// Programmed into `GCAL` (24-bit). The result is scaled by `value / 0x800000`,
+/// so [`GainCal::UNITY`] applies no correction.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GainCal(u32);
+
+impl GainCal {
+    /// Unity gain, midscale (the reset value).
+    pub const UNITY: Self = Self(0x0080_0000);
+
+    /// Creates a gain calibration from a raw 24-bit value.
+    #[must_use]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw & 0x00FF_FFFF)
+    }
+
+    const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl Default for GainCal {
+    fn default() -> Self {
+        Self::UNITY
+    }
+}
+
+/// DC-block (high-pass) filter corner setting, programmed into `DCBLOCK`.
+///
+/// A higher level raises the corner frequency. Zero disables the filter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DcBlock(u8);
+
+impl DcBlock {
+    /// DC-block filter disabled (the reset value).
+    pub const DISABLED: Self = Self(0);
+
+    /// Creates a setting, clamped to the valid range `0..=15`.
+    #[must_use]
+    pub const fn new(level: u8) -> Self {
+        Self(if level > 15 { 15 } else { level })
+    }
+
+    const fn bits(self) -> u16 {
+        self.0 as u16
+    }
+}
+
 /// Voltage reference and clock source selection in the CLOCK register.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Reference {
@@ -202,6 +327,24 @@ pub struct ChannelConfig {
     pub enabled: bool,
     /// PGA gain for this channel.
     pub gain: Gain,
+    /// Input multiplexer selection.
+    pub mux: Mux,
+    /// Phase delay relative to the other channels.
+    pub phase: Phase,
+    /// Apply the global DC-block filter to this channel (`DCBLK_DIS` cleared).
+    pub dc_block: bool,
+    /// Offset calibration.
+    pub offset_cal: OffsetCal,
+    /// Gain calibration.
+    pub gain_cal: GainCal,
+}
+
+impl ChannelConfig {
+    /// The `CHx_CFG` register value for this channel.
+    const fn cfg_register(self) -> u16 {
+        let dcblk_dis = if self.dc_block { 0 } else { 1 << 2 };
+        (self.phase.bits() << 6) | dcblk_dis | self.mux.code()
+    }
 }
 
 impl Default for ChannelConfig {
@@ -209,16 +352,27 @@ impl Default for ChannelConfig {
         Self {
             enabled: true,
             gain: Gain::X1,
+            mux: Mux::Normal,
+            phase: Phase::ZERO,
+            dc_block: true,
+            offset_cal: OffsetCal::ZERO,
+            gain_cal: GainCal::UNITY,
         }
     }
 }
 
 /// Reset value of the CFG register (global-chop delay 16, all detection off).
 const CFG_RESET: u16 = 0x0600;
-/// Reset value of each channel's `GCAL_MSB` register (unity gain, midscale).
-const GCAL_MSB_RESET: u16 = 0x8000;
 /// Registers per channel: CFG, `OCAL_MSB`, `OCAL_LSB`, `GCAL_MSB`, `GCAL_LSB`.
 const CHANNEL_REGISTERS: usize = 5;
+
+/// Splits a 24-bit value into its MSB register (bits 23:8) and LSB register
+/// (bits 7:0 placed in the high byte, low byte reserved).
+const fn split_24(raw: u32) -> (u16, u16) {
+    let msb = ((raw >> 8) & 0xFFFF) as u16;
+    let lsb = ((raw & 0xFF) as u16) << 8;
+    (msb, lsb)
+}
 
 /// A complete device configuration.
 ///
@@ -238,6 +392,8 @@ pub struct Config {
     pub power_mode: PowerMode,
     /// Reference and clock source.
     pub reference: Reference,
+    /// Global DC-block filter corner.
+    pub dc_block: DcBlock,
     /// Per-channel settings.
     pub channels: [ChannelConfig; CHANNELS],
 }
@@ -251,6 +407,7 @@ impl Default for Config {
             osr: Osr::default(),
             power_mode: PowerMode::default(),
             reference: Reference::default(),
+            dc_block: DcBlock::DISABLED,
             channels: [ChannelConfig::default(); CHANNELS],
         }
     }
@@ -290,17 +447,16 @@ impl Config {
         *gain2 = self.gain_register(register::CHANNELS_PER_GAIN_REGISTER);
         *cfg = CFG_RESET;
         *thr_msb = 0;
-        *thr_lsb = 0;
+        *thr_lsb = self.dc_block.bits();
 
-        for chunk in channels.chunks_exact_mut(CHANNEL_REGISTERS) {
+        let chunks = channels.chunks_exact_mut(CHANNEL_REGISTERS);
+        for (chunk, channel) in chunks.zip(&self.channels) {
             let [ch_cfg, ocal_msb, ocal_lsb, gcal_msb, gcal_lsb] = chunk else {
                 unreachable!()
             };
-            *ch_cfg = 0;
-            *ocal_msb = 0;
-            *ocal_lsb = 0;
-            *gcal_msb = GCAL_MSB_RESET;
-            *gcal_lsb = 0;
+            *ch_cfg = channel.cfg_register();
+            (*ocal_msb, *ocal_lsb) = split_24(channel.offset_cal.raw());
+            (*gcal_msb, *gcal_lsb) = split_24(channel.gain_cal.raw());
         }
         regs
     }
@@ -353,7 +509,33 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, WordLength};
+    use super::{ChannelConfig, Config, DcBlock, GainCal, Mux, OffsetCal, Phase, WordLength};
+
+    #[test]
+    fn channel_settings_serialize() {
+        let mut config = Config {
+            dc_block: DcBlock::new(5),
+            ..Config::default()
+        };
+        let channel = ChannelConfig {
+            mux: Mux::PositiveTest,
+            phase: Phase::new(-1),
+            dc_block: false,
+            offset_cal: OffsetCal::new(-1),
+            gain_cal: GainCal::new(0x0012_3456),
+            ..ChannelConfig::default()
+        };
+        let [first, ..] = &mut config.channels;
+        *first = channel;
+
+        let regs = config.to_registers();
+        let (header, channels) = regs.split_at(7);
+        // THRSHLD_LSB carries the global DC-block nibble.
+        assert_eq!(header.last(), Some(&0x0005));
+        let (ch0, _) = channels.split_at(5);
+        // CH_CFG: phase 0x3FF << 6 | DCBLK_DIS | MUX=2. OCAL=-1. GCAL=0x123456.
+        assert_eq!(ch0, [0xFFC6, 0xFFFF, 0xFF00, 0x1234, 0x5600]);
+    }
 
     #[test]
     fn decode_sample_handles_each_word_length() {

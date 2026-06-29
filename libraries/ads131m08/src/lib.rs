@@ -24,7 +24,8 @@ use core::marker::PhantomData;
 use embedded_hal::spi::SpiDevice;
 
 pub use self::config::{
-    ChannelConfig, Config, CrcType, Gain, Osr, PowerMode, Reference, WordLength,
+    ChannelConfig, Config, CrcType, DcBlock, Gain, GainCal, Mux, OffsetCal, Osr, Phase, PowerMode,
+    Reference, WordLength,
 };
 pub use self::error::{
     CommunicationError, CommunicationErrorKind, ConfigError, LockError, ResetError, WriteError,
