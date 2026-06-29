@@ -229,10 +229,38 @@ fn read_data_decodes_all_channels() {
             panic!("configure failed");
         };
         let mut channels = [0i32; 8];
-        let Ok(()) = device.read_data(&mut channels) else {
+        let Ok(status) = device.read_data(&mut channels) else {
             panic!("read_data failed");
         };
         assert_eq!(channels, samples);
+        // 0x0500 is the reset STATUS: reset flag set, no data-ready flags.
+        assert!(status.reset_occurred());
+        assert!(!status.data_ready(0));
+    });
+}
+
+#[test]
+fn read_data_after_pause_reads_twice() {
+    let stale = [0; 8];
+    let fresh = [11, 22, 33, 44, 55, 66, 77, 88];
+    let mut txns = configure_default();
+    txns.extend(transfer(
+        vec![0; FULL_FRAME_BYTES],
+        data_response(0x00FF, stale),
+    ));
+    txns.extend(transfer(
+        vec![0; FULL_FRAME_BYTES],
+        data_response(0x00FF, fresh),
+    ));
+    run(&txns, |device| {
+        let Ok(mut device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
+        let mut channels = [0i32; 8];
+        let Ok(_status) = device.read_data_after_pause(&mut channels) else {
+            panic!("read_data_after_pause failed");
+        };
+        assert_eq!(channels, fresh);
     });
 }
 

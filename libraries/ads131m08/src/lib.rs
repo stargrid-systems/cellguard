@@ -232,11 +232,15 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         self.write_single_register(addr, updated)
     }
 
-    /// Reads conversion data from all channels into the provided array.
+    /// Reads conversion data from all channels into the provided array and
+    /// returns the [`Status`] reported alongside it.
+    ///
+    /// The status carries the per-channel data-ready flags, so the caller can
+    /// tell which channels produced fresh samples.
     pub fn read_data(
         &mut self,
         channels: &mut [i32; CHANNELS],
-    ) -> Result<(), CommunicationError<S::Error>> {
+    ) -> Result<Status, CommunicationError<S::Error>> {
         let mut buf = [0u8; frame::MAX_FRAME_BYTES];
         let len = frame::build(
             self.format,
@@ -250,9 +254,10 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
             .map_err(CommunicationError::spi)?;
         let payload = frame::verify_output(self.format, rx)?;
 
+        let word_bytes = self.word_length.word_bytes();
+        let status = Status(frame::read_word(payload, word_bytes, 0));
         // The frame always carries one data word per channel regardless of
         // CHx_EN; disabled channels simply report stale data.
-        let word_bytes = self.word_length.word_bytes();
         let (_response, channel_words) = payload.split_at(word_bytes);
         for (channel, word) in channels
             .iter_mut()
@@ -261,7 +266,22 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
             *channel = self.word_length.decode_sample(word);
         }
 
-        Ok(())
+        Ok(status)
+    }
+
+    /// Reads conversion data for the first time or after a pause in collection.
+    ///
+    /// The device buffers two samples per channel. After a gap, the first read
+    /// returns a stale sample. This reads two frames in quick succession and
+    /// returns the second, aligned one (datasheet 8.5.1.9.1). Use
+    /// [`read_data`][Self::read_data] for steady-state collection.
+    pub fn read_data_after_pause(
+        &mut self,
+        channels: &mut [i32; CHANNELS],
+    ) -> Result<Status, CommunicationError<S::Error>> {
+        let mut stale = [0i32; CHANNELS];
+        self.read_data(&mut stale)?;
+        self.read_data(channels)
     }
 }
 
