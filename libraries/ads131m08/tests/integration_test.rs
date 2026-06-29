@@ -150,6 +150,33 @@ fn configure_default() -> Vec<Txn> {
     txns
 }
 
+/// Transactions for a multi-register read: the RREG command, then a response
+/// of an acknowledgment word, the register values, and a CRC.
+fn read_block(addr: u16, count: u16, values: &[u16]) -> Vec<Txn> {
+    let rreg = 0xA000 | (addr << 7) | (count - 1);
+    let mut txns = write(word(rreg).to_vec());
+    let ack = 0xE000 | (addr << 7) | (count - 1);
+    let mut response_words = vec![ack];
+    response_words.extend_from_slice(values);
+    let total = (1 + values.len() + 1) * WORD_BYTES;
+    txns.extend(transfer(vec![0; total], response(&response_words)));
+    txns
+}
+
+/// Transactions for a multi-register write: the WREG full frame, then the
+/// verifying multi-register readback.
+fn write_block(addr: u16, count: u16, values: &[u16]) -> Vec<Txn> {
+    let wreg = 0x6000 | (addr << 7) | (count - 1);
+    let mut block = word(wreg).to_vec();
+    for &value in values {
+        block.extend_from_slice(&word(value));
+    }
+    block.resize(FULL_FRAME_BYTES, 0);
+    let mut txns = write(block);
+    txns.extend(read_block(addr, count, values));
+    txns
+}
+
 fn run(txns: &[Txn], body: impl FnOnce(Ads131m08<Spi>)) {
     let mut spi = SpiMock::new(txns);
     let device = Ads131m08::new(spi.clone());
@@ -212,6 +239,41 @@ fn set_gain_does_read_modify_write() {
         };
         let Ok(Ok(())) = device.set_gain(5, Gain::X8) else {
             panic!("set_gain failed");
+        };
+    });
+}
+
+#[test]
+fn enter_and_exit_current_detect() {
+    use ads131m08::{CdCount, CdLength, CurrentDetectConfig};
+
+    let config = CurrentDetectConfig {
+        all_channels: false,
+        count: CdCount::Count4,
+        length: CdLength::Samples256,
+        threshold: 0x0000_1234,
+    };
+    // cfg_bits 0x23 merged with CFG 0x0600; threshold split across THRSHLD.
+    let block = [0x0623, 0x0012, 0x3400];
+
+    let mut txns = configure_default();
+    txns.extend(read_single(0x06, 0x0600)); // read CFG
+    txns.extend(read_single(0x08, 0x0000)); // read THRSHLD_LSB
+    txns.extend(write_block(0x06, 3, &block)); // write CFG + THRSHLD
+    txns.extend(write(word(0x0022).to_vec())); // STANDBY
+    txns.extend(read_single(0x06, 0x0623)); // exit: read CFG
+    txns.extend(write_single(0x06, 0x0622)); // clear CD_EN
+    txns.extend(write(word(0x0033).to_vec())); // WAKEUP
+
+    run(&txns, |device| {
+        let Ok(device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
+        let Ok(device) = device.enter_current_detect(config) else {
+            panic!("enter_current_detect failed");
+        };
+        let Ok(_device) = device.exit() else {
+            panic!("exit failed");
         };
     });
 }

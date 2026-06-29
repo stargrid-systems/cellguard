@@ -350,6 +350,103 @@ impl GcDelay {
     }
 }
 
+/// Number of threshold exceedances required to trigger a detection (`CD_NUM`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CdCount {
+    /// One sample over threshold (default).
+    #[default]
+    Count1,
+    Count2,
+    Count4,
+    Count8,
+    Count16,
+    Count32,
+    Count64,
+    Count128,
+}
+
+impl CdCount {
+    const fn code(self) -> u16 {
+        match self {
+            Self::Count1 => 0,
+            Self::Count2 => 1,
+            Self::Count4 => 2,
+            Self::Count8 => 3,
+            Self::Count16 => 4,
+            Self::Count32 => 5,
+            Self::Count64 => 6,
+            Self::Count128 => 7,
+        }
+    }
+}
+
+/// Number of samples collected per current-detect measurement (`CD_LEN`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CdLength {
+    /// 128 samples (default).
+    #[default]
+    Samples128,
+    Samples256,
+    Samples512,
+    Samples768,
+    Samples1280,
+    Samples1792,
+    Samples2560,
+    Samples3584,
+}
+
+impl CdLength {
+    const fn code(self) -> u16 {
+        match self {
+            Self::Samples128 => 0,
+            Self::Samples256 => 1,
+            Self::Samples512 => 2,
+            Self::Samples768 => 3,
+            Self::Samples1280 => 4,
+            Self::Samples1792 => 5,
+            Self::Samples2560 => 6,
+            Self::Samples3584 => 7,
+        }
+    }
+}
+
+/// Current-detect mode parameters.
+///
+/// Programmed into the CFG and THRSHLD registers. The mode itself is entered
+/// by pulsing the SYNC/RESET pin while the device is in standby, which is the
+/// caller's responsibility; see [`Ads131m08::enter_current_detect`].
+///
+/// [`Ads131m08::enter_current_detect`]: crate::Ads131m08::enter_current_detect
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CurrentDetectConfig {
+    /// Require every enabled channel to detect, rather than any one
+    /// (`CD_ALLCH`).
+    pub all_channels: bool,
+    /// Threshold exceedances needed to trigger.
+    pub count: CdCount,
+    /// Samples per measurement.
+    pub length: CdLength,
+    /// Comparator threshold, a 24-bit magnitude (`CD_THRSH`).
+    pub threshold: u32,
+}
+
+impl CurrentDetectConfig {
+    /// The CFG low byte (current-detect fields with `CD_EN` set).
+    pub(crate) const fn cfg_bits(self) -> u16 {
+        let all_channels = if self.all_channels { 1 << 7 } else { 0 };
+        all_channels | (self.count.code() << 4) | (self.length.code() << 1) | 1
+    }
+
+    pub(crate) const fn threshold_msb(self) -> u16 {
+        ((self.threshold >> 8) & 0xFFFF) as u16
+    }
+
+    /// The threshold low byte placed in the high byte of `THRSHLD_LSB`.
+    pub(crate) const fn threshold_lsb_high(self) -> u16 {
+        ((self.threshold & 0xFF) as u16) << 8
+    }
+}
+
 /// Voltage reference and clock source selection in the CLOCK register.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Reference {
@@ -571,6 +668,22 @@ mod tests {
     use super::{
         ChannelConfig, Config, DcBlock, GainCal, GcDelay, Mux, OffsetCal, Phase, WordLength,
     };
+
+    #[test]
+    fn current_detect_config_bits() {
+        use super::{CdCount, CdLength, CurrentDetectConfig};
+
+        let config = CurrentDetectConfig {
+            all_channels: false,
+            count: CdCount::Count4,
+            length: CdLength::Samples256,
+            threshold: 0x0012_3456,
+        };
+        // CD_NUM=2 << 4 | CD_LEN=1 << 1 | CD_EN.
+        assert_eq!(config.cfg_bits(), 0x0023);
+        assert_eq!(config.threshold_msb(), 0x1234);
+        assert_eq!(config.threshold_lsb_high(), 0x5600);
+    }
 
     #[test]
     fn global_chop_serializes_into_cfg() {

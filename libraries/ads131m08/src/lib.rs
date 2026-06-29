@@ -24,8 +24,8 @@ use core::marker::PhantomData;
 use embedded_hal::spi::SpiDevice;
 
 pub use self::config::{
-    ChannelConfig, Config, CrcType, DcBlock, Gain, GainCal, GcDelay, Mux, OffsetCal, Osr, Phase,
-    PowerMode, Reference, WordLength,
+    CdCount, CdLength, ChannelConfig, Config, CrcType, CurrentDetectConfig, DcBlock, Gain, GainCal,
+    GcDelay, Mux, OffsetCal, Osr, Phase, PowerMode, Reference, WordLength,
 };
 pub use self::error::{
     CommunicationError, CommunicationErrorKind, ConfigError, LockError, ResetError, WriteError,
@@ -61,8 +61,12 @@ pub struct Unconfigured;
 /// Lifecycle state: the device is configured and can stream conversion data.
 pub struct Ready;
 
+/// Lifecycle state: the device is armed for current-detect mode.
+pub struct CurrentDetect;
+
 impl sealed::State for Unconfigured {}
 impl sealed::State for Ready {}
+impl sealed::State for CurrentDetect {}
 
 /// Driver for the Texas Instruments ADS131M08 ADC.
 ///
@@ -233,6 +237,40 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         self.write_single_register(addr, updated)
     }
 
+    /// Arms current-detect mode and places the device in standby.
+    ///
+    /// This writes the current-detect parameters with `CD_EN` set (preserving
+    /// the global-chop and DC-block settings) and issues a standby command. The
+    /// device only enters current-detect mode once the host pulses the
+    /// SYNC/RESET pin; a detection then drives `DRDY` low and returns the
+    /// device to standby. Conversion results are not host-readable in this
+    /// mode. Call [`exit`][Ads131m08::<S, CurrentDetect>::exit] to return
+    /// to [`Ready`].
+    pub fn enter_current_detect(
+        mut self,
+        config: CurrentDetectConfig,
+    ) -> Result<Ads131m08<S, CurrentDetect>, ConfigError<S::Error>> {
+        let cfg = self.read_single_register(register::CFG)?;
+        let thr_lsb = self.read_single_register(register::THRESHOLD_LSB)?;
+
+        // Keep the global-chop bits (12:8); replace the current-detect byte.
+        let new_cfg = (cfg & 0x1F00) | config.cfg_bits();
+        // Keep the DC-block nibble (3:0); set the threshold low byte.
+        let new_thr_lsb = config.threshold_lsb_high() | (thr_lsb & 0x000F);
+        let block = [new_cfg, config.threshold_msb(), new_thr_lsb];
+
+        if self.write_registers(register::CFG, &block)?.is_err() {
+            return Err(ConfigError::Verify);
+        }
+        self.write_command(command::STANDBY)?;
+        Ok(Ads131m08 {
+            spi: self.spi,
+            format: self.format,
+            word_length: self.word_length,
+            _state: PhantomData,
+        })
+    }
+
     /// Reads conversion data from all channels into the provided array and
     /// returns the [`Status`] reported alongside it.
     ///
@@ -283,6 +321,28 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         let mut stale = [0i32; CHANNELS];
         self.read_data(&mut stale)?;
         self.read_data(channels)
+    }
+}
+
+impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
+    /// Disarms current-detect mode and returns the device to [`Ready`].
+    ///
+    /// Clears `CD_EN` and issues a wakeup command.
+    pub fn exit(mut self) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
+        let cfg = self.read_single_register(register::CFG)?;
+        if self
+            .write_single_register(register::CFG, cfg & !1)?
+            .is_err()
+        {
+            return Err(ConfigError::Verify);
+        }
+        self.write_command(command::WAKEUP)?;
+        Ok(Ads131m08 {
+            spi: self.spi,
+            format: self.format,
+            word_length: self.word_length,
+            _state: PhantomData,
+        })
     }
 }
 
