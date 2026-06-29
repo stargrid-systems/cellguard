@@ -6,9 +6,6 @@ const MAX_WORD_BYTES: usize = 4;
 /// and the trailing output CRC word.
 pub const FULL_FRAME_WORDS: usize = 1 + CHANNELS + 1;
 
-/// Worst-case length of a standard full frame in bytes (32-bit words).
-pub const MAX_FRAME_BYTES: usize = FULL_FRAME_WORDS * MAX_WORD_BYTES;
-
 /// Number of registers in the writable block, `02h` through `30h`.
 pub const WRITABLE_REGISTERS: usize = 47;
 
@@ -163,7 +160,10 @@ fn crc16(kind: CrcKind, data: &[u8]) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CrcKind, FrameFormat, MAX_FRAME_BYTES, build, crc16, verify_output};
+    use super::{CrcKind, FrameFormat, MAX_REGISTER_FRAME_BYTES, build, crc16, verify_output};
+
+    /// A buffer large enough for any frame the tests assemble.
+    const BUF: usize = MAX_REGISTER_FRAME_BYTES;
 
     const PLAIN: FrameFormat = FrameFormat::reset_default();
     const WITH_CRC: FrameFormat = FrameFormat {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn build_writes_msb_aligned_word_with_padding() {
-        let mut buf = [0xAA; MAX_FRAME_BYTES];
+        let mut buf = [0xAA; BUF];
         let len = build(PLAIN, &[0x1234], 0, &mut buf);
         assert_eq!(len, 3);
         let (frame, _) = buf.split_at(len);
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn build_pads_to_full_frame() {
-        let mut buf = [0xAA; MAX_FRAME_BYTES];
+        let mut buf = [0xAA; BUF];
         let len = build(PLAIN, &[0x0011], 10, &mut buf);
         assert_eq!(len, 30);
         let (frame, _) = buf.split_at(len);
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn build_appends_input_crc_word() {
-        let mut buf = [0; MAX_FRAME_BYTES];
+        let mut buf = [0; BUF];
         let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
         assert_eq!(len, 6);
         let (frame, _) = buf.split_at(len);
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn verify_output_detects_corruption() {
-        let mut buf = [0; MAX_FRAME_BYTES];
+        let mut buf = [0; BUF];
         let len = build(WITH_CRC, &[0x1234], 0, &mut buf);
         let [first, ..] = &mut buf;
         *first ^= 0xFF;

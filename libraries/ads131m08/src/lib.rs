@@ -126,6 +126,10 @@ pub struct Ads131m08<S, State = Unconfigured> {
     spi: S,
     format: self::frame::FrameFormat,
     word_length: WordLength,
+    /// Reused byte buffer for every SPI frame. Owning it keeps the largest
+    /// transfer buffer off the stack and sized for the worst case (a full
+    /// register-block read or write).
+    scratch: [u8; self::frame::MAX_REGISTER_FRAME_BYTES],
     _state: PhantomData<State>,
 }
 
@@ -139,6 +143,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
             spi,
             format: self::frame::FrameFormat::reset_default(),
             word_length: WordLength::Bits24,
+            scratch: [0; self::frame::MAX_REGISTER_FRAME_BYTES],
             _state: PhantomData,
         }
     }
@@ -155,14 +160,13 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// Returns an error if SPI communication fails.
     pub fn reset_device_start(&mut self) -> Result<(), CommunicationError<S::Error>> {
         // As per the datasheet, a reset command must always use a full frame.
-        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
         let len = self::frame::build(
             self.format,
             &[self::command::RESET],
             self::frame::FULL_FRAME_WORDS,
-            &mut buf,
+            &mut self.scratch,
         );
-        let (out, _) = buf.split_at(len);
+        let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
         Ok(())
     }
@@ -184,14 +188,13 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         )]
         const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
 
-        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
         let len = self::frame::build(
             self.format,
             &[self::command::NULL],
             self::frame::FULL_FRAME_WORDS,
-            &mut buf,
+            &mut self.scratch,
         );
-        let (rx, _) = buf.split_at_mut(len);
+        let (rx, _) = self.scratch.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
@@ -229,9 +232,13 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         *cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
         data.copy_from_slice(&image);
 
-        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
-        let len = self::frame::build(self.format, &words, self::frame::FULL_FRAME_WORDS, &mut buf);
-        let (out, _) = buf.split_at(len);
+        let len = self::frame::build(
+            self.format,
+            &words,
+            self::frame::FULL_FRAME_WORDS,
+            &mut self.scratch,
+        );
+        let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
         self.format = config.frame_format();
@@ -244,6 +251,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
                 spi: self.spi,
                 format: self.format,
                 word_length: self.word_length,
+                scratch: self.scratch,
                 _state: PhantomData,
             })
         } else {
@@ -365,6 +373,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
             spi: self.spi,
             format: self.format,
             word_length: self.word_length,
+            scratch: self.scratch,
             _state: PhantomData,
         })
     }
@@ -383,14 +392,13 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         &mut self,
         channels: &mut [i32; CHANNELS],
     ) -> Result<Status, CommunicationError<S::Error>> {
-        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
         let len = self::frame::build(
             self.format,
             &[self::command::NULL],
             self::frame::FULL_FRAME_WORDS,
-            &mut buf,
+            &mut self.scratch,
         );
-        let (rx, _) = buf.split_at_mut(len);
+        let (rx, _) = self.scratch.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
@@ -453,6 +461,7 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
             spi: self.spi,
             format: self.format,
             word_length: self.word_length,
+            scratch: self.scratch,
             _state: PhantomData,
         })
     }
@@ -470,9 +479,8 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
 
     /// Sends a single command in a short frame, clocking out no ADC data.
     fn write_command(&mut self, command: u16) -> Result<(), CommunicationError<S::Error>> {
-        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
-        let len = self::frame::build(self.format, &[command], 0, &mut buf);
-        let (out, _) = buf.split_at(len);
+        let len = self::frame::build(self.format, &[command], 0, &mut self.scratch);
+        let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)
     }
 
@@ -502,9 +510,13 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         } else {
             (1, 1 + count + 1)
         };
-        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
-        let len = self::frame::build(self.format, &[self::command::NULL], total_words, &mut buf);
-        let (rx, _) = buf.split_at_mut(len);
+        let len = self::frame::build(
+            self.format,
+            &[self::command::NULL],
+            total_words,
+            &mut self.scratch,
+        );
+        let (rx, _) = self.scratch.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
@@ -540,14 +552,13 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         data.copy_from_slice(values);
 
         let (frame_words, _) = words.split_at(count + 1);
-        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
         let len = self::frame::build(
             self.format,
             frame_words,
             self::frame::FULL_FRAME_WORDS,
-            &mut buf,
+            &mut self.scratch,
         );
-        let (out, _) = buf.split_at(len);
+        let (out, _) = self.scratch.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
         let mut readback = [0u16; self::frame::WRITABLE_REGISTERS];
