@@ -68,7 +68,11 @@ impl CrcType {
 
 /// Modulator oversampling ratio, programmed into `OSR` of the CLOCK register.
 ///
-/// A higher ratio lowers the output data rate and the noise.
+/// The output data rate is `fDATA = fMOD / OSR`, where `fMOD` is the modulator
+/// clock set by [`PowerMode`]. A higher ratio lowers the data rate and the
+/// noise. The digital filter is a SINC3 path (with an added SINC1 averager for
+/// ratios above 1024); the device switches to a fast-settling path
+/// automatically in global-chop mode. There is no separate filter selection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Osr {
     Ratio128,
@@ -99,6 +103,9 @@ impl Osr {
 }
 
 /// Power mode, programmed into `PWR` of the CLOCK register.
+///
+/// The mode sets the modulator clock `fMOD` relative to `CLKIN`, trading power
+/// for bandwidth: high-resolution runs `fMOD` fastest, very-low-power slowest.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PowerMode {
     VeryLowPower,
