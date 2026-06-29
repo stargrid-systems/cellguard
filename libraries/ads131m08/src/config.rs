@@ -447,6 +447,58 @@ impl CurrentDetectConfig {
     }
 }
 
+/// Source that drives the `DRDY` pin (`DRDY_SEL`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DrdySource {
+    /// The most lagging enabled channel (default).
+    #[default]
+    MostLagging,
+    /// The logical OR of all enabled channels.
+    LogicOr,
+    /// The most leading enabled channel.
+    MostLeading,
+}
+
+impl DrdySource {
+    const fn code(self) -> u16 {
+        match self {
+            Self::MostLagging => 0b00,
+            Self::LogicOr => 0b01,
+            Self::MostLeading => 0b10,
+        }
+    }
+}
+
+/// `DRDY` signal format when conversion data is available (`DRDY_FMT`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DrdyFormat {
+    /// Logic low for the whole period (default).
+    #[default]
+    Logic,
+    /// A fixed-duration low pulse.
+    Pulse,
+}
+
+impl DrdyFormat {
+    const fn code(self) -> u16 {
+        match self {
+            Self::Logic => 0,
+            Self::Pulse => 1,
+        }
+    }
+}
+
+/// `DRDY` pin behavior in the MODE register.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Drdy {
+    /// Which channel drives the pin.
+    pub source: DrdySource,
+    /// Drive the pin high-impedance when data is not available (`DRDY_HiZ`).
+    pub high_impedance: bool,
+    /// Signal format when data is available.
+    pub format: DrdyFormat,
+}
+
 /// Voltage reference and clock source selection in the CLOCK register.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Reference {
@@ -527,8 +579,19 @@ pub struct Config {
     pub word_length: WordLength,
     /// Require an input CRC on commands (`RX_CRC_EN`).
     pub input_crc: bool,
+    /// Enable the register-map CRC (`REG_CRC_EN`).
+    ///
+    /// When set, [`Status::register_map_changed`] flags unexpected register
+    /// changes.
+    ///
+    /// [`Status::register_map_changed`]: crate::Status::register_map_changed
+    pub register_crc: bool,
+    /// Enable the SPI frame timeout (`TIMEOUT`). Enabled by default.
+    pub spi_timeout: bool,
     /// CRC polynomial for both input and output CRCs.
     pub crc_type: CrcType,
+    /// `DRDY` pin behavior.
+    pub drdy: Drdy,
     /// Modulator oversampling ratio.
     pub osr: Osr,
     /// Power mode.
@@ -548,7 +611,10 @@ impl Default for Config {
         Self {
             word_length: WordLength::default(),
             input_crc: false,
+            register_crc: false,
+            spi_timeout: true,
             crc_type: CrcType::default(),
+            drdy: Drdy::default(),
             osr: Osr::default(),
             power_mode: PowerMode::default(),
             reference: Reference::default(),
@@ -619,14 +685,22 @@ impl Config {
 
     fn mode_register(&self) -> u16 {
         let mut bits = 0u16;
+        if self.register_crc {
+            bits |= 1 << 13;
+        }
         if self.input_crc {
             bits |= 1 << 12;
         }
         bits |= u16::from(self.crc_type.is_ansi()) << 11;
         bits |= self.word_length.code() << 8;
-        // TIMEOUT is enabled by default; DRDY and register-map CRC are added by
-        // later tasks.
-        bits |= 1 << 4;
+        if self.spi_timeout {
+            bits |= 1 << 4;
+        }
+        bits |= self.drdy.source.code() << 2;
+        if self.drdy.high_impedance {
+            bits |= 1 << 1;
+        }
+        bits |= self.drdy.format.code();
         bits
     }
 
@@ -683,6 +757,27 @@ mod tests {
         assert_eq!(config.cfg_bits(), 0x0023);
         assert_eq!(config.threshold_msb(), 0x1234);
         assert_eq!(config.threshold_lsb_high(), 0x5600);
+    }
+
+    #[test]
+    fn mode_register_encodes_drdy_timeout_and_crc() {
+        use super::{Drdy, DrdyFormat, DrdySource};
+
+        let config = Config {
+            register_crc: true,
+            spi_timeout: false,
+            drdy: Drdy {
+                source: DrdySource::MostLeading,
+                high_impedance: true,
+                format: DrdyFormat::Pulse,
+            },
+            ..Config::default()
+        };
+        let regs = config.to_registers();
+        let (first, _) = regs.split_at(1);
+        // REG_CRC_EN(13) | WLENGTH 24-bit(8) | DRDY_SEL=2(2) | DRDY_HiZ(1) |
+        // DRDY_FMT(0).
+        assert_eq!(first, [0x2000 | 0x0100 | 0x0008 | 0x0002 | 0x0001]);
     }
 
     #[test]
