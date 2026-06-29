@@ -70,6 +70,7 @@ impl sealed::State for Ready {}
 pub struct Ads131m08<S, State = Unconfigured> {
     spi: S,
     format: frame::FrameFormat,
+    word_length: WordLength,
     _state: PhantomData<State>,
 }
 
@@ -82,6 +83,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         Self {
             spi,
             format: frame::FrameFormat::reset_default(),
+            word_length: WordLength::Bits24,
             _state: PhantomData,
         }
     }
@@ -155,6 +157,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
         self.format = config.frame_format();
+        self.word_length = config.word_length;
 
         let mut readback = [0u16; frame::WRITABLE_REGISTERS];
         self.read_registers(register::MODE, &mut readback)?;
@@ -162,6 +165,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
             Ok(Ads131m08 {
                 spi: self.spi,
                 format: self.format,
+                word_length: self.word_length,
                 _state: PhantomData,
             })
         } else {
@@ -246,13 +250,15 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
             .map_err(CommunicationError::spi)?;
         let payload = frame::verify_output(self.format, rx)?;
 
-        let word_bytes = self.format.word_bytes();
+        // The frame always carries one data word per channel regardless of
+        // CHx_EN; disabled channels simply report stale data.
+        let word_bytes = self.word_length.word_bytes();
         let (_response, channel_words) = payload.split_at(word_bytes);
         for (channel, word) in channels
             .iter_mut()
             .zip(channel_words.chunks_exact(word_bytes))
         {
-            *channel = decode_sample(word);
+            *channel = self.word_length.decode_sample(word);
         }
 
         Ok(())
@@ -361,13 +367,4 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
 const fn reg_count(count: usize) -> u8 {
     debug_assert!(count >= 1 && count <= frame::WRITABLE_REGISTERS);
     count as u8
-}
-
-/// Decodes one 24-bit two's complement conversion sample from its word bytes.
-const fn decode_sample(word: &[u8]) -> i32 {
-    let mut bytes = [0u8; 4];
-    let (dst, _) = bytes.split_at_mut(3);
-    let (src, _) = word.split_at(3);
-    dst.copy_from_slice(src);
-    i32::from_be_bytes(bytes) >> 8
 }

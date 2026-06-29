@@ -41,6 +41,28 @@ impl WordLength {
             Self::Bits32ZeroPad | Self::Bits32SignExtend => 4,
         }
     }
+
+    /// Decodes one conversion sample from its word bytes into a 24-bit-scaled
+    /// signed value.
+    ///
+    /// In 16-bit mode the eight least significant bits are absent, so the value
+    /// is the truncated 16-bit sample.
+    pub(crate) fn decode_sample(self, word: &[u8]) -> i32 {
+        match self {
+            Self::Bits16 => match word {
+                &[hi, lo, ..] => i32::from(i16::from_be_bytes([hi, lo])),
+                _ => 0,
+            },
+            Self::Bits24 | Self::Bits32ZeroPad => match word {
+                &[b0, b1, b2, ..] => i32::from_be_bytes([b0, b1, b2, 0]) >> 8,
+                _ => 0,
+            },
+            Self::Bits32SignExtend => match word {
+                &[b0, b1, b2, b3, ..] => i32::from_be_bytes([b0, b1, b2, b3]),
+                _ => 0,
+            },
+        }
+    }
 }
 
 /// CRC polynomial, programmed into `CRC_TYPE` of the MODE register.
@@ -331,7 +353,26 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, WordLength};
+
+    #[test]
+    fn decode_sample_handles_each_word_length() {
+        assert_eq!(
+            WordLength::Bits24.decode_sample(&[0x12, 0x34, 0x56]),
+            0x0012_3456
+        );
+        assert_eq!(WordLength::Bits24.decode_sample(&[0xFF, 0xFF, 0xFF]), -1);
+        assert_eq!(WordLength::Bits16.decode_sample(&[0x12, 0x34]), 0x1234);
+        assert_eq!(WordLength::Bits16.decode_sample(&[0xFF, 0xFF]), -1);
+        assert_eq!(
+            WordLength::Bits32ZeroPad.decode_sample(&[0x12, 0x34, 0x56, 0x00]),
+            0x0012_3456
+        );
+        assert_eq!(
+            WordLength::Bits32SignExtend.decode_sample(&[0xFF, 0xFF, 0xFF, 0xFF]),
+            -1
+        );
+    }
 
     #[test]
     fn default_serializes_to_reset_values() {
