@@ -124,7 +124,7 @@ impl sealed::State for CurrentDetect {}
 /// [crate-level documentation](crate) for details.
 pub struct Ads131m08<S, State = Unconfigured> {
     spi: S,
-    format: frame::FrameFormat,
+    format: self::frame::FrameFormat,
     word_length: WordLength,
     _state: PhantomData<State>,
 }
@@ -137,7 +137,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     pub const fn new(spi: S) -> Self {
         Self {
             spi,
-            format: frame::FrameFormat::reset_default(),
+            format: self::frame::FrameFormat::reset_default(),
             word_length: WordLength::Bits24,
             _state: PhantomData,
         }
@@ -155,11 +155,11 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// Returns an error if SPI communication fails.
     pub fn reset_device_start(&mut self) -> Result<(), CommunicationError<S::Error>> {
         // As per the datasheet, a reset command must always use a full frame.
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(
+        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
+        let len = self::frame::build(
             self.format,
-            &[command::RESET],
-            frame::FULL_FRAME_WORDS,
+            &[self::command::RESET],
+            self::frame::FULL_FRAME_WORDS,
             &mut buf,
         );
         let (out, _) = buf.split_at(len);
@@ -184,13 +184,19 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         )]
         const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
 
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(self.format, &[command::NULL], 0, &mut buf);
+        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
+        let len = self::frame::build(
+            self.format,
+            &[self::command::NULL],
+            self::frame::FULL_FRAME_WORDS,
+            &mut buf,
+        );
         let (rx, _) = buf.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let response = frame::read_word(rx, self.format.word_bytes(), 0);
+        let payload = self::frame::verify_output(self.format, rx)?;
+        let response = self::frame::read_word(payload, self.format.word_bytes(), 0);
         if response == EXPECTED_RESPONSE {
             Ok(Ok(()))
         } else {
@@ -218,21 +224,21 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     ) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
         let image = config.to_registers();
 
-        let mut words = [0u16; 1 + frame::WRITABLE_REGISTERS];
+        let mut words = [0u16; 1 + self::frame::WRITABLE_REGISTERS];
         let [cmd, data @ ..] = &mut words;
-        *cmd = command::wreg(register::MODE, reg_count(image.len()));
+        *cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
         data.copy_from_slice(&image);
 
-        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
-        let len = frame::build(self.format, &words, frame::FULL_FRAME_WORDS, &mut buf);
+        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
+        let len = self::frame::build(self.format, &words, self::frame::FULL_FRAME_WORDS, &mut buf);
         let (out, _) = buf.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
         self.format = config.frame_format();
         self.word_length = config.word_length;
 
-        let mut readback = [0u16; frame::WRITABLE_REGISTERS];
-        self.read_registers(register::MODE, &mut readback)?;
+        let mut readback = [0u16; self::frame::WRITABLE_REGISTERS];
+        self.read_registers(self::register::MODE, &mut readback)?;
         if readback == image {
             Ok(Ads131m08 {
                 spi: self.spi,
@@ -255,8 +261,8 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     pub fn lock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
-        self.write_command(command::LOCK)?;
-        let status = Status(self.read_single_register(register::STATUS)?);
+        self.write_command(self::command::LOCK)?;
+        let status = Status(self.read_single_register(self::register::STATUS)?);
         if status.locked() {
             Ok(Ok(()))
         } else {
@@ -272,8 +278,8 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     pub fn unlock_registers(
         &mut self,
     ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
-        self.write_command(command::UNLOCK)?;
-        let status = Status(self.read_single_register(register::STATUS)?);
+        self.write_command(self::command::UNLOCK)?;
+        let status = Status(self.read_single_register(self::register::STATUS)?);
         if status.locked() {
             Ok(Err(LockError))
         } else {
@@ -287,7 +293,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     ///
     /// Returns an error if SPI communication fails.
     pub fn standby(&mut self) -> Result<(), CommunicationError<S::Error>> {
-        self.write_command(command::STANDBY)
+        self.write_command(self::command::STANDBY)
     }
 
     /// Wakes the device from standby mode to conversion mode.
@@ -296,7 +302,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     ///
     /// Returns an error if SPI communication fails.
     pub fn wakeup(&mut self) -> Result<(), CommunicationError<S::Error>> {
-        self.write_command(command::WAKEUP)
+        self.write_command(self::command::WAKEUP)
     }
 
     /// Sets the PGA gain for a single channel.
@@ -313,12 +319,12 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         gain: Gain,
     ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
         debug_assert!(channel < CHANNELS, "channel out of range");
-        let addr = if channel < register::CHANNELS_PER_GAIN_REGISTER {
-            register::GAIN1
+        let addr = if channel < self::register::CHANNELS_PER_GAIN_REGISTER {
+            self::register::GAIN1
         } else {
-            register::GAIN2
+            self::register::GAIN2
         };
-        let shift = 4 * (channel % register::CHANNELS_PER_GAIN_REGISTER);
+        let shift = 4 * (channel % self::register::CHANNELS_PER_GAIN_REGISTER);
         let current = self.read_single_register(addr)?;
         let updated = (current & !(0b111 << shift)) | (gain.code() << shift);
         self.write_single_register(addr, updated)
@@ -342,8 +348,8 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         mut self,
         config: CurrentDetectConfig,
     ) -> Result<Ads131m08<S, CurrentDetect>, ConfigError<S::Error>> {
-        let cfg = self.read_single_register(register::CFG)?;
-        let thr_lsb = self.read_single_register(register::THRESHOLD_LSB)?;
+        let cfg = self.read_single_register(self::register::CFG)?;
+        let thr_lsb = self.read_single_register(self::register::THRESHOLD_LSB)?;
 
         // Keep the global-chop bits (12:8); replace the current-detect byte.
         let new_cfg = (cfg & 0x1F00) | config.cfg_bits();
@@ -351,10 +357,10 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         let new_thr_lsb = config.threshold_lsb_high() | (thr_lsb & 0x000F);
         let block = [new_cfg, config.threshold_msb(), new_thr_lsb];
 
-        if self.write_registers(register::CFG, &block)?.is_err() {
+        if self.write_registers(self::register::CFG, &block)?.is_err() {
             return Err(ConfigError::Verify);
         }
-        self.write_command(command::STANDBY)?;
+        self.write_command(self::command::STANDBY)?;
         Ok(Ads131m08 {
             spi: self.spi,
             format: self.format,
@@ -377,21 +383,21 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         &mut self,
         channels: &mut [i32; CHANNELS],
     ) -> Result<Status, CommunicationError<S::Error>> {
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(
+        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
+        let len = self::frame::build(
             self.format,
-            &[command::NULL],
-            frame::FULL_FRAME_WORDS,
+            &[self::command::NULL],
+            self::frame::FULL_FRAME_WORDS,
             &mut buf,
         );
         let (rx, _) = buf.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let payload = frame::verify_output(self.format, rx)?;
+        let payload = self::frame::verify_output(self.format, rx)?;
 
         let word_bytes = self.word_length.word_bytes();
-        let status = Status(frame::read_word(payload, word_bytes, 0));
+        let status = Status(self::frame::read_word(payload, word_bytes, 0));
         // The frame always carries one data word per channel regardless of
         // CHx_EN; disabled channels simply report stale data.
         let (_response, channel_words) = payload.split_at(word_bytes);
@@ -435,14 +441,14 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
     /// Returns an error if SPI communication fails or the register does not
     /// read back as written.
     pub fn exit(mut self) -> Result<Ads131m08<S, Ready>, ConfigError<S::Error>> {
-        let cfg = self.read_single_register(register::CFG)?;
+        let cfg = self.read_single_register(self::register::CFG)?;
         if self
-            .write_single_register(register::CFG, cfg & !1)?
+            .write_single_register(self::register::CFG, cfg & !1)?
             .is_err()
         {
             return Err(ConfigError::Verify);
         }
-        self.write_command(command::WAKEUP)?;
+        self.write_command(self::command::WAKEUP)?;
         Ok(Ads131m08 {
             spi: self.spi,
             format: self.format,
@@ -459,13 +465,13 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
     ///
     /// Returns an error if SPI communication fails.
     pub fn read_id(&mut self) -> Result<Id, CommunicationError<S::Error>> {
-        self.read_single_register(register::ID).map(Id)
+        self.read_single_register(self::register::ID).map(Id)
     }
 
     /// Sends a single command in a short frame, clocking out no ADC data.
     fn write_command(&mut self, command: u16) -> Result<(), CommunicationError<S::Error>> {
-        let mut buf = [0u8; frame::MAX_FRAME_BYTES];
-        let len = frame::build(self.format, &[command], 0, &mut buf);
+        let mut buf = [0u8; self::frame::MAX_FRAME_BYTES];
+        let len = self::frame::build(self.format, &[command], 0, &mut buf);
         let (out, _) = buf.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)
     }
@@ -489,24 +495,24 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         out: &mut [u16],
     ) -> Result<(), CommunicationError<S::Error>> {
         let count = out.len();
-        self.write_command(command::rreg(addr, reg_count(count)))?;
+        self.write_command(self::command::rreg(addr, reg_count(count)))?;
 
         let (skip, total_words) = if count == 1 {
-            (0, frame::FULL_FRAME_WORDS)
+            (0, self::frame::FULL_FRAME_WORDS)
         } else {
             (1, 1 + count + 1)
         };
-        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
-        let len = frame::build(self.format, &[command::NULL], total_words, &mut buf);
+        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
+        let len = self::frame::build(self.format, &[self::command::NULL], total_words, &mut buf);
         let (rx, _) = buf.split_at_mut(len);
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        frame::verify_output(self.format, rx)?;
+        self::frame::verify_output(self.format, rx)?;
 
         let word_bytes = self.format.word_bytes();
         for (i, slot) in out.iter_mut().enumerate() {
-            *slot = frame::read_word(rx, word_bytes, skip + i);
+            *slot = self::frame::read_word(rx, word_bytes, skip + i);
         }
         Ok(())
     }
@@ -527,19 +533,19 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         values: &[u16],
     ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
         let count = values.len();
-        let mut words = [0u16; 1 + frame::WRITABLE_REGISTERS];
+        let mut words = [0u16; 1 + self::frame::WRITABLE_REGISTERS];
         let [cmd, data @ ..] = &mut words;
-        *cmd = command::wreg(addr, reg_count(count));
+        *cmd = self::command::wreg(addr, reg_count(count));
         let (data, _) = data.split_at_mut(count);
         data.copy_from_slice(values);
 
         let (frame_words, _) = words.split_at(count + 1);
-        let mut buf = [0u8; frame::MAX_REGISTER_FRAME_BYTES];
-        let len = frame::build(self.format, frame_words, frame::FULL_FRAME_WORDS, &mut buf);
+        let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
+        let len = self::frame::build(self.format, frame_words, self::frame::FULL_FRAME_WORDS, &mut buf);
         let (out, _) = buf.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
-        let mut readback = [0u16; frame::WRITABLE_REGISTERS];
+        let mut readback = [0u16; self::frame::WRITABLE_REGISTERS];
         let (readback, _) = readback.split_at_mut(count);
         self.read_registers(addr, readback)?;
         if readback == values {
@@ -556,6 +562,6 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
     reason = "count is bounded by WRITABLE_REGISTERS (47)"
 )]
 const fn reg_count(count: usize) -> u8 {
-    debug_assert!(count >= 1 && count <= frame::WRITABLE_REGISTERS);
+    debug_assert!(count >= 1 && count <= self::frame::WRITABLE_REGISTERS);
     count as u8
 }

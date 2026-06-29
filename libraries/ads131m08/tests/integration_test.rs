@@ -12,7 +12,6 @@ type Txn = SpiTransaction<u8>;
 const WORD_BYTES: usize = 3;
 const FULL_FRAME_BYTES: usize = 10 * WORD_BYTES;
 
-const NULL: u16 = 0x0000;
 const RESET: u16 = 0x0011;
 const LOCK: u16 = 0x0555;
 const UNLOCK: u16 = 0x0666;
@@ -171,7 +170,9 @@ fn write_block(addr: u16, count: u16, values: &[u16]) -> Vec<Txn> {
     for &value in values {
         block.extend_from_slice(&word(value));
     }
-    block.resize(FULL_FRAME_BYTES, 0);
+    // The driver pads a register write to at least a full frame. Larger blocks
+    // keep their own length, so pad up rather than resize (which truncates).
+    block.resize(block.len().max(FULL_FRAME_BYTES), 0);
     let mut txns = write(block);
     txns.extend(read_block(addr, count, values));
     txns
@@ -216,7 +217,10 @@ fn reset_start_sends_full_frame() {
 
 #[test]
 fn reset_complete_recognizes_acknowledgment() {
-    let txns = transfer(word(NULL).to_vec(), vec![0xFF, 0x28, 0x00]);
+    // The reset response (0xFF20 | channel count) arrives in a full data frame.
+    let mut words = vec![0xFF28u16];
+    words.resize(9, 0);
+    let txns = transfer(vec![0; FULL_FRAME_BYTES], response(&words));
     run(&txns, |mut device| {
         let Ok(Ok(())) = device.reset_device_complete() else {
             panic!("reset not acknowledged");

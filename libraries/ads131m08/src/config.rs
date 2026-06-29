@@ -689,7 +689,8 @@ impl Config {
         let (delay, gc_en) = self
             .global_chop
             .map_or((DEFAULT_DELAY, 0), |delay| (delay.code(), 1 << 8));
-        // Current-detect fields are added by a later task.
+        // CD_EN and the current-detect fields stay clear here; they are set at
+        // runtime by enter_current_detect, not as part of the static config.
         (delay << 9) | gc_en
     }
 
