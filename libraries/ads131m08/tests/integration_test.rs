@@ -185,6 +185,26 @@ fn run(txns: &[Txn], body: impl FnOnce(Ads131m08<Spi>)) {
 }
 
 #[test]
+fn pulse_reset_drives_pin_low_then_high() {
+    use ads131m08::pulse_reset;
+    use embedded_hal_mock::eh1::delay::NoopDelay;
+    use embedded_hal_mock::eh1::digital::{
+        Mock as PinMock, State as PinState, Transaction as PinTransaction,
+    };
+
+    let expectations = [
+        PinTransaction::set(PinState::Low),
+        PinTransaction::set(PinState::High),
+    ];
+    let mut pin = PinMock::new(&expectations);
+    let mut delay = NoopDelay::new();
+    let Ok(()) = pulse_reset(&mut pin, &mut delay) else {
+        panic!("pulse_reset failed");
+    };
+    pin.done();
+}
+
+#[test]
 fn reset_start_sends_full_frame() {
     let txns = write(full_command(RESET));
     run(&txns, |mut device| {

@@ -31,6 +31,8 @@
 
 use core::marker::PhantomData;
 
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiDevice;
 
 pub use self::config::{
@@ -61,6 +63,25 @@ pub const RESET_PULSE_DURATION_US: u16 = 1500;
 /// operation, in microseconds.
 pub const REGISTER_ACQUISITION_TIME_US: u16 = 5;
 const CHANNELS: usize = 8;
+
+/// Drives a hardware reset by pulsing the `SYNC/RESET` pin low.
+///
+/// Holds the pin low for [`RESET_PULSE_DURATION_US`], releases it, then waits
+/// [`REGISTER_ACQUISITION_TIME_US`] for the registers to settle. This is an
+/// optional convenience for callers that wire `SYNC/RESET` to a GPIO. It is
+/// independent of the SPI driver, so `DRDY` and `SYNC/RESET` routing stay
+/// flexible (for example a port expander or a shared interrupt line).
+///
+/// # Errors
+///
+/// Returns the pin's error if driving it fails.
+pub fn pulse_reset<P: OutputPin, D: DelayNs>(reset: &mut P, delay: &mut D) -> Result<(), P::Error> {
+    reset.set_low()?;
+    delay.delay_us(u32::from(RESET_PULSE_DURATION_US));
+    reset.set_high()?;
+    delay.delay_us(u32::from(REGISTER_ACQUISITION_TIME_US));
+    Ok(())
+}
 
 mod sealed {
     pub trait State {}
