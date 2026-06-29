@@ -541,7 +541,12 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
 
         let (frame_words, _) = words.split_at(count + 1);
         let mut buf = [0u8; self::frame::MAX_REGISTER_FRAME_BYTES];
-        let len = self::frame::build(self.format, frame_words, self::frame::FULL_FRAME_WORDS, &mut buf);
+        let len = self::frame::build(
+            self.format,
+            frame_words,
+            self::frame::FULL_FRAME_WORDS,
+            &mut buf,
+        );
         let (out, _) = buf.split_at(len);
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
