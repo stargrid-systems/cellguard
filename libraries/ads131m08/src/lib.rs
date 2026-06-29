@@ -2,6 +2,13 @@
 //!
 //! SPI Mode: Mode 1 (CPOL = 0, CPHA = 1).
 //!
+//! ## Lifecycle
+//!
+//! The driver tracks the device lifecycle in its `State` type parameter. A new
+//! driver starts [`Unconfigured`]. Calling [`configure`][Ads131m08::configure]
+//! moves it to [`Ready`], where conversion data can be read. This makes it a
+//! compile error to read data from a device that was never configured.
+//!
 //! ## Data ready
 //!
 //! The `DRDY` pin is an active low output that indicates when new conversion
@@ -11,6 +18,8 @@
 //! mode.
 
 #![no_std]
+
+use core::marker::PhantomData;
 
 use embedded_hal::spi::SpiDevice;
 
@@ -37,21 +46,39 @@ pub const RESET_PULSE_DURATION_US: u16 = 1500;
 pub const REGISTER_ACQUISITION_TIME_US: u16 = 5;
 const CHANNELS: usize = 8;
 
-pub struct Ads131m08<S> {
-    spi: S,
-    format: frame::FrameFormat,
+mod sealed {
+    pub trait State {}
 }
 
-impl<S: SpiDevice> Ads131m08<S> {
+/// Lifecycle state: the device has not been configured yet.
+pub struct Unconfigured;
+
+/// Lifecycle state: the device is configured and can stream conversion data.
+pub struct Ready;
+
+impl sealed::State for Unconfigured {}
+impl sealed::State for Ready {}
+
+/// Driver for the Texas Instruments ADS131M08 ADC.
+///
+/// The `State` type parameter tracks the device lifecycle. See the
+/// [crate-level documentation](crate) for details.
+pub struct Ads131m08<S, State = Unconfigured> {
+    spi: S,
+    format: frame::FrameFormat,
+    _state: PhantomData<State>,
+}
+
+impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// Creates a new driver instance.
     ///
     /// The driver assumes the device is in its post-reset state: 24-bit words
-    /// with input CRC disabled. Call [`configure`][Self::configure] to change
-    /// the frame format.
+    /// with input CRC disabled.
     pub const fn new(spi: S) -> Self {
         Self {
             spi,
             format: frame::FrameFormat::reset_default(),
+            _state: PhantomData,
         }
     }
 
@@ -98,6 +125,20 @@ impl<S: SpiDevice> Ads131m08<S> {
         }
     }
 
+    /// Configures the device and transitions it to [`Ready`].
+    ///
+    /// Register configuration is applied by a later step. For now this performs
+    /// the lifecycle transition only.
+    pub fn configure(self) -> Ads131m08<S, Ready> {
+        Ads131m08 {
+            spi: self.spi,
+            format: self.format,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// Locks the device registers.
     pub fn lock_registers(
         &mut self,
@@ -125,22 +166,13 @@ impl<S: SpiDevice> Ads131m08<S> {
     }
 
     /// Places the device into standby mode.
-    ///
-    /// Returns the status register corresponding to the previous operation.
     pub fn standby(&mut self) -> Result<(), CommunicationError<S::Error>> {
         self.write_command(command::STANDBY)
     }
 
     /// Wakes the device from standby mode to conversion mode.
-    ///
-    /// Returns the status register corresponding to the previous operation.
     pub fn wakeup(&mut self) -> Result<(), CommunicationError<S::Error>> {
         self.write_command(command::WAKEUP)
-    }
-
-    /// Reads the device ID register.
-    pub fn read_id(&mut self) -> Result<Id, CommunicationError<S::Error>> {
-        self.read_single_register(register::ID).map(Id)
     }
 
     /// Reads conversion data from all channels into the provided array.
@@ -171,6 +203,13 @@ impl<S: SpiDevice> Ads131m08<S> {
         }
 
         Ok(())
+    }
+}
+
+impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
+    /// Reads the device ID register.
+    pub fn read_id(&mut self) -> Result<Id, CommunicationError<S::Error>> {
+        self.read_single_register(register::ID).map(Id)
     }
 
     /// Sends a single command in a short frame, clocking out no ADC data.

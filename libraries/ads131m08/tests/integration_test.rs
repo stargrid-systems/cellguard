@@ -100,17 +100,17 @@ fn read_single(addr: u16, value: u16) -> Vec<Txn> {
     txns
 }
 
-fn run(txns: &[Txn], body: impl FnOnce(&mut Ads131m08<Spi>)) {
+fn run(txns: &[Txn], body: impl FnOnce(Ads131m08<Spi>)) {
     let mut spi = SpiMock::new(txns);
-    let mut device = Ads131m08::new(spi.clone());
-    body(&mut device);
+    let device = Ads131m08::new(spi.clone());
+    body(device);
     spi.done();
 }
 
 #[test]
 fn reset_start_sends_full_frame() {
     let txns = write(full_command(RESET));
-    run(&txns, |device| {
+    run(&txns, |mut device| {
         let Ok(()) = device.reset_device_start() else {
             panic!("reset_device_start failed");
         };
@@ -120,7 +120,7 @@ fn reset_start_sends_full_frame() {
 #[test]
 fn reset_complete_recognizes_acknowledgment() {
     let txns = transfer(word(NULL).to_vec(), vec![0xFF, 0x28, 0x00]);
-    run(&txns, |device| {
+    run(&txns, |mut device| {
         let Ok(Ok(())) = device.reset_device_complete() else {
             panic!("reset not acknowledged");
         };
@@ -130,7 +130,7 @@ fn reset_complete_recognizes_acknowledgment() {
 #[test]
 fn read_id_reports_channel_count() {
     let txns = read_single(ID_ADDR, 0x2800);
-    run(&txns, |device| {
+    run(&txns, |mut device| {
         let Ok(id) = device.read_id() else {
             panic!("read_id failed");
         };
@@ -143,6 +143,7 @@ fn read_data_decodes_all_channels() {
     let samples = [1, -1, 0x7F_FFFF, -0x80_0000, 0x1234, -0x1234, 2, -2];
     let txns = transfer(vec![0; FULL_FRAME_BYTES], data_response(0x0500, samples));
     run(&txns, |device| {
+        let mut device = device.configure();
         let mut channels = [0i32; 8];
         let Ok(()) = device.read_data(&mut channels) else {
             panic!("read_data failed");
@@ -156,6 +157,7 @@ fn lock_confirms_via_status_register() {
     let mut txns = write(word(LOCK).to_vec());
     txns.extend(read_single(STATUS_ADDR, 0x8000));
     run(&txns, |device| {
+        let mut device = device.configure();
         let Ok(Ok(())) = device.lock_registers() else {
             panic!("lock not confirmed");
         };
@@ -167,6 +169,7 @@ fn unlock_confirms_via_status_register() {
     let mut txns = write(word(UNLOCK).to_vec());
     txns.extend(read_single(STATUS_ADDR, 0x0000));
     run(&txns, |device| {
+        let mut device = device.configure();
         let Ok(Ok(())) = device.unlock_registers() else {
             panic!("unlock not confirmed");
         };
