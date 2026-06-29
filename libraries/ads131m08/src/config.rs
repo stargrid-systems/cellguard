@@ -134,7 +134,7 @@ pub enum Gain {
 }
 
 impl Gain {
-    const fn code(self) -> u16 {
+    pub(crate) const fn code(self) -> u16 {
         match self {
             Self::X1 => 0,
             Self::X2 => 1,

@@ -207,6 +207,27 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         self.write_command(command::WAKEUP)
     }
 
+    /// Sets the PGA gain for a single channel.
+    ///
+    /// This reads the relevant GAIN register, replaces the channel's field, and
+    /// writes it back, leaving the other channels untouched.
+    pub fn set_gain(
+        &mut self,
+        channel: usize,
+        gain: Gain,
+    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
+        debug_assert!(channel < CHANNELS, "channel out of range");
+        let addr = if channel < register::CHANNELS_PER_GAIN_REGISTER {
+            register::GAIN1
+        } else {
+            register::GAIN2
+        };
+        let shift = 4 * (channel % register::CHANNELS_PER_GAIN_REGISTER);
+        let current = self.read_single_register(addr)?;
+        let updated = (current & !(0b111 << shift)) | (gain.code() << shift);
+        self.write_single_register(addr, updated)
+    }
+
     /// Reads conversion data from all channels into the provided array.
     pub fn read_data(
         &mut self,

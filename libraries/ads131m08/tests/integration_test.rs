@@ -19,6 +19,7 @@ const UNLOCK: u16 = 0x0666;
 
 const ID_ADDR: u16 = 0x00;
 const STATUS_ADDR: u16 = 0x01;
+const GAIN2_ADDR: u16 = 0x05;
 
 const fn rreg(addr: u16, count: u16) -> u16 {
     0xA000 | (addr << 7) | (count - 1)
@@ -97,6 +98,18 @@ fn read_single(addr: u16, value: u16) -> Vec<Txn> {
     let mut words = vec![value];
     words.resize(9, 0);
     txns.extend(transfer(vec![0; FULL_FRAME_BYTES], response(&words)));
+    txns
+}
+
+/// Transactions for writing a single register: the WREG full frame, then the
+/// verifying readback.
+fn write_single(addr: u16, value: u16) -> Vec<Txn> {
+    let wreg = 0x6000 | (addr << 7);
+    let mut block = word(wreg).to_vec();
+    block.extend_from_slice(&word(value));
+    block.resize(FULL_FRAME_BYTES, 0);
+    let mut txns = write(block);
+    txns.extend(read_single(addr, value));
     txns
 }
 
@@ -181,6 +194,24 @@ fn configure_writes_block_and_verifies() {
     run(&txns, |device| {
         let Ok(_device) = device.configure(Config::default()) else {
             panic!("configure failed");
+        };
+    });
+}
+
+#[test]
+fn set_gain_does_read_modify_write() {
+    use ads131m08::Gain;
+
+    // Channel 5 lives in GAIN2 at bit offset 4. Gain X8 is code 0b011.
+    let mut txns = configure_default();
+    txns.extend(read_single(GAIN2_ADDR, 0x0000));
+    txns.extend(write_single(GAIN2_ADDR, 0x0030));
+    run(&txns, |device| {
+        let Ok(mut device) = device.configure(Config::default()) else {
+            panic!("configure failed");
+        };
+        let Ok(Ok(())) = device.set_gain(5, Gain::X8) else {
+            panic!("set_gain failed");
         };
     });
 }
