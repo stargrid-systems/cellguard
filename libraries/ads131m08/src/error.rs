@@ -23,14 +23,47 @@ pub enum CommunicationErrorKind {
     CrcMismatch,
 }
 
-/// Error indicating that the device did not reset as expected.
-pub struct ResetError;
+/// The device did not reset as expected.
+pub enum ResetError<E: SpiError> {
+    /// SPI communication failed.
+    Communication(CommunicationError<E>),
+    /// The device did not report the expected post-reset response.
+    NotReset,
+}
 
-/// Registers failed to lock.
-pub struct LockError;
+impl<E: SpiError> From<CommunicationError<E>> for ResetError<E> {
+    fn from(err: CommunicationError<E>) -> Self {
+        Self::Communication(err)
+    }
+}
+
+/// The registers failed to lock or unlock.
+pub enum LockError<E: SpiError> {
+    /// SPI communication failed.
+    Communication(CommunicationError<E>),
+    /// The lock state did not change as requested.
+    Failed,
+}
+
+impl<E: SpiError> From<CommunicationError<E>> for LockError<E> {
+    fn from(err: CommunicationError<E>) -> Self {
+        Self::Communication(err)
+    }
+}
 
 /// Failed to write to registers.
-pub struct WriteError;
+pub enum WriteError<E: SpiError> {
+    /// SPI communication failed.
+    Communication(CommunicationError<E>),
+    /// The registers did not read back as written.
+    Verify,
+}
+
+impl<E: SpiError> From<CommunicationError<E>> for WriteError<E> {
+    fn from(err: CommunicationError<E>) -> Self {
+        Self::Communication(err)
+    }
+}
 
 /// Failed to configure the device.
 pub enum ConfigError<E: SpiError> {
@@ -43,6 +76,15 @@ pub enum ConfigError<E: SpiError> {
 impl<E: SpiError> From<CommunicationError<E>> for ConfigError<E> {
     fn from(err: CommunicationError<E>) -> Self {
         Self::Communication(err)
+    }
+}
+
+impl<E: SpiError> From<WriteError<E>> for ConfigError<E> {
+    fn from(err: WriteError<E>) -> Self {
+        match err {
+            WriteError::Communication(err) => Self::Communication(err),
+            WriteError::Verify => Self::Verify,
+        }
     }
 }
 

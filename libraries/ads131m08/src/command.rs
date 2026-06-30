@@ -15,28 +15,38 @@ pub const UNLOCK: u16 = 0b0000_0110_0110_0110;
 /// The RREG is used to read the device registers.
 pub const RREG: u16 = 0b1010_0000_0000_0000;
 
-/// Read `n` contiguous registers starting at address `addr`.
-pub const fn rreg(addr: u8, n: u8) -> u16 {
-    xreg(RREG, addr as u16, n as u16)
+/// Read `N` contiguous registers starting at address `addr`.
+pub const fn rreg<const N: usize>(addr: u8) -> u16 {
+    xreg::<N>(RREG, addr)
 }
 
 /// The WREG command allows writing an arbitrary number of contiguous device
 /// registers.
 pub const WREG: u16 = 0b0110_0000_0000_0000;
 
-/// Write `n` contiguous registers starting at address `addr`.
-pub const fn wreg(addr: u8, n: u8) -> u16 {
-    xreg(WREG, addr as u16, n as u16)
+/// Write `N` contiguous registers starting at address `addr`.
+pub const fn wreg<const N: usize>(addr: u8) -> u16 {
+    xreg::<N>(WREG, addr)
 }
 
 // 0bccca_aaaa_annn_nnnn
 const ADDR_BITS: u16 = 6;
 const N_BITS: u16 = 7;
 
-/// Returns a read / write register command.
-const fn xreg(cmd: u16, addr: u16, n: u16) -> u16 {
-    debug_assert!(addr < (1 << ADDR_BITS), "register address out of range");
-    debug_assert!(n > 0, "number of registers must be at least 1");
-    debug_assert!((n - 1) < (1 << N_BITS), "too many registers requested");
-    cmd | (addr << N_BITS) | (n - 1)
+/// Returns a read / write register command for a block of `N` registers.
+///
+/// `N` is a const generic, so the count bound is checked at compile time. Any
+/// caller that asks for zero or more than `2^N_BITS` registers fails to build.
+const fn xreg<const N: usize>(cmd: u16, addr: u8) -> u16 {
+    const { assert!(N >= 1 && N <= 1 << N_BITS, "register count out of range") };
+    debug_assert!(
+        (addr as u16) < (1 << ADDR_BITS),
+        "register address out of range"
+    );
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the const assert above proves N <= 2^N_BITS, well within u16"
+    )]
+    let n = N as u16;
+    cmd | ((addr as u16) << N_BITS) | (n - 1)
 }

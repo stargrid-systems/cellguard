@@ -222,7 +222,7 @@ fn reset_complete_recognizes_acknowledgment() {
     words.resize(9, 0);
     let txns = transfer(vec![0; FULL_FRAME_BYTES], response(&words));
     run(&txns, |mut device| {
-        let Ok(Ok(())) = device.reset_device_complete() else {
+        let Ok(()) = device.reset_device_complete() else {
             panic!("reset not acknowledged");
         };
     });
@@ -298,7 +298,7 @@ fn set_gain_does_read_modify_write() {
         let Ok(mut device) = device.configure(Config::default()) else {
             panic!("configure failed");
         };
-        let Ok(Ok(())) = device.set_gain(5, Gain::X8) else {
+        let Ok(()) = device.set_gain(5, Gain::X8) else {
             panic!("set_gain failed");
         };
     });
@@ -396,7 +396,7 @@ fn lock_confirms_via_status_register() {
         let Ok(mut device) = device.configure(Config::default()) else {
             panic!("configure failed");
         };
-        let Ok(Ok(())) = device.lock_registers() else {
+        let Ok(()) = device.lock_registers() else {
             panic!("lock not confirmed");
         };
     });
@@ -411,7 +411,7 @@ fn unlock_confirms_via_status_register() {
         let Ok(mut device) = device.configure(Config::default()) else {
             panic!("configure failed");
         };
-        let Ok(Ok(())) = device.unlock_registers() else {
+        let Ok(()) = device.unlock_registers() else {
             panic!("unlock not confirmed");
         };
     });

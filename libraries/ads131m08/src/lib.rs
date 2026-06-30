@@ -209,15 +209,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// # Errors
     ///
     /// Returns an error if SPI communication fails.
-    pub fn reset_device_complete(
-        &mut self,
-    ) -> Result<Result<(), ResetError>, CommunicationError<S::Error>> {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "CHANNELS is 8, well within u16"
-        )]
-        const EXPECTED_RESPONSE: u16 = 0xFF20 | CHANNELS as u16;
-
+    pub fn reset_device_complete(&mut self) -> Result<(), ResetError<S::Error>> {
         let len = self::frame::build(
             self.format,
             self::command::NULL,
@@ -229,12 +221,15 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
         self.spi
             .transfer_in_place(rx)
             .map_err(CommunicationError::spi)?;
-        let payload = self::frame::verify_output(self.format, rx)?;
+        let payload =
+            self::frame::verify_output(self.format, rx).map_err(CommunicationError::from)?;
         let response = self::frame::read_word(payload, self.format.word_bytes(), 0);
-        if response == EXPECTED_RESPONSE {
-            Ok(Ok(()))
+        // Post-reset the device reports 0xFF20 with the channel count in the low
+        // bits. Comparing in usize avoids narrowing the count to u16.
+        if usize::from(response) == 0xFF20 | CHANNELS {
+            Ok(())
         } else {
-            Ok(Err(ResetError))
+            Err(ResetError::NotReset)
         }
     }
 
@@ -258,7 +253,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     /// not read back as written.
     #[expect(
         clippy::result_large_err,
-        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+        reason = "the driver is returned by value for recovery"
     )]
     pub fn configure(mut self, config: Config) -> TransitionResult<S, Ready, Unconfigured> {
         match self.try_configure(config) {
@@ -270,7 +265,7 @@ impl<S: SpiDevice> Ads131m08<S, Unconfigured> {
     fn try_configure(&mut self, config: Config) -> Result<(), ConfigError<S::Error>> {
         let image = config.to_registers();
 
-        let cmd = self::command::wreg(self::register::MODE, reg_count(image.len()));
+        let cmd = self::command::wreg::<{ self::frame::WRITABLE_REGISTERS }>(self::register::MODE);
         let len = self::frame::build(
             self.format,
             cmd,
@@ -301,15 +296,13 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// # Errors
     ///
     /// Returns an error if SPI communication fails.
-    pub fn lock_registers(
-        &mut self,
-    ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
+    pub fn lock_registers(&mut self) -> Result<(), LockError<S::Error>> {
         self.write_command(self::command::LOCK)?;
         let status = Status(self.read_single_register(self::register::STATUS)?);
         if status.locked() {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(LockError))
+            Err(LockError::Failed)
         }
     }
 
@@ -318,15 +311,13 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// # Errors
     ///
     /// Returns an error if SPI communication fails.
-    pub fn unlock_registers(
-        &mut self,
-    ) -> Result<Result<(), LockError>, CommunicationError<S::Error>> {
+    pub fn unlock_registers(&mut self) -> Result<(), LockError<S::Error>> {
         self.write_command(self::command::UNLOCK)?;
         let status = Status(self.read_single_register(self::register::STATUS)?);
         if status.locked() {
-            Ok(Err(LockError))
+            Err(LockError::Failed)
         } else {
-            Ok(Ok(()))
+            Ok(())
         }
     }
 
@@ -356,11 +347,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// # Errors
     ///
     /// Returns an error if SPI communication fails.
-    pub fn set_gain(
-        &mut self,
-        channel: usize,
-        gain: Gain,
-    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
+    pub fn set_gain(&mut self, channel: usize, gain: Gain) -> Result<(), WriteError<S::Error>> {
         debug_assert!(channel < CHANNELS, "channel out of range");
         let addr = if channel < self::register::CHANNELS_PER_GAIN_REGISTER {
             self::register::GAIN1
@@ -393,7 +380,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// back as written.
     #[expect(
         clippy::result_large_err,
-        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+        reason = "the driver is returned by value for recovery"
     )]
     pub fn enter_current_detect(
         mut self,
@@ -418,9 +405,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         let new_thr_lsb = config.threshold_lsb_high() | (thr_lsb & 0x000F);
         let block = [new_cfg, config.threshold_msb(), new_thr_lsb];
 
-        if self.write_registers(self::register::CFG, &block)?.is_err() {
-            return Err(ConfigError::Verify);
-        }
+        self.write_registers(self::register::CFG, &block)?;
         self.write_command(self::command::STANDBY)?;
         Ok(())
     }
@@ -501,7 +486,7 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
     /// read back as written.
     #[expect(
         clippy::result_large_err,
-        reason = "the driver is returned by value for recovery; no_std rules out boxing"
+        reason = "the driver is returned by value for recovery"
     )]
     pub fn exit(mut self) -> TransitionResult<S, Ready, CurrentDetect> {
         match self.try_exit() {
@@ -512,12 +497,7 @@ impl<S: SpiDevice> Ads131m08<S, CurrentDetect> {
 
     fn try_exit(&mut self) -> Result<(), ConfigError<S::Error>> {
         let cfg = self.read_single_register(self::register::CFG)?;
-        if self
-            .write_single_register(self::register::CFG, cfg & !1)?
-            .is_err()
-        {
-            return Err(ConfigError::Verify);
-        }
+        self.write_single_register(self::register::CFG, cfg & !1)?;
         self.write_command(self::command::WAKEUP)?;
         Ok(())
     }
@@ -540,24 +520,23 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         self.spi.write(out).map_err(CommunicationError::spi)
     }
 
-    /// Reads `count` consecutive registers starting at `addr` into the reused
+    /// Reads `N` consecutive registers starting at `addr` into the reused
     /// scratch buffer and returns the word index of the first register value.
     ///
     /// A single-register read returns the value in the response word and the
     /// device still streams conversion data, so the frame is a full data frame
     /// (datasheet figure 8-23). A multi-register read prepends an
     /// acknowledgment word and suppresses conversion data (figure 8-24).
-    fn fetch_registers(
+    fn fetch_registers<const N: usize>(
         &mut self,
         addr: u8,
-        count: usize,
     ) -> Result<usize, CommunicationError<S::Error>> {
-        self.write_command(self::command::rreg(addr, reg_count(count)))?;
+        self.write_command(self::command::rreg::<N>(addr))?;
 
-        let (skip, total_words) = if count == 1 {
+        let (skip, total_words) = if N == 1 {
             (0, self::frame::FULL_FRAME_WORDS)
         } else {
-            (1, 1 + count + 1)
+            (1, 1 + N + 1)
         };
         let len = self::frame::build(
             self.format,
@@ -575,7 +554,7 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
     }
 
     fn read_single_register(&mut self, addr: u8) -> Result<u16, CommunicationError<S::Error>> {
-        let skip = self.fetch_registers(addr, 1)?;
+        let skip = self.fetch_registers::<1>(addr)?;
         Ok(self::frame::read_word(
             &self.scratch,
             self.format.word_bytes(),
@@ -583,15 +562,15 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         ))
     }
 
-    /// Reads `expected.len()` registers from `addr` and reports whether each
-    /// one matches. Compares the readback word by word in the scratch
-    /// buffer, so no separate readback array is allocated.
-    fn registers_match(
+    /// Reads `N` registers from `addr` and reports whether each one matches
+    /// `expected`. Compares the readback word by word in the scratch buffer, so
+    /// no separate readback array is allocated.
+    fn registers_match<const N: usize>(
         &mut self,
         addr: u8,
-        expected: &[u16],
+        expected: &[u16; N],
     ) -> Result<bool, CommunicationError<S::Error>> {
-        let skip = self.fetch_registers(addr, expected.len())?;
+        let skip = self.fetch_registers::<N>(addr)?;
         let word_bytes = self.format.word_bytes();
         let matches = expected.iter().enumerate().all(|(i, &value)| {
             self::frame::read_word(&self.scratch, word_bytes, skip + i) == value
@@ -599,22 +578,18 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         Ok(matches)
     }
 
-    fn write_single_register(
-        &mut self,
-        addr: u8,
-        value: u16,
-    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
+    fn write_single_register(&mut self, addr: u8, value: u16) -> Result<(), WriteError<S::Error>> {
         self.write_registers(addr, &[value])
     }
 
-    /// Writes `values` to consecutive registers starting at `addr`, then reads
-    /// the block back to confirm the write took effect.
-    fn write_registers(
+    /// Writes `N` registers to consecutive addresses starting at `addr`, then
+    /// reads the block back to confirm the write took effect.
+    fn write_registers<const N: usize>(
         &mut self,
         addr: u8,
-        values: &[u16],
-    ) -> Result<Result<(), WriteError>, CommunicationError<S::Error>> {
-        let cmd = self::command::wreg(addr, reg_count(values.len()));
+        values: &[u16; N],
+    ) -> Result<(), WriteError<S::Error>> {
+        let cmd = self::command::wreg::<N>(addr);
         let len = self::frame::build(
             self.format,
             cmd,
@@ -626,19 +601,9 @@ impl<S: SpiDevice, State: sealed::State> Ads131m08<S, State> {
         self.spi.write(out).map_err(CommunicationError::spi)?;
 
         if self.registers_match(addr, values)? {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(WriteError))
+            Err(WriteError::Verify)
         }
     }
-}
-
-/// Casts a register count to the `u8` the RREG / WREG command words expect.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "count is bounded by WRITABLE_REGISTERS (47)"
-)]
-const fn reg_count(count: usize) -> u8 {
-    debug_assert!(count >= 1 && count <= self::frame::WRITABLE_REGISTERS);
-    count as u8
 }
