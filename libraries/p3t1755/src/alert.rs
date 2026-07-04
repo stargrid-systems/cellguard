@@ -1,6 +1,6 @@
 //! Alert handling for the P3T1755 temperature sensor.
 //!
-//! The alert handling is based on the "SMBus Alert Response".
+//! The alert handling is based on the "`SMBus` Alert Response".
 
 use embedded_hal::i2c::{Error, ErrorKind, I2c, NoAcknowledgeSource};
 
@@ -33,6 +33,7 @@ impl Alert {
     }
 
     /// Returns the I2C address of the device that triggered the alert.
+    #[must_use]
     pub const fn address(self) -> Address {
         let bits = self.0 >> 1;
         // SAFETY: We only allow alerts containing valid address bits to be created.
@@ -40,6 +41,7 @@ impl Alert {
     }
 
     /// Returns the alert condition.
+    #[must_use]
     pub const fn condition(self) -> AlertCondition {
         // If the temperature is higher than THIGH, the LSB bit is 1.
         // If the temperature is lower than TLOW, the LSB bit is 0.
@@ -65,6 +67,11 @@ pub enum AlertCondition {
 /// Returns `None` if no device acknowledged the alert request (i.e. no alert is
 /// pending) or if the response doesn't correspond to a valid P3T1755 device
 /// address.
+///
+/// # Errors
+///
+/// Returns an error if the I2C read fails for a reason other than the address
+/// not being acknowledged.
 pub fn process<I: I2c>(bus: &mut I) -> Result<Option<Alert>, I::Error> {
     let mut buf = [0u8; 1];
     if let Err(err) = bus.read(0x0C, &mut buf) {

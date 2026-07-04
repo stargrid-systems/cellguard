@@ -3,6 +3,22 @@
 version = 4
 
 [[package]]
+name = "ads131m08"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+ "embedded-hal-mock",
+]
+
+[[package]]
+name = "cat25"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+ "embedded-hal-mock",
+]
+
+[[package]]
 name = "cellagent"
 version = "0.1.0"
 dependencies = [
