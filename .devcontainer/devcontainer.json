@@ -1,3 +1,11 @@
 {
-  "image": "ghcr.io/stargrid-systems/devcontainer-images/rust:1.0.0"
+  "image": "ghcr.io/stargrid-systems/devcontainer-images/rust:1.0.0",
+  // Pass the host USB bus through so avrdude/ravedude can reach the
+  // MPLAB PICkit Basic (04d8:9055) for UPDI flashing. The bind mount
+  // (rather than a fixed device path) survives re-plugging, since the
+  // /dev/bus/usb/<bus>/<dev> node number changes each time.
+  "privileged": true,
+  "mounts": [
+    { "source": "/dev/bus/usb", "target": "/dev/bus/usb", "type": "bind" }
+  ]
 }
