@@ -10,9 +10,9 @@ repository = "https://github.com/stargrid-systems/cellguard"
 [dependencies]
 # No device feature here — the per-device features below select it, so several
 # can be enabled at once (additive).
-avr-device = { version = "0.8.0" }
+avr-device = { version = "0.8" }
 embedded-hal = { version = "1", default-features = false }
-embedded-io = { version = "0.6", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
 ufmt = { version = "0.2", optional = true }
 
 [features]
@@ -25,11 +25,8 @@ avr128db48 = ["avr-device/avr128db48"]
 avr128db64 = ["avr-device/avr128db64"]
 avr128da64 = ["avr-device/avr128da64"]
 
-# avr-device 0.8 has no avr128db* devices; the stargrid fork (sibling checkout)
-# adds them. Point at that fork so this crate can be built/checked standalone
-# (with an explicit device feature).
 [patch.crates-io]
-avr-device = { path = "../../avr-device" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "cb51f5b3dd2663a4dc930fd57fec28366761c366" }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"
