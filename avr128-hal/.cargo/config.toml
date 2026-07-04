@@ -1,0 +1,7 @@
+# Allows `cargo check`/`cargo build` of this HAL on its own (avr-none target).
+[build]
+target = "avr-none"
+rustflags = ["-C", "target-cpu=avr128db64"]
+
+[unstable]
+build-std = ["core"]
