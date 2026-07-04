@@ -127,7 +127,7 @@ impl<T: TwiInstance> Twi<T> {
     fn wait_write(&self) -> Result<(), Error> {
         self.wait_until(|s| {
             s.write_done
-                .then(|| if s.nacked { Err(Error::Nack) } else { Ok(()) })
+                .then_some(if s.nacked { Err(Error::Nack) } else { Ok(()) })
         })
     }
 
