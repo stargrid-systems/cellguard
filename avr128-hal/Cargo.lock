@@ -43,7 +43,6 @@ source = "git+https://github.com/stargrid-systems/avr-device?rev=ddad6827eeb5ff6
 dependencies = [
  "anyhow",
  "atdf2svd",
- "avr-device-macros",
  "bare-metal",
  "cfg-if",
  "critical-section",
@@ -57,13 +56,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "avr-device-macros"
-version = "0.8.1"
-source = "git+https://github.com/stargrid-systems/avr-device?rev=ddad6827eeb5ff668507d3c4ff7ce0780fab16e0#ddad6827eeb5ff668507d3c4ff7ce0780fab16e0"
+name = "avr128-hal"
+version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
+ "avr-device",
+ "embedded-hal",
+ "embedded-io",
+ "ufmt",
 ]
 
 [[package]]
@@ -80,13 +79,6 @@ checksum = "5cee35f73844aa3014bb606320a6c1f010249dbdf43342fe54b5a4f6a8ed4b79"
 dependencies = [
  "memchr",
  "serde_core",
-]
-
-[[package]]
-name = "cellcore-avr128db48"
-version = "0.1.0"
-dependencies = [
- "avr-device",
 ]
 
 [[package]]
@@ -132,6 +124,18 @@ name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
+
+[[package]]
+name = "embedded-hal"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
+
+[[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
 
 [[package]]
 name = "encoding_rs"
@@ -716,6 +720,33 @@ dependencies = [
  "displaydoc",
  "zerovec",
 ]
+
+[[package]]
+name = "ufmt"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a64846ec02b57e9108d6469d98d1648782ad6bb150a95a9baac26900bbeab9d"
+dependencies = [
+ "ufmt-macros",
+ "ufmt-write",
+]
+
+[[package]]
+name = "ufmt-macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d337d3be617449165cb4633c8dece429afd83f84051024079f97ad32a9663716"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "ufmt-write"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e87a2ed6b42ec5e28cc3b94c09982969e9227600b2e3dcbc1db927a84c06bd69"
 
 [[package]]
 name = "unicode-ident"

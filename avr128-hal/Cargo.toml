@@ -1,0 +1,47 @@
+[package]
+name = "avr128-hal"
+version = "0.1.0"
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Hardware abstraction layer for the Microchip AVR128 DB family."
+repository = "https://github.com/stargrid-systems/cellguard"
+
+[dependencies]
+# No device feature here — the per-device features below select it, so several
+# can be enabled at once (additive).
+avr-device = { version = "0.8" }
+embedded-hal = { version = "1", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+ufmt = { version = "0.2", optional = true }
+
+[features]
+# Implement `ufmt::uWrite` for the USART so it can be used with `uwrite!`.
+ufmt = ["dep:ufmt"]
+# Device-support features. Each one only adds the trait impls for that device's
+# peripheral types, so enabling several together never conflicts (additive).
+avr128db48 = ["avr-device/avr128db48"]
+avr128db64 = ["avr-device/avr128db64"]
+avr128da64 = ["avr-device/avr128da64"]
+
+# avr-device 0.8 on crates.io has no avr128db*/avr128da* devices; the stargrid
+# fork adds them. Pin the fork by git rev so this crate builds/checks standalone
+# with a device feature. Keep this rev in sync with the sibling crates
+# cellagent-attiny416 and cellcore-avr128db48.
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "ddad6827eeb5ff668507d3c4ff7ce0780fab16e0" }
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[profile.dev]
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
