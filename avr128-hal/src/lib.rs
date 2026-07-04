@@ -41,3 +41,5 @@ pub mod usart;
 pub mod vref;
 pub mod wdt;
 pub mod zcd;
+
+mod wait;

@@ -2,9 +2,9 @@
 //!
 //! The AVR128 DB family boots on the internal high-frequency oscillator (OSCHF)
 //! at 4 MHz. [`set_oschf`] selects another OSCHF frequency. `OSCHFCTRLA` is
-//! configuration-change protected. The write is preceded by the CCP IOREG
-//! unlock. Both are `#[inline(always)]` so the stores stay adjacent, within the
-//! 4-cycle window.
+//! configuration-change protected. The CCP IOREG unlock and the protected write
+//! run inside [`avr_device::interrupt::free`], so an interrupt cannot land in
+//! the 4-cycle window and void the unlock.
 
 /// Internal high-frequency oscillator (OSCHF) frequency options.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,11 +59,17 @@ pub trait OscControl {
 /// Selects the internal high-frequency oscillator frequency and waits for it to
 /// stabilize. The main clock source stays OSCHF (the reset default) with no
 /// prescaler, so `CLK_PER` becomes `freq`.
+///
+/// `OSCHFCTRLA` is written whole (reset then configure). The CCP unlock and the
+/// protected write happen with interrupts masked so the unlock window cannot be
+/// interrupted.
 #[inline(always)]
 pub fn set_oschf<C: CcpUnlock, K: OscControl>(cpu: &C, clkctrl: &K, freq: HfFreq) {
-    cpu.unlock_ioreg();
-    clkctrl.write_frqsel(freq);
-    while !clkctrl.oschf_stable() {}
+    avr_device::interrupt::free(|_| {
+        cpu.unlock_ioreg();
+        clkctrl.write_frqsel(freq);
+    });
+    crate::wait::spin_until(|| clkctrl.oschf_stable());
 }
 
 macro_rules! impl_ccp_unlock {

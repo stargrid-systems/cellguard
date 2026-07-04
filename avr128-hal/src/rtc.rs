@@ -71,7 +71,8 @@ pub struct Rtc<T: RtcInstance> {
 }
 
 impl<T: RtcInstance> Rtc<T> {
-    /// Enables the RTC counting from `0` up to `period`, then wrapping.
+    /// Enables the RTC counting from `0` up to `period`, then wrapping. Writes
+    /// `CLKSEL`/`PER`/`CTRLA` whole (reset then configure).
     #[must_use]
     pub fn new(instance: T, source: ClockSource, prescaler: Prescaler, period: u16) -> Self {
         instance.configure(source.code(), prescaler.code(), period);
@@ -96,9 +97,9 @@ macro_rules! impl_rtc_instance {
                 self.clksel().write(|w|
                     // SAFETY: `source_code` is a valid CLKSEL selection (0..=3).
                     unsafe { w.clksel().bits(source_code) });
-                while self.status().read().perbusy().bit_is_set() {}
+                crate::wait::spin_until(|| self.status().read().perbusy().bit_is_clear());
                 self.per().write(|w| w.set(period));
-                while self.status().read().ctrlabusy().bit_is_set() {}
+                crate::wait::spin_until(|| self.status().read().ctrlabusy().bit_is_clear());
                 self.ctrla().write(|w| {
                     // SAFETY: `prescaler_code` is a valid PRESCALER selection (0..=15).
                     unsafe { w.prescaler().bits(prescaler_code) };

@@ -18,7 +18,8 @@ pub struct Dac<T: DacInstance> {
 }
 
 impl<T: DacInstance> Dac<T> {
-    /// Enables the DAC and routes it to the output pin.
+    /// Enables the DAC and routes it to the output pin. Writes `CTRLA` whole
+    /// (reset then configure).
     #[must_use]
     pub fn new(instance: T) -> Self {
         instance.enable();

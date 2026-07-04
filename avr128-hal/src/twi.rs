@@ -6,6 +6,11 @@
 
 use embedded_hal::i2c::{self, I2c, NoAcknowledgeSource, Operation};
 
+/// Default transaction timeout, in milliseconds. A slave can stretch the clock
+/// forever, so each wait gives up after this long. Override with
+/// [`Twi::with_timeout_ms`].
+const DEFAULT_TIMEOUT_MS: u32 = 100;
+
 /// I2C bus error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -15,6 +20,9 @@ pub enum Error {
     ArbitrationLoss,
     /// Address or data byte was not acknowledged.
     Nack,
+    /// A wait exceeded the transaction timeout (for example a slave holding SCL
+    /// low).
+    Timeout,
 }
 
 impl i2c::Error for Error {
@@ -23,6 +31,7 @@ impl i2c::Error for Error {
             Self::Bus => i2c::ErrorKind::Bus,
             Self::ArbitrationLoss => i2c::ErrorKind::ArbitrationLoss,
             Self::Nack => i2c::ErrorKind::NoAcknowledge(NoAcknowledgeSource::Unknown),
+            Self::Timeout => i2c::ErrorKind::Other,
         }
     }
 }
@@ -62,17 +71,30 @@ pub trait TwiInstance {
 /// I2C host built on a [`TwiInstance`].
 pub struct Twi<T: TwiInstance> {
     instance: T,
+    max_wait: u32,
 }
 
 impl<T: TwiInstance> Twi<T> {
-    /// Enables the TWI host at the given SCL frequency.
+    /// Enables the TWI host at the given SCL frequency, with the default
+    /// transaction timeout (100 ms).
     ///
     /// `MBAUD = f_CLK_PER / (2 * f_SCL) - 5` (bus rise time neglected).
+    /// `configure` writes `MBAUD`/`MCTRLA`/`MSTATUS` whole.
     #[must_use]
     pub fn new(instance: T, f_cpu_hz: u32, scl_hz: u32) -> Self {
+        Self::with_timeout_ms(instance, f_cpu_hz, scl_hz, DEFAULT_TIMEOUT_MS)
+    }
+
+    /// Like [`Twi::new`], but with a caller-chosen per-wait timeout in
+    /// milliseconds (approximate, derived from `f_cpu_hz`).
+    #[must_use]
+    pub fn with_timeout_ms(instance: T, f_cpu_hz: u32, scl_hz: u32, timeout_ms: u32) -> Self {
         let baud = (f_cpu_hz / (2 * scl_hz)).saturating_sub(5) as u8;
         instance.configure(baud);
-        Self { instance }
+        Self {
+            instance,
+            max_wait: crate::wait::budget_ms(f_cpu_hz, timeout_ms),
+        }
     }
 
     /// Releases the underlying peripheral.
@@ -81,7 +103,7 @@ impl<T: TwiInstance> Twi<T> {
     }
 
     fn wait_write(&self) -> Result<(), Error> {
-        loop {
+        for _ in 0..self.max_wait {
             let s = self.instance.host_status();
             if s.arbitration_lost {
                 return Err(Error::ArbitrationLoss);
@@ -93,10 +115,11 @@ impl<T: TwiInstance> Twi<T> {
                 return if s.nacked { Err(Error::Nack) } else { Ok(()) };
             }
         }
+        Err(Error::Timeout)
     }
 
     fn wait_read(&self) -> Result<(), Error> {
-        loop {
+        for _ in 0..self.max_wait {
             let s = self.instance.host_status();
             if s.arbitration_lost {
                 return Err(Error::ArbitrationLoss);
@@ -108,13 +131,14 @@ impl<T: TwiInstance> Twi<T> {
                 return Ok(());
             }
         }
+        Err(Error::Timeout)
     }
 
     /// Waits for a read address phase to settle. On success the host has
     /// received the first data byte and `RIF` is set. If the address is not
     /// acknowledged the host raises `WIF` instead, with no data received.
     fn wait_read_address(&self) -> Result<(), Error> {
-        loop {
+        for _ in 0..self.max_wait {
             let s = self.instance.host_status();
             if s.arbitration_lost {
                 return Err(Error::ArbitrationLoss);
@@ -129,6 +153,7 @@ impl<T: TwiInstance> Twi<T> {
                 return Err(Error::Nack);
             }
         }
+        Err(Error::Timeout)
     }
 
     fn send_address(&mut self, address: u8, read: bool) -> Result<(), Error> {
@@ -249,15 +274,17 @@ macro_rules! impl_twi_instance {
     };
 }
 
+// One call per device (grouped, so instances never interleave). All three have
+// TWI0 and TWI1.
+macro_rules! impl_twis {
+    ($($TWI:ty),+ $(,)?) => {
+        $( impl_twi_instance!($TWI); )+
+    };
+}
+
 #[cfg(feature = "avr128db48")]
-impl_twi_instance!(avr_device::avr128db48::TWI0);
-#[cfg(feature = "avr128db48")]
-impl_twi_instance!(avr_device::avr128db48::TWI1);
+impl_twis!(avr_device::avr128db48::TWI0, avr_device::avr128db48::TWI1);
 #[cfg(feature = "avr128db64")]
-impl_twi_instance!(avr_device::avr128db64::TWI0);
+impl_twis!(avr_device::avr128db64::TWI0, avr_device::avr128db64::TWI1);
 #[cfg(feature = "avr128da64")]
-impl_twi_instance!(avr_device::avr128da64::TWI0);
-#[cfg(feature = "avr128db64")]
-impl_twi_instance!(avr_device::avr128db64::TWI1);
-#[cfg(feature = "avr128da64")]
-impl_twi_instance!(avr_device::avr128da64::TWI1);
+impl_twis!(avr_device::avr128da64::TWI0, avr_device::avr128da64::TWI1);

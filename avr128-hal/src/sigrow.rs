@@ -4,8 +4,9 @@
 //! the temperature sensor calibration. [`Sigrow`] is generic over a
 //! [`SigrowInstance`] (implemented for each device's `SIGROW`).
 //!
-//! All values are programmed during production and never change, so every
-//! accessor takes `&self`.
+//! All values are programmed during production and never change. SIGROW is
+//! read-only, so [`Sigrow`] borrows the peripheral instead of owning it and
+//! every accessor takes `&self`.
 
 /// The three device ID (signature) bytes, `SIGROW.DEVICEID[2:0]`.
 ///
@@ -84,15 +85,15 @@ pub trait SigrowInstance {
     fn serial_number(&self) -> SerialNumber;
 }
 
-/// The signature-row peripheral.
-pub struct Sigrow<T: SigrowInstance> {
-    instance: T,
+/// The signature-row peripheral (borrowed, read-only).
+pub struct Sigrow<'a, T: SigrowInstance> {
+    instance: &'a T,
 }
 
-impl<T: SigrowInstance> Sigrow<T> {
-    /// Takes ownership of the SIGROW peripheral.
+impl<'a, T: SigrowInstance> Sigrow<'a, T> {
+    /// Borrows the SIGROW peripheral for reading.
     #[must_use]
-    pub fn new(instance: T) -> Self {
+    pub fn new(instance: &'a T) -> Self {
         Self { instance }
     }
 
@@ -115,11 +116,6 @@ impl<T: SigrowInstance> Sigrow<T> {
             slope: self.instance.temp_slope(),
             offset: self.instance.temp_offset(),
         }
-    }
-
-    /// Releases the underlying peripheral.
-    pub fn free(self) -> T {
-        self.instance
     }
 }
 

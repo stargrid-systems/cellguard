@@ -47,22 +47,29 @@ macro_rules! impl_zcd_instance {
     };
 }
 
-// db48/db64/da64 all have ZCD0..2.
+// One call per device (grouped, so instances never interleave). All three have
+// ZCD0..2.
+macro_rules! impl_zcds {
+    ($($ZCD:ty),+ $(,)?) => {
+        $( impl_zcd_instance!($ZCD); )+
+    };
+}
+
 #[cfg(feature = "avr128db48")]
-impl_zcd_instance!(avr_device::avr128db48::ZCD0);
-#[cfg(feature = "avr128db48")]
-impl_zcd_instance!(avr_device::avr128db48::ZCD1);
-#[cfg(feature = "avr128db48")]
-impl_zcd_instance!(avr_device::avr128db48::ZCD2);
+impl_zcds!(
+    avr_device::avr128db48::ZCD0,
+    avr_device::avr128db48::ZCD1,
+    avr_device::avr128db48::ZCD2,
+);
 #[cfg(feature = "avr128db64")]
-impl_zcd_instance!(avr_device::avr128db64::ZCD0);
+impl_zcds!(
+    avr_device::avr128db64::ZCD0,
+    avr_device::avr128db64::ZCD1,
+    avr_device::avr128db64::ZCD2,
+);
 #[cfg(feature = "avr128da64")]
-impl_zcd_instance!(avr_device::avr128da64::ZCD0);
-#[cfg(feature = "avr128db64")]
-impl_zcd_instance!(avr_device::avr128db64::ZCD1);
-#[cfg(feature = "avr128da64")]
-impl_zcd_instance!(avr_device::avr128da64::ZCD1);
-#[cfg(feature = "avr128db64")]
-impl_zcd_instance!(avr_device::avr128db64::ZCD2);
-#[cfg(feature = "avr128da64")]
-impl_zcd_instance!(avr_device::avr128da64::ZCD2);
+impl_zcds!(
+    avr_device::avr128da64::ZCD0,
+    avr_device::avr128da64::ZCD1,
+    avr_device::avr128da64::ZCD2,
+);

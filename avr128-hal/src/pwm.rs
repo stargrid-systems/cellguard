@@ -52,7 +52,8 @@ pub struct Pwm<T: TcaInstance> {
 }
 
 impl<T: TcaInstance> Pwm<T> {
-    /// Configures and starts single-slope PWM.
+    /// Configures and starts single-slope PWM. Writes the `SINGLE_*` control
+    /// registers whole (reset then configure).
     #[must_use]
     pub fn new(instance: T, period: u16, prescaler: Prescaler) -> Self {
         instance.configure(period, prescaler);

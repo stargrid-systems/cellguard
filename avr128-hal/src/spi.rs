@@ -43,7 +43,8 @@ pub struct Spi<T: SpiInstance> {
 }
 
 impl<T: SpiInstance> Spi<T> {
-    /// Enables the host in the given SPI mode and prescaler.
+    /// Enables the host in the given SPI mode and prescaler. Writes
+    /// `CTRLA`/`CTRLB` whole (reset then configure).
     #[must_use]
     pub fn new(instance: T, mode: Mode, prescaler: Prescaler) -> Self {
         instance.configure(mode, prescaler);
@@ -127,22 +128,24 @@ macro_rules! impl_spi_instance {
             }
             fn transfer_byte(&self, byte: u8) -> u8 {
                 self.data().write(|w| w.set(byte));
-                while self.intflags().read().if_().bit_is_clear() {}
+                crate::wait::spin_until(|| self.intflags().read().if_().bit_is_set());
                 self.data().read().bits()
             }
         }
     };
 }
 
+// One call per device (grouped, so instances never interleave). All three have
+// SPI0 and SPI1.
+macro_rules! impl_spis {
+    ($($SPI:ty),+ $(,)?) => {
+        $( impl_spi_instance!($SPI); )+
+    };
+}
+
 #[cfg(feature = "avr128db48")]
-impl_spi_instance!(avr_device::avr128db48::SPI0);
-#[cfg(feature = "avr128db48")]
-impl_spi_instance!(avr_device::avr128db48::SPI1);
+impl_spis!(avr_device::avr128db48::SPI0, avr_device::avr128db48::SPI1);
 #[cfg(feature = "avr128db64")]
-impl_spi_instance!(avr_device::avr128db64::SPI0);
+impl_spis!(avr_device::avr128db64::SPI0, avr_device::avr128db64::SPI1);
 #[cfg(feature = "avr128da64")]
-impl_spi_instance!(avr_device::avr128da64::SPI0);
-#[cfg(feature = "avr128db64")]
-impl_spi_instance!(avr_device::avr128db64::SPI1);
-#[cfg(feature = "avr128da64")]
-impl_spi_instance!(avr_device::avr128da64::SPI1);
+impl_spis!(avr_device::avr128da64::SPI0, avr_device::avr128da64::SPI1);

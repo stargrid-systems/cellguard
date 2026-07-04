@@ -44,7 +44,7 @@ pub struct Adc<T: AdcInstance> {
 }
 
 impl<T: AdcInstance> Adc<T> {
-    /// Enables the ADC.
+    /// Enables the ADC. Writes `CTRLA`/`CTRLC` whole (reset then configure).
     #[must_use]
     pub fn new(instance: T, prescaler: Prescaler, resolution: Resolution) -> Self {
         instance.configure(prescaler, resolution);
