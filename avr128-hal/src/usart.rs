@@ -6,7 +6,8 @@
 
 use core::convert::Infallible;
 
-/// A USART peripheral. Implemented for each device's `USART0`..`USART5`. Not for external use.
+/// A USART peripheral. Implemented for each device's `USART0`..`USART5`. Not
+/// for external use.
 pub trait UsartInstance {
     /// Configures asynchronous 8N1 framing at the given baud register value and
     /// enables the transmitter and receiver.
@@ -77,11 +78,21 @@ impl<T: UsartInstance> embedded_io::Write for Usart<T> {
 }
 
 impl<T: UsartInstance> embedded_io::Read for Usart<T> {
+    // The contract wants `read` to block until at least one byte is available,
+    // then return only what is ready. Returning 0 means EOF, which a UART never
+    // reaches, so we always return at least 1. Filling the whole buffer would
+    // deadlock a caller waiting on a short final frame.
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        for slot in buf.iter_mut() {
-            *slot = self.read_byte();
+        if buf.is_empty() {
+            return Ok(0);
         }
-        Ok(buf.len())
+        buf[0] = self.read_byte();
+        let mut n = 1;
+        while n < buf.len() && self.instance.rx_ready() {
+            buf[n] = self.instance.pull();
+            n += 1;
+        }
+        Ok(n)
     }
 }
 
@@ -125,13 +136,6 @@ macro_rules! impl_usart_instance {
     };
 }
 
-// db28: USART0..2
-#[cfg(feature = "avr128db28")]
-impl_usart_instance!(avr_device::avr128db28::USART0);
-#[cfg(feature = "avr128db28")]
-impl_usart_instance!(avr_device::avr128db28::USART1);
-#[cfg(feature = "avr128db28")]
-impl_usart_instance!(avr_device::avr128db28::USART2);
 // db48: USART0..4
 #[cfg(feature = "avr128db48")]
 impl_usart_instance!(avr_device::avr128db48::USART0);

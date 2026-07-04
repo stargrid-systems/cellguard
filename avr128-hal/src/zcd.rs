@@ -3,7 +3,8 @@
 //! [`Zcd`] is generic over a [`ZcdInstance`]. The detector output can
 //! optionally drive its pin. Its event output is always available to EVSYS/CCL.
 
-/// A ZCD peripheral. Implemented for each device's `ZCD0`..`ZCD2`. Not for external use.
+/// A ZCD peripheral. Implemented for each device's `ZCD0`..`ZCD2`. Not for
+/// external use.
 pub trait ZcdInstance {
     /// Enables the detector, optionally driving its output pin.
     fn enable(&self, output_to_pin: bool);
@@ -46,9 +47,7 @@ macro_rules! impl_zcd_instance {
     };
 }
 
-// db28 has only ZCD0. db48/db64 have ZCD0..2.
-#[cfg(feature = "avr128db28")]
-impl_zcd_instance!(avr_device::avr128db28::ZCD0);
+// db48/db64/da64 all have ZCD0..2.
 #[cfg(feature = "avr128db48")]
 impl_zcd_instance!(avr_device::avr128db48::ZCD0);
 #[cfg(feature = "avr128db48")]

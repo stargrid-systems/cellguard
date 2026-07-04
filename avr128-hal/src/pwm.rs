@@ -36,7 +36,8 @@ impl Channel {
     }
 }
 
-/// A TCA timer usable for PWM. Implemented for each device's `TCA0`. Not for external use.
+/// A TCA timer usable for PWM. Implemented for each device's `TCA0`. Not for
+/// external use.
 pub trait TcaInstance {
     /// Configures single-slope PWM with the given period and prescaler, enables
     /// all three compare outputs (at 0% duty), and starts the timer.
@@ -106,8 +107,6 @@ macro_rules! impl_tca_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_tca_instance!(avr_device::avr128db28::TCA0);
 #[cfg(feature = "avr128db48")]
 impl_tca_instance!(avr_device::avr128db48::TCA0);
 #[cfg(feature = "avr128db64")]

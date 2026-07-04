@@ -22,19 +22,39 @@ pub trait PortOps {
     fn read_output(&self) -> u8;
 }
 
+// The DA PAC models DIRSET/DIRCLR/OUTSET/OUTCLR/OUTTGL as safe whole-register
+// writes, while the DB PAC gives them per-pin fields and marks the raw write
+// unsafe. `w.bits(mask)` is the one writer common to both. It is sound here:
+// these are write-1-to-act strobe registers, so every u8 mask is valid (see the
+// module docs).
 macro_rules! impl_port_ops {
     ($($PORT:ty),+ $(,)?) => {$(
         impl PortOps for $PORT {
             #[inline]
-            fn set_dir_output(&self, mask: u8) { self.dirset().write(|w| w.set(mask)); }
+            fn set_dir_output(&self, mask: u8) {
+                // SAFETY: write-1-to-act strobe register; any mask is valid.
+                self.dirset().write(|w| unsafe { w.bits(mask) });
+            }
             #[inline]
-            fn set_dir_input(&self, mask: u8) { self.dirclr().write(|w| w.set(mask)); }
+            fn set_dir_input(&self, mask: u8) {
+                // SAFETY: as above.
+                self.dirclr().write(|w| unsafe { w.bits(mask) });
+            }
             #[inline]
-            fn set_high(&self, mask: u8) { self.outset().write(|w| w.set(mask)); }
+            fn set_high(&self, mask: u8) {
+                // SAFETY: as above.
+                self.outset().write(|w| unsafe { w.bits(mask) });
+            }
             #[inline]
-            fn set_low(&self, mask: u8) { self.outclr().write(|w| w.set(mask)); }
+            fn set_low(&self, mask: u8) {
+                // SAFETY: as above.
+                self.outclr().write(|w| unsafe { w.bits(mask) });
+            }
             #[inline]
-            fn toggle(&self, mask: u8) { self.outtgl().write(|w| w.set(mask)); }
+            fn toggle(&self, mask: u8) {
+                // SAFETY: as above.
+                self.outtgl().write(|w| unsafe { w.bits(mask) });
+            }
             #[inline]
             fn read_input(&self) -> u8 { self.in_().read().bits() }
             #[inline]
@@ -43,13 +63,6 @@ macro_rules! impl_port_ops {
     )+};
 }
 
-#[cfg(feature = "avr128db28")]
-impl_port_ops!(
-    avr_device::avr128db28::PORTA,
-    avr_device::avr128db28::PORTC,
-    avr_device::avr128db28::PORTD,
-    avr_device::avr128db28::PORTF,
-);
 #[cfg(feature = "avr128db48")]
 impl_port_ops!(
     avr_device::avr128db48::PORTA,

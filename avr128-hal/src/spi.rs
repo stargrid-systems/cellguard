@@ -134,10 +134,6 @@ macro_rules! impl_spi_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_spi_instance!(avr_device::avr128db28::SPI0);
-#[cfg(feature = "avr128db28")]
-impl_spi_instance!(avr_device::avr128db28::SPI1);
 #[cfg(feature = "avr128db48")]
 impl_spi_instance!(avr_device::avr128db48::SPI0);
 #[cfg(feature = "avr128db48")]

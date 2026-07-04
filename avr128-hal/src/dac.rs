@@ -3,7 +3,8 @@
 //! [`Dac`] is generic over a [`DacInstance`]. It uses the reset-default DAC
 //! reference. Set [`vref`](crate::vref) beforehand for a specific reference.
 
-/// A DAC peripheral. Implemented for each device's `DAC0`. Not for external use.
+/// A DAC peripheral. Implemented for each device's `DAC0`. Not for external
+/// use.
 pub trait DacInstance {
     /// Enables the DAC with its output buffer routed to the pin.
     fn enable(&self);
@@ -40,7 +41,8 @@ macro_rules! impl_dac_instance {
     ($DAC:ty) => {
         impl DacInstance for $DAC {
             fn enable(&self) {
-                self.ctrla().write(|w| w.enable().set_bit().outen().set_bit());
+                self.ctrla()
+                    .write(|w| w.enable().set_bit().outen().set_bit());
             }
             fn write_data(&self, value: u16) {
                 self.data().write(|w| w.data().set(value));
@@ -49,8 +51,6 @@ macro_rules! impl_dac_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_dac_instance!(avr_device::avr128db28::DAC0);
 #[cfg(feature = "avr128db48")]
 impl_dac_instance!(avr_device::avr128db48::DAC0);
 #[cfg(feature = "avr128db64")]

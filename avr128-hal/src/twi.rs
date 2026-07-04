@@ -249,8 +249,6 @@ macro_rules! impl_twi_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_twi_instance!(avr_device::avr128db28::TWI0);
 #[cfg(feature = "avr128db48")]
 impl_twi_instance!(avr_device::avr128db48::TWI0);
 #[cfg(feature = "avr128db48")]

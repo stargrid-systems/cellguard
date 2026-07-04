@@ -120,8 +120,16 @@ impl<T: CclInstance> Ccl<T> {
 // accessors are distinct types, so the match cannot be generic. This private
 // macro keeps it next to the per-device impl and centralises the `unsafe`.
 macro_rules! write_one_lut {
-    ($self:ident, $i:ident, $truth:ident, $out:ident,
-     $ctrlb:ident, $ctrlc:ident, $tr:ident, $ctrla:ident) => {{
+    (
+        $self:ident,
+        $i:ident,
+        $truth:ident,
+        $out:ident,
+        $ctrlb:ident,
+        $ctrlc:ident,
+        $tr:ident,
+        $ctrla:ident
+    ) => {{
         // SAFETY: each input code is a valid INSEL selection (0..=5).
         unsafe {
             $self
@@ -142,12 +150,24 @@ macro_rules! impl_ccl_instance {
         impl CclInstance for $CCL {
             fn write_lut(&self, lut: u8, i: [u8; 3], truth: u8, out: bool) {
                 match lut {
-                    0 => write_one_lut!(self, i, truth, out, lut0ctrlb, lut0ctrlc, truth0, lut0ctrla),
-                    1 => write_one_lut!(self, i, truth, out, lut1ctrlb, lut1ctrlc, truth1, lut1ctrla),
-                    2 => write_one_lut!(self, i, truth, out, lut2ctrlb, lut2ctrlc, truth2, lut2ctrla),
-                    3 => write_one_lut!(self, i, truth, out, lut3ctrlb, lut3ctrlc, truth3, lut3ctrla),
-                    4 => write_one_lut!(self, i, truth, out, lut4ctrlb, lut4ctrlc, truth4, lut4ctrla),
-                    _ => write_one_lut!(self, i, truth, out, lut5ctrlb, lut5ctrlc, truth5, lut5ctrla),
+                    0 => {
+                        write_one_lut!(self, i, truth, out, lut0ctrlb, lut0ctrlc, truth0, lut0ctrla)
+                    }
+                    1 => {
+                        write_one_lut!(self, i, truth, out, lut1ctrlb, lut1ctrlc, truth1, lut1ctrla)
+                    }
+                    2 => {
+                        write_one_lut!(self, i, truth, out, lut2ctrlb, lut2ctrlc, truth2, lut2ctrla)
+                    }
+                    3 => {
+                        write_one_lut!(self, i, truth, out, lut3ctrlb, lut3ctrlc, truth3, lut3ctrla)
+                    }
+                    4 => {
+                        write_one_lut!(self, i, truth, out, lut4ctrlb, lut4ctrlc, truth4, lut4ctrla)
+                    }
+                    _ => {
+                        write_one_lut!(self, i, truth, out, lut5ctrlb, lut5ctrlc, truth5, lut5ctrla)
+                    }
                 }
             }
             fn enable(&self) {
@@ -157,28 +177,6 @@ macro_rules! impl_ccl_instance {
     };
 }
 
-// db28 only has four LUTs (LUT0..LUT3).
-#[cfg(feature = "avr128db28")]
-macro_rules! impl_ccl_instance_4lut {
-    ($CCL:ty) => {
-        impl CclInstance for $CCL {
-            fn write_lut(&self, lut: u8, i: [u8; 3], truth: u8, out: bool) {
-                match lut {
-                    0 => write_one_lut!(self, i, truth, out, lut0ctrlb, lut0ctrlc, truth0, lut0ctrla),
-                    1 => write_one_lut!(self, i, truth, out, lut1ctrlb, lut1ctrlc, truth1, lut1ctrla),
-                    2 => write_one_lut!(self, i, truth, out, lut2ctrlb, lut2ctrlc, truth2, lut2ctrla),
-                    _ => write_one_lut!(self, i, truth, out, lut3ctrlb, lut3ctrlc, truth3, lut3ctrla),
-                }
-            }
-            fn enable(&self) {
-                self.ctrla().write(|w| w.enable().set_bit());
-            }
-        }
-    };
-}
-
-#[cfg(feature = "avr128db28")]
-impl_ccl_instance_4lut!(avr_device::avr128db28::CCL);
 #[cfg(feature = "avr128db48")]
 impl_ccl_instance!(avr_device::avr128db48::CCL);
 #[cfg(feature = "avr128db64")]

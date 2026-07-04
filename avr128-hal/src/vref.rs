@@ -35,7 +35,8 @@ impl Reference {
     }
 }
 
-/// A VREF peripheral. Implemented for each device's `VREF`. Not for external use.
+/// A VREF peripheral. Implemented for each device's `VREF`. Not for external
+/// use.
 pub trait VrefInstance {
     /// Selects the ADC0 reference by raw `REFSEL` code.
     fn set_adc0_refsel(&self, code: u8);
@@ -89,8 +90,6 @@ macro_rules! impl_vref_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_vref_instance!(avr_device::avr128db28::VREF);
 #[cfg(feature = "avr128db48")]
 impl_vref_instance!(avr_device::avr128db48::VREF);
 #[cfg(feature = "avr128db64")]

@@ -3,8 +3,8 @@
 //! [`Watchdog`] is generic over a [`WdtInstance`]. The WDT runs from the
 //! internal 1.024 kHz oscillator, so `Clk1k` is about 1 second. `CTRLA` is
 //! configuration-change protected. [`Watchdog::start`] takes a
-//! [`CcpUnlock`](crate::clock::CcpUnlock) (the device's `CPU`) and unlocks CCP
-//! right before the inlined protected write.
+//! [`CcpUnlock`] (the device's `CPU`) and unlocks CCP right before the inlined
+//! protected write.
 
 use crate::clock::CcpUnlock;
 
@@ -49,7 +49,9 @@ impl<T: WdtInstance> Watchdog<T> {
     pub fn start<C: CcpUnlock>(cpu: &C, instance: T, period: Period) -> Self {
         cpu.unlock_ioreg();
         instance.write_period(period);
-        Self { _instance: instance }
+        Self {
+            _instance: instance,
+        }
     }
 
     /// Resets the watchdog count (issues `WDR`). Call within the configured
@@ -84,8 +86,6 @@ macro_rules! impl_wdt_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_wdt_instance!(avr_device::avr128db28::WDT);
 #[cfg(feature = "avr128db48")]
 impl_wdt_instance!(avr_device::avr128db48::WDT);
 #[cfg(feature = "avr128db64")]

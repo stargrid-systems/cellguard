@@ -101,10 +101,6 @@ macro_rules! impl_osc_control {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_ccp_unlock!(avr_device::avr128db28::CPU);
-#[cfg(feature = "avr128db28")]
-impl_osc_control!(avr_device::avr128db28::CLKCTRL);
 #[cfg(feature = "avr128db48")]
 impl_ccp_unlock!(avr_device::avr128db48::CPU);
 #[cfg(feature = "avr128db48")]

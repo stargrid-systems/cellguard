@@ -20,13 +20,16 @@ ufmt = { version = "0.2", optional = true }
 ufmt = ["dep:ufmt"]
 # Device-support features. Each one only adds the trait impls for that device's
 # peripheral types, so enabling several together never conflicts (additive).
-avr128db28 = ["avr-device/avr128db28"]
 avr128db48 = ["avr-device/avr128db48"]
 avr128db64 = ["avr-device/avr128db64"]
 avr128da64 = ["avr-device/avr128da64"]
 
+# avr-device 0.8 on crates.io has no avr128db*/avr128da* devices; the stargrid
+# fork adds them. Pin the fork by git rev so this crate builds/checks standalone
+# with a device feature. Keep this rev in sync with the sibling crates
+# cellagent-attiny416 and cellcore-avr128db48.
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "cb51f5b3dd2663a4dc930fd57fec28366761c366" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "ddad6827eeb5ff668507d3c4ff7ce0780fab16e0" }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"

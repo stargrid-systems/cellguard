@@ -56,7 +56,8 @@ impl Prescaler {
     }
 }
 
-/// An RTC peripheral. Implemented for each device's `RTC`. Not for external use.
+/// An RTC peripheral. Implemented for each device's `RTC`. Not for external
+/// use.
 pub trait RtcInstance {
     /// Enables the RTC counting from `0` up to `period`, then wrapping.
     fn configure(&self, source_code: u8, prescaler_code: u8, period: u16);
@@ -111,8 +112,6 @@ macro_rules! impl_rtc_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_rtc_instance!(avr_device::avr128db28::RTC);
 #[cfg(feature = "avr128db48")]
 impl_rtc_instance!(avr_device::avr128db48::RTC);
 #[cfg(feature = "avr128db64")]

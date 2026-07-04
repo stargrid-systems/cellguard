@@ -24,7 +24,8 @@ pub enum Resolution {
     Bits10,
 }
 
-/// An ADC peripheral. Implemented for each device's `ADC0`. Not for external use.
+/// An ADC peripheral. Implemented for each device's `ADC0`. Not for external
+/// use.
 pub trait AdcInstance {
     /// Enables the ADC in single-conversion mode.
     fn configure(&self, prescaler: Prescaler, resolution: Resolution);
@@ -107,8 +108,6 @@ macro_rules! impl_adc_instance {
     };
 }
 
-#[cfg(feature = "avr128db28")]
-impl_adc_instance!(avr_device::avr128db28::ADC0);
 #[cfg(feature = "avr128db48")]
 impl_adc_instance!(avr_device::avr128db48::ADC0);
 #[cfg(feature = "avr128db64")]
