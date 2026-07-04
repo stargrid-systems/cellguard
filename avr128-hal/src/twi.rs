@@ -44,7 +44,6 @@ pub struct HostStatus {
     pub write_done: bool,
     pub read_done: bool,
     pub nacked: bool,
-    pub bus_idle: bool,
 }
 
 /// A TWI peripheral usable as an I2C host. Implemented for each device's
@@ -102,7 +101,14 @@ impl<T: TwiInstance> Twi<T> {
         self.instance
     }
 
-    fn wait_write(&self) -> Result<(), Error> {
+    /// Polls the host status until `done` yields a result or the timeout is
+    /// hit. Arbitration loss and bus errors always take precedence and are
+    /// reported before `done` runs, so each caller only supplies its own
+    /// completion check.
+    fn wait_until(
+        &self,
+        mut done: impl FnMut(HostStatus) -> Option<Result<(), Error>>,
+    ) -> Result<(), Error> {
         for _ in 0..self.max_wait {
             let s = self.instance.host_status();
             if s.arbitration_lost {
@@ -111,49 +117,37 @@ impl<T: TwiInstance> Twi<T> {
             if s.bus_error {
                 return Err(Error::Bus);
             }
-            if s.write_done {
-                return if s.nacked { Err(Error::Nack) } else { Ok(()) };
+            if let Some(result) = done(s) {
+                return result;
             }
         }
         Err(Error::Timeout)
     }
 
+    fn wait_write(&self) -> Result<(), Error> {
+        self.wait_until(|s| {
+            s.write_done
+                .then(|| if s.nacked { Err(Error::Nack) } else { Ok(()) })
+        })
+    }
+
     fn wait_read(&self) -> Result<(), Error> {
-        for _ in 0..self.max_wait {
-            let s = self.instance.host_status();
-            if s.arbitration_lost {
-                return Err(Error::ArbitrationLoss);
-            }
-            if s.bus_error {
-                return Err(Error::Bus);
-            }
-            if s.read_done {
-                return Ok(());
-            }
-        }
-        Err(Error::Timeout)
+        self.wait_until(|s| s.read_done.then_some(Ok(())))
     }
 
     /// Waits for a read address phase to settle. On success the host has
     /// received the first data byte and `RIF` is set. If the address is not
     /// acknowledged the host raises `WIF` instead, with no data received.
     fn wait_read_address(&self) -> Result<(), Error> {
-        for _ in 0..self.max_wait {
-            let s = self.instance.host_status();
-            if s.arbitration_lost {
-                return Err(Error::ArbitrationLoss);
-            }
-            if s.bus_error {
-                return Err(Error::Bus);
-            }
+        self.wait_until(|s| {
             if s.read_done {
-                return Ok(());
+                Some(Ok(()))
+            } else if s.write_done {
+                Some(Err(Error::Nack))
+            } else {
+                None
             }
-            if s.write_done {
-                return Err(Error::Nack);
-            }
-        }
-        Err(Error::Timeout)
+        })
     }
 
     fn send_address(&mut self, address: u8, read: bool) -> Result<(), Error> {
@@ -248,8 +242,6 @@ macro_rules! impl_twi_instance {
                     write_done: s.wif().bit_is_set(),
                     read_done: s.rif().bit_is_set(),
                     nacked: s.rxack().bit_is_set(),
-                    // BUSSTATE: 0=unknown, 1=idle, 2=owner, 3=busy.
-                    bus_idle: s.busstate().bits() == 1,
                 }
             }
             fn start_with_address(&self, byte: u8) {
