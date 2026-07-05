@@ -23,9 +23,11 @@ impl Delay {
 impl DelayNs for Delay {
     #[inline]
     fn delay_ns(&mut self, ns: u32) {
-        // cycles = ns * cycles_per_us / 1000, kept in u32 range.
-        let cycles = self.cycles_per_us.saturating_mul(ns) / 1000;
-        delay_cycles(cycles.max(1));
+        // cycles = ns * cycles_per_us / 1000. Compute in u64 so the multiply
+        // cannot overflow, then clamp back to the u32 delay_cycles takes.
+        let cycles =
+            (u64::from(self.cycles_per_us) * u64::from(ns) / 1000).min(u64::from(u32::MAX));
+        delay_cycles((cycles as u32).max(1));
     }
 
     #[inline]

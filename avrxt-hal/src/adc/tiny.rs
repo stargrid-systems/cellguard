@@ -1,15 +1,16 @@
 //! tinyAVR ADC0 (10/8-bit).
 //!
-//! Same register set as the AVR128 ADC, but the reference select (`CTRLC.REFSEL`)
-//! shares the register with the prescaler, so `CTRLC` is written with `modify` to
-//! keep a reference configured before `Adc::new`.
+//! Same register set as the AVR128 ADC, but the reference select
+//! (`CTRLC.REFSEL`) shares the register with the prescaler, so `CTRLC` is
+//! written with `modify` to keep a reference configured before `Adc::new`.
 
-use super::{AdcInstance, Prescaler, Resolution};
+use super::{AdcInstance, Prescaler, TinyResolution};
 
 macro_rules! impl_adc_instance_tiny {
     ($ADC:ty) => {
         impl AdcInstance for $ADC {
-            fn configure(&self, prescaler: Prescaler, resolution: Resolution) {
+            type Resolution = TinyResolution;
+            fn configure(&self, prescaler: Prescaler, resolution: TinyResolution) {
                 self.ctrlc().modify(|_, w| match prescaler {
                     Prescaler::Div2 => w.presc().div2(),
                     Prescaler::Div4 => w.presc().div4(),
@@ -22,18 +23,16 @@ macro_rules! impl_adc_instance_tiny {
                 });
                 self.ctrla().write(|w| {
                     match resolution {
-                        #[cfg(feature = "_avr128")]
-                        Resolution::Bits12 => panic!("Resolution::Bits12 is AVR128-only"),
-                        Resolution::Bits10 => w.ressel()._10bit(),
-                        Resolution::Bits8 => w.ressel()._8bit(),
+                        TinyResolution::Bits10 => w.ressel()._10bit(),
+                        TinyResolution::Bits8 => w.ressel()._8bit(),
                     };
                     w.enable().set_bit()
                 });
             }
             fn set_sample_length(&self, cycles: u8) {
                 self.sampctrl().write(|w|
-                    // SAFETY: SAMPLEN is a 5-bit field; the caller (Adc::set_sample_length)
-                    // has already checked the range.
+                    // SAFETY: SAMPLEN is a 5-bit field. The caller
+                    // (Adc::set_sample_length) has already checked the range.
                     unsafe { w.samplen().bits(cycles) });
             }
             fn convert(&self, channel: u8) -> u16 {
@@ -42,7 +41,7 @@ macro_rules! impl_adc_instance_tiny {
                     // read an unconnected or ground input, never UB.
                     unsafe { w.muxpos().bits(channel) });
                 self.command().write(|w| w.stconv().set_bit());
-                while self.intflags().read().resrdy().bit_is_clear() {}
+                crate::wait::spin_until(|| self.intflags().read().resrdy().bit_is_set());
                 self.res().read().bits()
             }
         }

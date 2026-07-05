@@ -3,9 +3,9 @@
 //! Configuration-change-protected registers are opened with [`CcpUnlock`]. The
 //! per-family clock control lives in submodules: AVR128 selects the internal
 //! high-frequency oscillator (`set_oschf`), tinyAVR runs from `OSC20M` and
-//! adjusts the main-clock prescaler (`set_main_clock_prescaler`). Both do the CCP
-//! unlock plus the protected write inside `avr_device::interrupt::free`, so an
-//! interrupt cannot land in the unlock window.
+//! adjusts the main-clock prescaler (`set_main_clock_prescaler`). Both do the
+//! CCP unlock plus the protected write inside `avr_device::interrupt::free`, so
+//! an interrupt cannot land in the unlock window.
 
 #[cfg(feature = "_avr128")]
 pub use self::avr128::{HfFreq, OscControl, set_oschf};

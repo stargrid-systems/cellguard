@@ -1,7 +1,7 @@
 //! AVR128 high-frequency oscillator (OSCHF) clock control.
 //!
-//! The AVR128 DB/DA family boots on OSCHF at 4 MHz. [`set_oschf`] selects another
-//! OSCHF frequency. `OSCHFCTRLA` is configuration-change protected.
+//! The AVR128 DB/DA family boots on OSCHF at 4 MHz. [`set_oschf`] selects
+//! another OSCHF frequency. `OSCHFCTRLA` is configuration-change protected.
 
 use super::{CcpUnlock, impl_ccp_unlock};
 
@@ -40,8 +40,8 @@ impl HfFreq {
 /// Controls the high-frequency oscillator. Implemented for each device's
 /// `CLKCTRL`. Not for external use.
 pub trait OscControl {
-    /// Writes `OSCHFCTRLA.FRQSEL`. This register is protected, so the caller must
-    /// have just called [`CcpUnlock::unlock_ioreg`].
+    /// Writes `OSCHFCTRLA.FRQSEL`. This register is protected, so the caller
+    /// must have just called [`CcpUnlock::unlock_ioreg`].
     fn write_frqsel(&self, freq: HfFreq);
     /// Whether the high-frequency oscillator reports stable.
     fn oschf_stable(&self) -> bool;

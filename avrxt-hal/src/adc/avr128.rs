@@ -1,11 +1,12 @@
 //! AVR128 ADC0 (12/10-bit).
 
-use super::{AdcInstance, Prescaler, Resolution};
+use super::{AdcInstance, Avr128Resolution, Prescaler};
 
 macro_rules! impl_adc_instance {
     ($ADC:ty) => {
         impl AdcInstance for $ADC {
-            fn configure(&self, prescaler: Prescaler, resolution: Resolution) {
+            type Resolution = Avr128Resolution;
+            fn configure(&self, prescaler: Prescaler, resolution: Avr128Resolution) {
                 self.ctrlc().write(|w| match prescaler {
                     Prescaler::Div2 => w.presc().div2(),
                     Prescaler::Div4 => w.presc().div4(),
@@ -18,18 +19,16 @@ macro_rules! impl_adc_instance {
                 });
                 self.ctrla().write(|w| {
                     match resolution {
-                        Resolution::Bits12 => w.ressel()._12bit(),
-                        Resolution::Bits10 => w.ressel()._10bit(),
-                        #[cfg(feature = "_tinyavr")]
-                        Resolution::Bits8 => panic!("Resolution::Bits8 is tinyAVR-only"),
+                        Avr128Resolution::Bits12 => w.ressel()._12bit(),
+                        Avr128Resolution::Bits10 => w.ressel()._10bit(),
                     };
                     w.enable().set_bit()
                 });
             }
             fn set_sample_length(&self, cycles: u8) {
                 self.sampctrl().write(|w|
-                    // SAFETY: SAMPLEN is a 5-bit field; the caller (Adc::set_sample_length)
-                    // has already checked the range.
+                    // SAFETY: SAMPLEN is a 5-bit field. The caller
+                    // (Adc::set_sample_length) has already checked the range.
                     unsafe { w.samplen().bits(cycles) });
             }
             fn convert(&self, channel: u8) -> u16 {
@@ -38,7 +37,7 @@ macro_rules! impl_adc_instance {
                     // read an unconnected or ground input, never UB.
                     unsafe { w.muxpos().bits(channel) });
                 self.command().write(|w| w.stconv().set_bit());
-                while self.intflags().read().resrdy().bit_is_clear() {}
+                crate::wait::spin_until(|| self.intflags().read().resrdy().bit_is_set());
                 self.res().read().bits()
             }
         }

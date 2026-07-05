@@ -2,14 +2,14 @@
 //!
 //! tinyAVR parts have no OSCHF. They boot on `OSC20M` (16 or 20 MHz, chosen by
 //! the `OSCCFG` fuse) with the main-clock prescaler enabled at /6. Use
-//! [`set_main_clock_prescaler`] to change or disable it. The base frequency is a
-//! fuse setting, not runtime-changeable; pass it via [`TinyBaseFreq`] to compute
-//! `CLK_PER`.
+//! [`set_main_clock_prescaler`] to change or disable it. The base frequency is
+//! a fuse setting, not runtime-changeable. Pass it via [`TinyBaseFreq`] to
+//! compute `CLK_PER`.
 
 use super::{CcpUnlock, impl_ccp_unlock};
 
 /// tinyAVR internal oscillator base frequency, selected by the `OSCCFG` fuse.
-/// Not runtime-changeable; used only to compute `CLK_PER`.
+/// Not runtime-changeable. Used only to compute `CLK_PER`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TinyBaseFreq {
     Mhz16,
@@ -26,8 +26,8 @@ impl TinyBaseFreq {
         }
     }
 
-    /// The resulting `CLK_PER` in Hz for the given prescaler setting. `None` means
-    /// the prescaler is disabled (`CLK_PER` == base frequency).
+    /// The resulting `CLK_PER` in Hz for the given prescaler setting. `None`
+    /// means the prescaler is disabled (`CLK_PER` == base frequency).
     #[must_use]
     pub const fn clk_per_hz(self, div: Option<ClkPrescaler>) -> u32 {
         match div {
@@ -73,11 +73,12 @@ impl ClkPrescaler {
     }
 }
 
-/// Controls the tinyAVR main-clock prescaler (`MCLKCTRLB`). Implemented for each
-/// tinyAVR `CLKCTRL`. Not for external use.
+/// Controls the tinyAVR main-clock prescaler (`MCLKCTRLB`). Implemented for
+/// each tinyAVR `CLKCTRL`. Not for external use.
 pub trait MainClkControl {
-    /// Writes `MCLKCTRLB`. `Some(div)` enables the prescaler at that division;
-    /// `None` disables it. Protected, so the caller must unlock CCP just before.
+    /// Writes `MCLKCTRLB`. `Some(div)` enables the prescaler at that division.
+    /// `None` disables it. Protected, so the caller must unlock CCP just
+    /// before.
     fn write_prescaler(&self, div: Option<ClkPrescaler>);
     /// Whether a clock switch is still in progress (`MCLKSTATUS.SOSC`).
     fn clock_switching(&self) -> bool;
