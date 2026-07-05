@@ -55,6 +55,10 @@ pub struct Adc<T: AdcInstance> {
 
 impl<T: AdcInstance> Adc<T> {
     /// Enables the ADC. Writes `CTRLA`/`CTRLC` (reset then configure).
+    ///
+    /// # Panics
+    /// Panics if `resolution` is one this device's ADC cannot produce (for
+    /// example `Bits12` on tinyAVR or `Bits8` on AVR128).
     #[must_use]
     pub fn new(instance: T, prescaler: Prescaler, resolution: Resolution) -> Self {
         instance.configure(prescaler, resolution);
@@ -66,8 +70,10 @@ impl<T: AdcInstance> Adc<T> {
         self.instance.convert(channel)
     }
 
-    /// Sets the sampling length in ADC clock cycles. `SAMPLEN` is a 5-bit field,
-    /// so values above 31 are rejected rather than silently truncated.
+    /// Sets the sampling length in ADC clock cycles. `SAMPLEN` is a 5-bit field.
+    ///
+    /// # Panics
+    /// Panics if `cycles` exceeds 31, rather than silently truncating it.
     pub fn set_sample_length(&mut self, cycles: u8) {
         assert!(cycles <= 31, "ADC sample length must be 0..=31");
         self.instance.set_sample_length(cycles);

@@ -89,6 +89,10 @@ pub trait MainClkControl {
 ///
 /// `MCLKCTRLB` is written whole. The CCP unlock and the protected write happen
 /// with interrupts masked so the unlock window cannot be interrupted.
+///
+/// # Panics
+/// Panics if the clock switch does not complete within the defensive spin
+/// budget, which means the peripheral is broken or misconfigured.
 #[inline(always)]
 pub fn set_main_clock_prescaler<C: CcpUnlock, K: MainClkControl>(
     cpu: &C,
@@ -138,3 +142,8 @@ macro_rules! impl_main_clk_control {
 impl_main_clk_control!(avr_device::attiny406::CLKCTRL);
 #[cfg(feature = "attiny416")]
 impl_main_clk_control!(avr_device::attiny416::CLKCTRL);
+
+#[cfg(feature = "attiny406")]
+impl_ccp_unlock!(avr_device::attiny406::CPU);
+#[cfg(feature = "attiny416")]
+impl_ccp_unlock!(avr_device::attiny416::CPU);

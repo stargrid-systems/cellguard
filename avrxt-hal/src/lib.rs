@@ -1,11 +1,13 @@
 //! Hardware abstraction layer for Microchip **modern-AVR** (AVRxt) devices:
-//! AVR128DB48 / DB64 / DA64 and the tinyAVR 0/1-series (`attiny406`, `attiny416`).
+//! AVR128DB48 / DB64 / DA64 and the tinyAVR 0/1-series (`attiny406`,
+//! `attiny416`).
 //!
 //! Thin, `embedded-hal`-implementing wrappers around the device peripherals.
-//! Every wrapper is generic over an "instance" trait (e.g. [`twi::TwiInstance`])
-//! that the HAL implements for the PAC peripheral behind the matching device
-//! feature. Each module configures only its own registers. Pin direction and
-//! `PORTMUX` routing are the application's job, so the HAL stays board-agnostic.
+//! Every wrapper is generic over an "instance" trait (e.g.
+//! [`twi::TwiInstance`]) that the HAL implements for the PAC peripheral behind
+//! the matching device feature. Each module configures only its own registers.
+//! Pin direction and `PORTMUX` routing are the application's job, so the HAL
+//! stays board-agnostic.
 //!
 //! # Features
 //!
@@ -14,17 +16,17 @@
 //! an internal family marker so family-specific code compiles only where it
 //! applies.
 //!
-//! - `avr128db48`, `avr128db64`, `avr128da64` — AVR128 DB/DA devices.
-//! - `attiny406`, `attiny416` — tinyAVR 0/1-series devices.
-//! - `ufmt` — implement `ufmt::uWrite` for the USART.
+//! - `avr128db48`, `avr128db64`, `avr128da64`: AVR128 DB/DA devices.
+//! - `attiny406`, `attiny416`: tinyAVR 0/1-series devices.
+//! - `ufmt`: implement `ufmt::uWrite` for the USART.
 //!
 //! `_avr128` and `_tinyavr` are internal markers set by the device features. Do
 //! not enable them directly.
 //!
 //! # Peripherals
 //!
-//! clock ([`clock`]), delay ([`delay`]), GPIO ([`gpio`]), I2C/TWI ([`twi`]), SPI
-//! ([`spi`]), USART ([`usart`]), timer PWM ([`pwm`]), ADC ([`adc`]), DAC
+//! clock ([`clock`]), delay ([`delay`]), GPIO ([`gpio`]), I2C/TWI ([`twi`]),
+//! SPI ([`spi`]), USART ([`usart`]), timer PWM ([`pwm`]), ADC ([`adc`]), DAC
 //! ([`dac`]), voltage reference ([`vref`]), watchdog ([`wdt`]), RTC ([`rtc`]),
 //! custom logic ([`ccl`]), op-amps ([`opamp`]), zero-cross ([`zcd`]) and the
 //! signature row ([`sigrow`]). tinyAVR covers the subset that maps to its
@@ -53,7 +55,6 @@ pub mod spi;
 pub mod twi;
 pub mod usart;
 pub mod vref;
+mod wait;
 pub mod wdt;
 pub mod zcd;
-
-mod wait;

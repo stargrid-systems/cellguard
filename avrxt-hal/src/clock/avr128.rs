@@ -54,6 +54,10 @@ pub trait OscControl {
 /// `OSCHFCTRLA` is written whole (reset then configure). The CCP unlock and the
 /// protected write happen with interrupts masked so the unlock window cannot be
 /// interrupted.
+///
+/// # Panics
+/// Panics if the oscillator does not report stable within the defensive
+/// spin budget, which means the peripheral is broken or misconfigured.
 #[inline(always)]
 pub fn set_oschf<C: CcpUnlock, K: OscControl>(cpu: &C, clkctrl: &K, freq: HfFreq) {
     avr_device::interrupt::free(|_| {
@@ -93,3 +97,10 @@ impl_osc_control!(avr_device::avr128db48::CLKCTRL);
 impl_osc_control!(avr_device::avr128db64::CLKCTRL);
 #[cfg(feature = "avr128da64")]
 impl_osc_control!(avr_device::avr128da64::CLKCTRL);
+
+#[cfg(feature = "avr128db48")]
+impl_ccp_unlock!(avr_device::avr128db48::CPU);
+#[cfg(feature = "avr128db64")]
+impl_ccp_unlock!(avr_device::avr128db64::CPU);
+#[cfg(feature = "avr128da64")]
+impl_ccp_unlock!(avr_device::avr128da64::CPU);
