@@ -34,5 +34,5 @@ pub(crate) fn spin_until(mut ready: impl FnMut() -> bool) {
             return;
         }
     }
-    panic!("avr128-hal: blocking wait did not complete");
+    panic!("avrxt-hal: blocking wait did not complete");
 }
