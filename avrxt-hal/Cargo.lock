@@ -56,7 +56,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "avr128-hal"
+name = "avrxt-hal"
 version = "0.1.0"
 dependencies = [
  "avr-device",
