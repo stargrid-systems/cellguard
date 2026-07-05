@@ -3,7 +3,7 @@
 //! The AVR128 DB/DA family boots on OSCHF at 4 MHz. [`set_oschf`] selects another
 //! OSCHF frequency. `OSCHFCTRLA` is configuration-change protected.
 
-use super::CcpUnlock;
+use super::{CcpUnlock, impl_ccp_unlock};
 
 /// Internal high-frequency oscillator (OSCHF) frequency options.
 #[derive(Clone, Copy, PartialEq, Eq)]

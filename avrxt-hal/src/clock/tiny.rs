@@ -6,7 +6,7 @@
 //! fuse setting, not runtime-changeable; pass it via [`TinyBaseFreq`] to compute
 //! `CLK_PER`.
 
-use super::CcpUnlock;
+use super::{CcpUnlock, impl_ccp_unlock};
 
 /// tinyAVR internal oscillator base frequency, selected by the `OSCCFG` fuse.
 /// Not runtime-changeable; used only to compute `CLK_PER`.

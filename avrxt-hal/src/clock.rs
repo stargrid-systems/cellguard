@@ -7,6 +7,16 @@
 //! unlock plus the protected write inside `avr_device::interrupt::free`, so an
 //! interrupt cannot land in the unlock window.
 
+#[cfg(feature = "_avr128")]
+pub use self::avr128::{HfFreq, OscControl, set_oschf};
+#[cfg(feature = "_tinyavr")]
+pub use self::tiny::{ClkPrescaler, MainClkControl, TinyBaseFreq, set_main_clock_prescaler};
+
+#[cfg(feature = "_avr128")]
+mod avr128;
+#[cfg(feature = "_tinyavr")]
+mod tiny;
+
 /// Unlocks configuration-change-protected registers. Implemented for each
 /// device's `CPU`. Not for external use.
 pub trait CcpUnlock {
@@ -15,8 +25,8 @@ pub trait CcpUnlock {
     fn unlock_ioreg(&self);
 }
 
-// Shared body, but each device's impl is invoked from the family submodule that
-// owns that device (see `avr128.rs` / `tiny.rs`).
+// Shared body, invoked from the family submodule that owns each device. Exposed
+// by path (not textual scope) so it can be used after the `mod` declarations.
 macro_rules! impl_ccp_unlock {
     ($CPU:ty) => {
         impl $crate::clock::CcpUnlock for $CPU {
@@ -27,13 +37,4 @@ macro_rules! impl_ccp_unlock {
         }
     };
 }
-
-#[cfg(feature = "_avr128")]
-mod avr128;
-#[cfg(feature = "_tinyavr")]
-mod tiny;
-
-#[cfg(feature = "_avr128")]
-pub use self::avr128::{HfFreq, OscControl, set_oschf};
-#[cfg(feature = "_tinyavr")]
-pub use self::tiny::{ClkPrescaler, MainClkControl, TinyBaseFreq, set_main_clock_prescaler};
+pub(crate) use impl_ccp_unlock;
