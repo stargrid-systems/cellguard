@@ -203,7 +203,7 @@ impl<P: PortInstance, const BIT: u8> Pin<P, BIT> {
     // (a narrow tinyAVR port). Referenced by every `into_*` so unusable pins from
     // `split` cannot be configured, instead of silently strobing dead bits.
     const EXISTS: () = assert!(
-        P::PIN_MASK & (1u8 << BIT) != 0,
+        P::PIN_MASK & Self::MASK != 0,
         "pin does not exist on this port"
     );
 
