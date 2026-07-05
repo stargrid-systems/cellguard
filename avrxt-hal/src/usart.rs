@@ -161,12 +161,15 @@ impl<T: UsartInstance> ufmt::uWrite for Usart<T> {
 
 // Hidden implementation detail. The bodies are identical across the distinct
 // PAC register types. This private macro only emits trait impls, not types.
+// `$chsize` is the `CTRLC` character-size accessor: the AVR128 PACs name it
+// `chsize`, while the tinyAVR PAC models `CTRLC` with register modes and names
+// the field `normal_chsize`.
 macro_rules! impl_usart_instance {
-    ($USART:ty) => {
+    ($USART:ty, $chsize:ident) => {
         impl UsartInstance for $USART {
             fn configure(&self, baud: u16) {
                 self.baud().write(|w| w.set(baud));
-                self.ctrlc().write(|w| w.chsize()._8bit());
+                self.ctrlc().write(|w| w.$chsize()._8bit());
                 self.ctrlb().write(|w| w.txen().set_bit().rxen().set_bit());
             }
             fn tx_ready(&self) -> bool {
@@ -191,13 +194,14 @@ macro_rules! impl_usart_instance {
 // One call per device (grouped, so instances never interleave and are hard to
 // drop). db48 has USART0..4; db64/da64 add USART5.
 macro_rules! impl_usarts {
-    ($($USART:ty),+ $(,)?) => {
-        $( impl_usart_instance!($USART); )+
+    ($chsize:ident; $($USART:ty),+ $(,)?) => {
+        $( impl_usart_instance!($USART, $chsize); )+
     };
 }
 
 #[cfg(feature = "avr128db48")]
 impl_usarts!(
+    chsize;
     avr_device::avr128db48::USART0,
     avr_device::avr128db48::USART1,
     avr_device::avr128db48::USART2,
@@ -206,6 +210,7 @@ impl_usarts!(
 );
 #[cfg(feature = "avr128db64")]
 impl_usarts!(
+    chsize;
     avr_device::avr128db64::USART0,
     avr_device::avr128db64::USART1,
     avr_device::avr128db64::USART2,
@@ -215,6 +220,7 @@ impl_usarts!(
 );
 #[cfg(feature = "avr128da64")]
 impl_usarts!(
+    chsize;
     avr_device::avr128da64::USART0,
     avr_device::avr128da64::USART1,
     avr_device::avr128da64::USART2,
@@ -222,3 +228,11 @@ impl_usarts!(
     avr_device::avr128da64::USART4,
     avr_device::avr128da64::USART5,
 );
+// tinyAVR has a single USART0. The character-size accessor depends on the ATDF
+// vintage: the attiny406 ATDF flattens `CTRLC` (`chsize`, like the AVR128
+// parts), while the older attiny416 ATDF models it with register modes
+// (`normal_chsize`).
+#[cfg(feature = "attiny406")]
+impl_usarts!(chsize; avr_device::attiny406::USART0);
+#[cfg(feature = "attiny416")]
+impl_usarts!(normal_chsize; avr_device::attiny416::USART0);

@@ -95,3 +95,7 @@ impl_wdt_instance!(avr_device::avr128db48::WDT);
 impl_wdt_instance!(avr_device::avr128db64::WDT);
 #[cfg(feature = "avr128da64")]
 impl_wdt_instance!(avr_device::avr128da64::WDT);
+#[cfg(feature = "attiny406")]
+impl_wdt_instance!(avr_device::attiny406::WDT);
+#[cfg(feature = "attiny416")]
+impl_wdt_instance!(avr_device::attiny416::WDT);

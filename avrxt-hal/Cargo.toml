@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Simon Berger <simon@siku2.io>"]
 edition = "2024"
 license = "AGPL-3.0-or-later"
-description = "Hardware abstraction layer for the Microchip AVR128 DB family."
+description = "Hardware abstraction layer for Microchip modern-AVR (AVRxt) devices: AVR128 DB/DA and tinyAVR."
 repository = "https://github.com/stargrid-systems/cellguard"
 
 [dependencies]
@@ -18,18 +18,30 @@ ufmt = { version = "0.2", optional = true }
 [features]
 # Implement `ufmt::uWrite` for the USART so it can be used with `uwrite!`.
 ufmt = ["dep:ufmt"]
-# Device-support features. Each one only adds the trait impls for that device's
-# peripheral types, so enabling several together never conflicts (additive).
-avr128db48 = ["avr-device/avr128db48"]
-avr128db64 = ["avr-device/avr128db64"]
-avr128da64 = ["avr-device/avr128da64"]
 
-# avr-device 0.8 on crates.io has no avr128db*/avr128da* devices; the stargrid
-# fork adds them. Pin the fork by git rev so this crate builds/checks standalone
-# with a device feature. Keep this rev in sync with the sibling crates
+# Internal family markers. Do not enable directly. Each device feature turns on
+# the marker for its family. Family-specific enum variants and code are gated on
+# these, so a single-target build compiles only what applies to it.
+_avr128 = []
+_tinyavr = []
+
+# Device-support features. Each one only adds the trait impls for that device's
+# peripheral types (and its family marker), so enabling several together never
+# conflicts (additive).
+avr128db48 = ["avr-device/avr128db48", "_avr128"]
+avr128db64 = ["avr-device/avr128db64", "_avr128"]
+avr128da64 = ["avr-device/avr128da64", "_avr128"]
+# tinyAVR 0/1-series. attiny406 (0-series) is the board's balancer co-MCU;
+# attiny416 (1-series) is the bench XNANO devboard.
+attiny406 = ["avr-device/attiny406", "_tinyavr"]
+attiny416 = ["avr-device/attiny416", "_tinyavr"]
+
+# avr-device 0.8 on crates.io has no avr128db*/avr128da*/attiny4* devices; the
+# stargrid fork adds them. Pin the fork by git rev so this crate builds/checks
+# standalone with a device feature. Keep this rev in sync with the sibling crates
 # cellagent-attiny416 and cellcore-avr128db48.
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "ddad6827eeb5ff668507d3c4ff7ce0780fab16e0" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
 
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"

@@ -43,8 +43,11 @@ pub trait PortInstance: PortOps + Sized {
 // unsafe. `w.bits(mask)` is the one writer common to both. It is sound here:
 // these are write-1-to-act strobe registers, so every u8 mask is valid (see the
 // module docs).
+// `$in_reg` is the input-value register accessor: the AVR128 PACs name it `in_`
+// (from register `IN`), the tinyAVR PAC names it `input`. Everything else is
+// identical.
 macro_rules! impl_port {
-    ($PORT:ty) => {
+    ($PORT:ty, $in_reg:ident) => {
         impl PortOps for $PORT {
             #[inline]
             fn set_dir_output(&self, mask: u8) {
@@ -73,7 +76,7 @@ macro_rules! impl_port {
             }
             #[inline]
             fn read_input(&self) -> u8 {
-                self.in_().read().bits()
+                self.$in_reg().read().bits()
             }
             #[inline]
             fn read_output(&self) -> u8 {
@@ -106,13 +109,14 @@ macro_rules! impl_port {
 // One call per device (grouped, so instances never interleave and are hard to
 // drop). db48 has PORTA..PORTF; db64/da64 add PORTG.
 macro_rules! impl_ports {
-    ($($PORT:ty),+ $(,)?) => {
-        $( impl_port!($PORT); )+
+    ($in_reg:ident; $($PORT:ty),+ $(,)?) => {
+        $( impl_port!($PORT, $in_reg); )+
     };
 }
 
 #[cfg(feature = "avr128db48")]
 impl_ports!(
+    in_;
     avr_device::avr128db48::PORTA,
     avr_device::avr128db48::PORTB,
     avr_device::avr128db48::PORTC,
@@ -122,6 +126,7 @@ impl_ports!(
 );
 #[cfg(feature = "avr128db64")]
 impl_ports!(
+    in_;
     avr_device::avr128db64::PORTA,
     avr_device::avr128db64::PORTB,
     avr_device::avr128db64::PORTC,
@@ -132,6 +137,7 @@ impl_ports!(
 );
 #[cfg(feature = "avr128da64")]
 impl_ports!(
+    in_;
     avr_device::avr128da64::PORTA,
     avr_device::avr128da64::PORTB,
     avr_device::avr128da64::PORTC,
@@ -139,6 +145,23 @@ impl_ports!(
     avr_device::avr128da64::PORTE,
     avr_device::avr128da64::PORTF,
     avr_device::avr128da64::PORTG,
+);
+// 20-pin tinyAVR (attiny406/attiny416): PORTA (PA0-7), PORTB (PB0-5), PORTC
+// (PC0-3). The PORT register block matches the AVR128 family; only the input
+// register is named `input` instead of `in_`.
+#[cfg(feature = "attiny406")]
+impl_ports!(
+    input;
+    avr_device::attiny406::PORTA,
+    avr_device::attiny406::PORTB,
+    avr_device::attiny406::PORTC,
+);
+#[cfg(feature = "attiny416")]
+impl_ports!(
+    input;
+    avr_device::attiny416::PORTA,
+    avr_device::attiny416::PORTB,
+    avr_device::attiny416::PORTC,
 );
 
 /// Re-acquires a port handle for a uniquely-owned pin.
