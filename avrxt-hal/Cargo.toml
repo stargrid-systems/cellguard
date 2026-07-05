@@ -8,8 +8,6 @@ description = "Hardware abstraction layer for Microchip modern-AVR (AVRxt) devic
 repository = "https://github.com/stargrid-systems/cellguard"
 
 [dependencies]
-# No device feature here — the per-device features below select it, so several
-# can be enabled at once (additive).
 avr-device = { version = "0.8" }
 embedded-hal = { version = "1", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
@@ -19,27 +17,17 @@ ufmt = { version = "0.2", optional = true }
 # Implement `ufmt::uWrite` for the USART so it can be used with `uwrite!`.
 ufmt = ["dep:ufmt"]
 
-# Internal family markers. Do not enable directly. Each device feature turns on
-# the marker for its family. Family-specific enum variants and code are gated on
-# these, so a single-target build compiles only what applies to it.
+# Internal family markers. Do not enable directly.
 _avr128 = []
 _tinyavr = []
 
-# Device-support features. Each one only adds the trait impls for that device's
-# peripheral types (and its family marker), so enabling several together never
-# conflicts (additive).
 avr128db48 = ["avr-device/avr128db48", "_avr128"]
 avr128db64 = ["avr-device/avr128db64", "_avr128"]
 avr128da64 = ["avr-device/avr128da64", "_avr128"]
-# tinyAVR 0/1-series. attiny406 (0-series) is the board's balancer co-MCU;
-# attiny416 (1-series) is the bench XNANO devboard.
+
 attiny406 = ["avr-device/attiny406", "_tinyavr"]
 attiny416 = ["avr-device/attiny416", "_tinyavr"]
 
-# avr-device 0.8 on crates.io has no avr128db*/avr128da*/attiny4* devices; the
-# stargrid fork adds them. Pin the fork by git rev so this crate builds/checks
-# standalone with a device feature. Keep this rev in sync with the sibling crates
-# cellagent-attiny416 and cellcore-avr128db48.
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
 

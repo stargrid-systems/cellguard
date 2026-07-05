@@ -2,35 +2,39 @@
 //! AVR128DB48 / DB64 / DA64 and the tinyAVR 0/1-series (`attiny406`, `attiny416`).
 //!
 //! Thin, `embedded-hal`-implementing wrappers around the device peripherals.
-//! Every wrapper is generic over an "instance" trait (e.g.
-//! [`twi::TwiInstance`]). The user passes in the PAC peripheral. The trait is
-//! implemented for that peripheral type behind the matching device feature
-//! (`avr128db48`, `avr128db64`, `avr128da64`, `attiny406`, `attiny416`). The
-//! features are **additive**. Enabling several together only adds more impls, so
+//! Every wrapper is generic over an "instance" trait (e.g. [`twi::TwiInstance`])
+//! that the HAL implements for the PAC peripheral behind the matching device
+//! feature. Each module configures only its own registers. Pin direction and
+//! `PORTMUX` routing are the application's job, so the HAL stays board-agnostic.
+//!
+//! # Features
+//!
+//! Device features are **additive**: enabling several only adds more impls, so
 //! one build can target a family of devices. Each device feature also turns on
-//! an internal family marker (`_avr128` / `_tinyavr`); family-specific enum
-//! variants and code are gated on it, so a single-target build compiles only
-//! what applies. tinyAVR parts share most peripheral IP with the AVR128 family;
-//! only clock and ADC differ (see [`clock`] and [`adc`]).
+//! an internal family marker so family-specific code compiles only where it
+//! applies.
 //!
-//! Each module configures only its own peripheral registers. Pin direction and
-//! `PORTMUX` routing are the application's job, so the HAL stays
-//! board-agnostic.
+//! - `avr128db48`, `avr128db64`, `avr128da64` — AVR128 DB/DA devices.
+//! - `attiny406`, `attiny416` — tinyAVR 0/1-series devices.
+//! - `ufmt` — implement `ufmt::uWrite` for the USART.
 //!
-//! Covered peripherals: clock ([`clock`]), busy-wait delay ([`delay`]), GPIO
-//! ([`gpio`]), I2C/TWI ([`twi`]), SPI ([`spi`]), USART ([`usart`]), 16-bit
-//! timer PWM ([`pwm`]), analog input ([`adc`]), analog output ([`dac`]),
-//! voltage reference ([`vref`]), watchdog ([`wdt`]), real-time counter
-//! ([`rtc`]), custom logic ([`ccl`]), op-amps ([`opamp`]), zero-cross
-//! detection ([`zcd`]) and the signature row ([`sigrow`]). tinyAVR parts
-//! support the subset that maps to their peripheral set: clock, delay, gpio,
-//! usart, adc and wdt.
+//! `_avr128` and `_tinyavr` are internal markers set by the device features. Do
+//! not enable them directly.
+//!
+//! # Peripherals
+//!
+//! clock ([`clock`]), delay ([`delay`]), GPIO ([`gpio`]), I2C/TWI ([`twi`]), SPI
+//! ([`spi`]), USART ([`usart`]), timer PWM ([`pwm`]), ADC ([`adc`]), DAC
+//! ([`dac`]), voltage reference ([`vref`]), watchdog ([`wdt`]), RTC ([`rtc`]),
+//! custom logic ([`ccl`]), op-amps ([`opamp`]), zero-cross ([`zcd`]) and the
+//! signature row ([`sigrow`]). tinyAVR covers the subset that maps to its
+//! peripherals: clock, delay, gpio, usart, adc and wdt.
 
 #![no_std]
-// Each module defines per-device impl macros that are only invoked under the
-// matching device feature. Building for a single device leaves the other
-// devices' macros unused, so the lint is a feature-gating false positive here.
-#![allow(unused_macros)]
+#![allow(
+    unused_macros,
+    reason = "device impl macros are unused when their device feature is off"
+)]
 
 // Re-exported so applications can name the PAC types they pass in.
 pub use avr_device;

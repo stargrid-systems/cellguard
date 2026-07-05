@@ -7,9 +7,7 @@
 //!
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
-// `Mode`/`Phase`/`Polarity` are only referenced by the device impls, so a build
-// with no SPI-supporting device enabled sees them as unused.
-#[allow(unused_imports)]
+#[allow(unused_imports, reason = "used only by device impls")]
 use embedded_hal::spi::{self, Mode, Phase, Polarity, SpiBus};
 
 /// SPI clock prescaler (divides `CLK_PER`).
