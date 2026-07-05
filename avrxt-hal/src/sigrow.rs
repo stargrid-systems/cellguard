@@ -56,7 +56,7 @@ impl TempCalibration {
     #[must_use]
     pub fn kelvin(self, adc_reading: u16) -> u16 {
         // T = (Offset - ADC * Slope) / 4096, with rounding. Matches the data
-        // sheet reference code; wrapping mirrors its unsigned 32-bit math.
+        // sheet reference code. Wrapping mirrors its unsigned 32-bit math.
         let mut temp = u32::from(self.offset).wrapping_sub(u32::from(adc_reading));
         temp = temp.wrapping_mul(u32::from(self.slope));
         temp = temp.wrapping_add(Self::SCALING_FACTOR / 2);

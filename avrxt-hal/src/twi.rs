@@ -190,7 +190,7 @@ impl<T: TwiInstance> Twi<T> {
                         self.wait_read()?;
                         *slot = self.instance.read_byte();
                         if j + 1 == len && last_op {
-                            // NACK the final byte; STOP is issued by the caller.
+                            // NACK the final byte. STOP is issued by the caller.
                             self.instance.prepare_nack();
                         } else {
                             self.instance.ack_and_receive();

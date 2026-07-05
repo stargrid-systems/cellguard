@@ -7,6 +7,7 @@
 //!
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
+#[allow(unused_imports, reason = "used only by device impls")]
 use embedded_hal::spi::{self, Mode, Phase, Polarity, SpiBus};
 
 /// SPI clock prescaler (divides `CLK_PER`).

@@ -1,42 +1,21 @@
 //! Main clock configuration (CLKCTRL).
 //!
-//! The AVR128 DB family boots on the internal high-frequency oscillator (OSCHF)
-//! at 4 MHz. [`set_oschf`] selects another OSCHF frequency. `OSCHFCTRLA` is
-//! configuration-change protected. The CCP IOREG unlock and the protected write
-//! run inside [`avr_device::interrupt::free`], so an interrupt cannot land in
-//! the 4-cycle window and void the unlock.
+//! Configuration-change-protected registers are opened with [`CcpUnlock`]. The
+//! per-family clock control lives in submodules: AVR128 selects the internal
+//! high-frequency oscillator (`set_oschf`), tinyAVR runs from `OSC20M` and
+//! adjusts the main-clock prescaler (`set_main_clock_prescaler`). Both do the
+//! CCP unlock plus the protected write inside `avr_device::interrupt::free`, so
+//! an interrupt cannot land in the unlock window.
 
-/// Internal high-frequency oscillator (OSCHF) frequency options.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HfFreq {
-    Mhz1,
-    Mhz2,
-    Mhz3,
-    Mhz4,
-    Mhz8,
-    Mhz12,
-    Mhz16,
-    Mhz20,
-    Mhz24,
-}
+#[cfg(feature = "_avr128")]
+pub use self::avr128::{HfFreq, OscControl, set_oschf};
+#[cfg(feature = "_tinyavr")]
+pub use self::tiny::{ClkPrescaler, MainClkControl, TinyBaseFreq, set_main_clock_prescaler};
 
-impl HfFreq {
-    /// The selected frequency in Hz (e.g. for [`Delay`](crate::delay::Delay)).
-    #[must_use]
-    pub const fn hz(self) -> u32 {
-        match self {
-            Self::Mhz1 => 1_000_000,
-            Self::Mhz2 => 2_000_000,
-            Self::Mhz3 => 3_000_000,
-            Self::Mhz4 => 4_000_000,
-            Self::Mhz8 => 8_000_000,
-            Self::Mhz12 => 12_000_000,
-            Self::Mhz16 => 16_000_000,
-            Self::Mhz20 => 20_000_000,
-            Self::Mhz24 => 24_000_000,
-        }
-    }
-}
+#[cfg(feature = "_avr128")]
+mod avr128;
+#[cfg(feature = "_tinyavr")]
+mod tiny;
 
 /// Unlocks configuration-change-protected registers. Implemented for each
 /// device's `CPU`. Not for external use.
@@ -46,35 +25,11 @@ pub trait CcpUnlock {
     fn unlock_ioreg(&self);
 }
 
-/// Controls the high-frequency oscillator. Implemented for each device's
-/// `CLKCTRL`. Not for external use.
-pub trait OscControl {
-    /// Writes `OSCHFCTRLA.FRQSEL`. This register is protected, so the caller
-    /// must have just called [`CcpUnlock::unlock_ioreg`].
-    fn write_frqsel(&self, freq: HfFreq);
-    /// Whether the high-frequency oscillator reports stable.
-    fn oschf_stable(&self) -> bool;
-}
-
-/// Selects the internal high-frequency oscillator frequency and waits for it to
-/// stabilize. The main clock source stays OSCHF (the reset default) with no
-/// prescaler, so `CLK_PER` becomes `freq`.
-///
-/// `OSCHFCTRLA` is written whole (reset then configure). The CCP unlock and the
-/// protected write happen with interrupts masked so the unlock window cannot be
-/// interrupted.
-#[inline(always)]
-pub fn set_oschf<C: CcpUnlock, K: OscControl>(cpu: &C, clkctrl: &K, freq: HfFreq) {
-    avr_device::interrupt::free(|_| {
-        cpu.unlock_ioreg();
-        clkctrl.write_frqsel(freq);
-    });
-    crate::wait::spin_until(|| clkctrl.oschf_stable());
-}
-
+// Shared body, invoked from the family submodule that owns each device. Exposed
+// by path (not textual scope) so it can be used after the `mod` declarations.
 macro_rules! impl_ccp_unlock {
     ($CPU:ty) => {
-        impl CcpUnlock for $CPU {
+        impl $crate::clock::CcpUnlock for $CPU {
             #[inline(always)]
             fn unlock_ioreg(&self) {
                 self.ccp().write(|w| w.ccp().ioreg());
@@ -82,40 +37,4 @@ macro_rules! impl_ccp_unlock {
         }
     };
 }
-
-macro_rules! impl_osc_control {
-    ($CLKCTRL:ty) => {
-        impl OscControl for $CLKCTRL {
-            #[inline(always)]
-            fn write_frqsel(&self, freq: HfFreq) {
-                self.oschfctrla().write(|w| match freq {
-                    HfFreq::Mhz1 => w.frqsel()._1m(),
-                    HfFreq::Mhz2 => w.frqsel()._2m(),
-                    HfFreq::Mhz3 => w.frqsel()._3m(),
-                    HfFreq::Mhz4 => w.frqsel()._4m(),
-                    HfFreq::Mhz8 => w.frqsel()._8m(),
-                    HfFreq::Mhz12 => w.frqsel()._12m(),
-                    HfFreq::Mhz16 => w.frqsel()._16m(),
-                    HfFreq::Mhz20 => w.frqsel()._20m(),
-                    HfFreq::Mhz24 => w.frqsel()._24m(),
-                });
-            }
-            fn oschf_stable(&self) -> bool {
-                self.mclkstatus().read().oschfs().bit_is_set()
-            }
-        }
-    };
-}
-
-#[cfg(feature = "avr128db48")]
-impl_ccp_unlock!(avr_device::avr128db48::CPU);
-#[cfg(feature = "avr128db48")]
-impl_osc_control!(avr_device::avr128db48::CLKCTRL);
-#[cfg(feature = "avr128db64")]
-impl_ccp_unlock!(avr_device::avr128db64::CPU);
-#[cfg(feature = "avr128da64")]
-impl_ccp_unlock!(avr_device::avr128da64::CPU);
-#[cfg(feature = "avr128db64")]
-impl_osc_control!(avr_device::avr128db64::CLKCTRL);
-#[cfg(feature = "avr128da64")]
-impl_osc_control!(avr_device::avr128da64::CLKCTRL);
+pub(crate) use impl_ccp_unlock;

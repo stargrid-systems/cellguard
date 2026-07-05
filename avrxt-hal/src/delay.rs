@@ -23,8 +23,13 @@ impl Delay {
 impl DelayNs for Delay {
     #[inline]
     fn delay_ns(&mut self, ns: u32) {
-        // cycles = ns * cycles_per_us / 1000, kept in u32 range.
-        let cycles = self.cycles_per_us.saturating_mul(ns) / 1000;
+        // cycles = ns * cycles_per_us / 1000. Split ns into whole microseconds
+        // and a sub-us remainder so the multiply divides down first and cannot
+        // overflow. This is exact: floor(a*ns/1000) == a*(ns/1000) + a*(ns%1000)/1000.
+        let cycles = self
+            .cycles_per_us
+            .saturating_mul(ns / 1000)
+            .saturating_add(self.cycles_per_us.saturating_mul(ns % 1000) / 1000);
         delay_cycles(cycles.max(1));
     }
 
