@@ -12,7 +12,7 @@ bench = false
 
 [dependencies]
 avrxt-hal = { path = "../avrxt-hal", features = ["attiny416"] }
-avr-device = { version = "0.8.0", features = ["attiny416", "rt"] }
+avr-device = { version = "0.8", features = ["attiny416", "rt"] }
 embedded-hal = { version = "1", default-features = false }
 
 [patch.crates-io]

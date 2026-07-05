@@ -11,7 +11,7 @@ test = false
 bench = false
 
 [dependencies]
-avr-device = { version = "0.8.0", features = ["avr128db48", "rt"] }
+avr-device = { version = "0.8", features = ["avr128db48", "rt"] }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "ddad6827eeb5ff668507d3c4ff7ce0780fab16e0" }

@@ -22,8 +22,8 @@ fn panic(_info: &PanicInfo) -> ! {
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
 
-    // Run the main clock at full speed (prescaler off). The base frequency is
-    // the OSCCFG fuse setting; the ATtiny416 Xplained Nano ships at 20 MHz.
+    // Run the main clock at full speed (prescaler off). The ATtiny416 Xplained Nano
+    // ships at 20 MHz.
     clock::set_main_clock_prescaler(&dp.CPU, &dp.CLKCTRL, None);
     let mut delay = Delay::new(TinyBaseFreq::Mhz20.hz());
 
