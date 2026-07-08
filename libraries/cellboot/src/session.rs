@@ -6,7 +6,7 @@
 //! itself. After a successful commit, [`UpdateAgent::pending_program`] tells the
 //! caller which region is ready, so the caller can hand off to the programmer.
 
-use sha256::Hmac;
+use hmac_sha256::HMAC;
 use crate::image::{HEADER_LEN, ImageHeader, Region, Verifier};
 use crate::io::ImageStore;
 use crate::protocol::{Command, NackReason, Response};
@@ -61,7 +61,7 @@ struct Receiving {
     header: ImageHeader,
     slot: RegionSlot,
     written: u32,
-    verifier: Verifier<Hmac>,
+    verifier: Verifier<HMAC>,
 }
 
 /// The device-side update agent.
@@ -132,7 +132,7 @@ impl<'k, S: ImageStore> UpdateAgent<'k, S> {
     }
 
     fn on_begin(&mut self, header_bytes: &[u8; HEADER_LEN]) -> Response {
-        let Ok((header, verifier)) = Verifier::new(Hmac::new(self.key), header_bytes) else {
+        let Ok((header, verifier)) = Verifier::new(HMAC::new(self.key), header_bytes) else {
             return Response::Nack(NackReason::Malformed);
         };
         if header.target_id != self.target_id {
@@ -245,7 +245,7 @@ impl<'k, S: ImageStore> UpdateAgent<'k, S> {
 )]
 mod tests {
     use super::{RegionSlot, StagingLayout, UpdateAgent};
-    use sha256::Hmac;
+    use hmac_sha256::HMAC;
     use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use crate::io::ImageStore;
     use crate::protocol::{Command, NackReason, Response};
@@ -304,7 +304,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = header.sign(Hmac::new(KEY), payload).unwrap();
+        let full = header.sign(HMAC::new(KEY), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ads131m08", "cat25", "cellboot", "cellguard-protocol", "crc", "p3t1755", "sha256", "tca9535"]
+members = ["ads131m08", "cat25", "cellboot", "cellguard-protocol", "crc", "p3t1755", "tca9535"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]
@@ -37,5 +37,4 @@ embedded-hal-mock = { version = "0.11", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
 hmac-sha256 = { version = "1.1.14", default-features = false }
 crc = { path = "crc" }
-sha256 = { path = "sha256" }
 cellguard-protocol = { path = "cellguard-protocol" }

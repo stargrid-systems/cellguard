@@ -12,7 +12,7 @@
 use core::fmt;
 
 use crc::Crc32;
-use sha256::{Mac, ct_eq};
+use crate::mac::{Mac, ct_eq};
 
 /// Total length of the image header in bytes.
 pub const HEADER_LEN: usize = 64;
@@ -334,7 +334,7 @@ impl<M: Mac> Verifier<M> {
 #[cfg(test)]
 mod tests {
     use super::{HEADER_LEN, ImageHeader, ImageKind, ParseError, Region, VerifyError, Verifier};
-    use sha256::Hmac;
+    use hmac_sha256::HMAC;
 
     const KEY: &[u8] = b"unit-test-shared-key";
 
@@ -356,7 +356,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        header.sign(Hmac::new(KEY), payload).unwrap()
+        header.sign(HMAC::new(KEY), payload).unwrap()
     }
 
     #[test]
@@ -385,7 +385,7 @@ mod tests {
     fn verifies_good_image() {
         let payload = ramp();
         let header_bytes = build_signed(&payload);
-        let (header, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
+        let (header, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
         assert_eq!(header.target_id, 0x1234);
         for chunk in payload.chunks(7) {
             verifier.feed(chunk);
@@ -397,7 +397,7 @@ mod tests {
     fn detects_tampered_payload() {
         let payload = ramp();
         let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
+        let (_, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
         let mut tampered = payload;
         if let Some(first) = tampered.first_mut() {
             *first ^= 0x01;
@@ -411,7 +411,7 @@ mod tests {
     fn detects_short_payload() {
         let payload = ramp();
         let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
+        let (_, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
         verifier.feed(payload.get(..100).unwrap());
         assert_eq!(verifier.finish(), Err(VerifyError::WrongLength));
     }
@@ -420,7 +420,7 @@ mod tests {
     fn detects_wrong_key() {
         let payload = ramp();
         let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(Hmac::new(b"wrong-key"), &header_bytes).unwrap();
+        let (_, mut verifier) = Verifier::new(HMAC::new(b"wrong-key"), &header_bytes).unwrap();
         for chunk in payload.chunks(7) {
             verifier.feed(chunk);
         }

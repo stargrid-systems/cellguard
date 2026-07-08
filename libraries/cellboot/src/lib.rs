@@ -6,9 +6,9 @@
 //! I/O traits ([`io`]) through which a concrete target performs all of its
 //! input and output.
 //!
-//! Integrity and authenticity primitives live in sibling crates: `crc` for
-//! CRC-16/CRC-32 and `sha256` for SHA-256, HMAC-SHA256, and the MAC
-//! abstraction.
+//! Integrity comes from the `crc` crate (CRC-16/CRC-32) and authenticity from
+//! the `hmac-sha256` crate, wrapped by the local [`mac`] module which adds the
+//! [`Mac`](mac::Mac) abstraction and constant-time comparison.
 //!
 //! The crate performs no I/O itself. The same logic runs unchanged on the
 //! `AVR128` update agent, the `StorePilot`, and the host-side signing tool.
@@ -23,12 +23,14 @@
 #![warn(missing_docs)]
 
 pub use self::image::{ImageHeader, ImageKind, ParseError, Region, SignError, VerifyError, Verifier};
+pub use self::mac::{Mac, ct_eq};
 pub use self::protocol::{Command, NackReason, ProtocolError, Response};
 pub use self::session::{RegionSlot, StagingLayout, UpdateAgent};
 pub use self::state::{AppHealth, PersistentState, StagedState, StateError, UpdateOutcome};
 
 pub mod image;
 pub mod io;
+pub mod mac;
 pub mod protocol;
 pub mod session;
 pub mod state;
