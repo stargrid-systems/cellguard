@@ -28,15 +28,15 @@ mod tests {
         pos
     }
 
-    fn decode_frame<'a>(decoder: &'a mut Decoder<'_>, wire: &[u8]) -> &'a [u8] {
+    fn decode_frame(wire: &[u8], out: &mut [u8]) -> usize {
+        let mut decoder = Decoder::new();
         let mut done = None;
         for &byte in wire {
-            if let Some(len) = decoder.feed(byte).expect("decode should not fail") {
+            if let Some(len) = decoder.feed(byte, out).expect("decode should not fail") {
                 done = Some(len);
             }
         }
-        assert!(done.is_some(), "frame did not complete");
-        decoder.data()
+        done.expect("frame did not complete")
     }
 
     #[track_caller]
@@ -46,8 +46,8 @@ mod tests {
         assert_eq!(&wire[..n], encoded, "encoding mismatch");
 
         let mut scratch = [0u8; 512];
-        let mut dec = Decoder::new(&mut scratch);
-        assert_eq!(decode_frame(&mut dec, encoded), decoded, "decoding mismatch");
+        let len = decode_frame(encoded, &mut scratch);
+        assert_eq!(&scratch[..len], decoded, "decoding mismatch");
     }
 
     #[test]
@@ -66,7 +66,7 @@ mod tests {
         let mut wire = [0u8; 512];
         let n = encode(&input, &mut wire);
         let mut scratch = [0u8; 512];
-        let mut decoder = Decoder::new(&mut scratch);
-        assert_eq!(decode_frame(&mut decoder, &wire[..n]), &input);
+        let len = decode_frame(&wire[..n], &mut scratch);
+        assert_eq!(&scratch[..len], &input);
     }
 }

@@ -2,36 +2,47 @@
 
 /// A streaming COBS decoder.
 ///
-/// Feed wire bytes one at a time with [`Decoder::feed`]. It writes decoded bytes
-/// into the buffer given at construction and reports the frame length when the
-/// terminating `0x00` arrives. Read the frame with [`Decoder::data`].
-pub struct Decoder<'a> {
-    buf: &'a mut [u8],
+/// This is a pure state machine: it owns no buffer. Feed wire bytes one at a
+/// time with [`Decoder::feed`], passing the same output buffer each call. When
+/// the terminating `0x00` arrives, `feed` returns the decoded frame length,
+/// and the frame is in the first that many bytes of the output buffer.
+///
+/// Owning no buffer means a caller can hold a `Decoder` and its output buffer
+/// as separate fields without a self-referential borrow.
+#[derive(Debug, Clone)]
+pub struct Decoder {
     pos: usize,
     state: State,
 }
 
-impl<'a> Decoder<'a> {
-    /// Creates a decoder writing into `buf`.
-    pub const fn new(buf: &'a mut [u8]) -> Self {
+impl Default for Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder {
+    /// Creates a decoder.
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
-            buf,
             pos: 0,
             state: State::Idle,
         }
     }
 
-    /// Feeds one wire byte.
+    /// Feeds one wire byte, writing decoded output into `out`.
     ///
-    /// Returns `Ok(Some(len))` when a complete frame has been decoded (its bytes
-    /// are then available from [`Decoder::data`]), or `Ok(None)` while a frame is
-    /// still in progress.
+    /// Returns `Ok(Some(len))` when a complete frame has been decoded into the
+    /// first `len` bytes of `out`, or `Ok(None)` while a frame is still in
+    /// progress. The same `out` buffer must be passed across the calls that make
+    /// up one frame.
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::BufferTooSmall`] if the frame does not fit the
-    /// output buffer, or [`DecodeError::InvalidFrame`] on a malformed frame.
-    pub fn feed(&mut self, byte: u8) -> Result<Option<usize>, DecodeError> {
+    /// Returns [`DecodeError::BufferTooSmall`] if the frame does not fit `out`,
+    /// or [`DecodeError::InvalidFrame`] on a malformed frame.
+    pub fn feed(&mut self, byte: u8, out: &mut [u8]) -> Result<Option<usize>, DecodeError> {
         match self.state.step(byte) {
             Step::Empty => Ok(Some(0)),
             Step::FrameStart => {
@@ -40,22 +51,17 @@ impl<'a> Decoder<'a> {
             }
             Step::FrameComplete => Ok(Some(self.pos)),
             Step::Data(d) => {
-                let slot = self.buf.get_mut(self.pos).ok_or(DecodeError::BufferTooSmall)?;
+                let slot = out.get_mut(self.pos).ok_or(DecodeError::BufferTooSmall)?;
                 *slot = d;
                 self.pos += 1;
                 Ok(None)
             }
             Step::Error(err) => {
                 self.state = State::Idle;
+                self.pos = 0;
                 Err(err)
             }
         }
-    }
-
-    /// Returns the bytes decoded so far for the current or last frame.
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        self.buf.get(..self.pos).unwrap_or(&[])
     }
 }
 
@@ -69,6 +75,7 @@ pub enum DecodeError {
     InvalidFrame,
 }
 
+#[derive(Debug, Clone)]
 enum State {
     Idle,
     Block(u8),

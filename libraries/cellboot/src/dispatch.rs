@@ -1,0 +1,251 @@
+//! Drives the update agent from the bus.
+//!
+//! [`Dispatcher`] owns an [`UpdateAgent`] plus the COBS decode state and its
+//! receive buffer. Feed it wire bytes one at a time with [`Dispatcher::feed`];
+//! when a complete frame addressed to this node carries a bootloader command, it
+//! runs the agent and returns the COBS-encoded response to transmit.
+//!
+//! Frames that fail to decode, fail their CRCs, are addressed to another node,
+//! or are not bootloader commands are ignored (no response). Relaying frames
+//! for other nodes down the daisy chain is a separate concern and not handled
+//! here.
+
+use cellguard_protocol::{Decoder, Encoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet};
+
+use crate::command::Command;
+use crate::io::ImageStore;
+use crate::session::UpdateAgent;
+use crate::state::STATE_LEN;
+
+/// Largest pre-COBS response frame: a status reply (header + state + CRC).
+const MAX_RESPONSE_FRAME: usize = HEADER_LEN + STATE_LEN + PAYLOAD_CRC_LEN;
+
+/// Worst-case COBS-encoded size of the largest response, including the
+/// terminator. COBS adds one code byte per 254 data bytes plus the delimiter.
+const MAX_RESPONSE_WIRE: usize = MAX_RESPONSE_FRAME + MAX_RESPONSE_FRAME.div_ceil(254) + 1;
+
+/// Bus driver for the update agent.
+///
+/// `RX` sizes the receive buffer and must be large enough for the biggest
+/// incoming frame (a `Begin` header, or a `Data` chunk plus its overhead).
+pub struct Dispatcher<'k, S, const RX: usize> {
+    agent: UpdateAgent<'k, S>,
+    id: u8,
+    decoder: Decoder,
+    rx: [u8; RX],
+    tx: [u8; MAX_RESPONSE_WIRE],
+}
+
+impl<'k, S: ImageStore, const RX: usize> Dispatcher<'k, S, RX> {
+    /// Creates a dispatcher for node `id` around `agent`.
+    pub const fn new(agent: UpdateAgent<'k, S>, id: u8) -> Self {
+        Self {
+            agent,
+            id,
+            decoder: Decoder::new(),
+            rx: [0; RX],
+            tx: [0; MAX_RESPONSE_WIRE],
+        }
+    }
+
+    /// Returns the wrapped agent, e.g. to read its status or check
+    /// [`UpdateAgent::pending_program`].
+    #[must_use]
+    pub const fn agent(&self) -> &UpdateAgent<'k, S> {
+        &self.agent
+    }
+
+    /// Feeds one received wire byte.
+    ///
+    /// Returns `Some(frame)` with the COBS-encoded response to transmit when a
+    /// complete, valid, in-scope command was handled, otherwise `None`.
+    pub fn feed(&mut self, byte: u8) -> Option<&[u8]> {
+        // `None` mid-frame; `Err` is bus noise the decoder already resynced from.
+        let Ok(Some(len)) = self.decoder.feed(byte, &mut self.rx) else {
+            return None;
+        };
+
+        let frame = self.rx.get(..len)?;
+        let packet = Packet::parse(frame).ok()?;
+        if packet.id != self.id {
+            return None;
+        }
+        let command = Command::from_packet(packet).ok()?;
+        let response = self.agent.handle(command);
+
+        let mut raw = [0u8; MAX_RESPONSE_FRAME];
+        let raw_len = response.to_packet(self.id, &mut raw).ok()?;
+        let wire_len = encode_cobs(raw.get(..raw_len)?, &mut self.tx)?;
+        self.tx.get(..wire_len)
+    }
+}
+
+/// COBS-encodes `frame` into `out`, returning the encoded length.
+fn encode_cobs(frame: &[u8], out: &mut [u8]) -> Option<usize> {
+    let mut encoder = Encoder::new(frame);
+    let mut pos = 0;
+    while let Some(byte) = encoder.pull() {
+        *out.get_mut(pos)? = byte;
+        pos = pos.checked_add(1)?;
+    }
+    Some(pos)
+}
+
+#[cfg(test)]
+mod tests {
+    use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
+    use hmac_sha256::HMAC;
+
+    use super::Dispatcher;
+    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use crate::io::ImageStore;
+    use crate::session::{RegionSlot, StagingLayout, UpdateAgent};
+    use crate::state::{PersistentState, StagedState};
+
+    const KEY: &[u8] = b"dispatch-test-key";
+    const TARGET: u16 = 0x33;
+    const NODE: u8 = 7;
+    const CAP: usize = 4096;
+
+    struct MemStore {
+        buf: [u8; CAP],
+    }
+
+    impl ImageStore for MemStore {
+        type Error = ();
+
+        fn capacity(&self) -> u32 {
+            u32::try_from(CAP).unwrap()
+        }
+
+        fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), ()> {
+            let start = usize::try_from(offset).map_err(|_| ())?;
+            let end = start.checked_add(buf.len()).ok_or(())?;
+            buf.copy_from_slice(self.buf.get(start..end).ok_or(())?);
+            Ok(())
+        }
+
+        fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
+            let start = usize::try_from(offset).map_err(|_| ())?;
+            let end = start.checked_add(data.len()).ok_or(())?;
+            self.buf.get_mut(start..end).ok_or(())?.copy_from_slice(data);
+            Ok(())
+        }
+    }
+
+    fn make_dispatcher() -> Dispatcher<'static, MemStore, 512> {
+        let layout = StagingLayout {
+            application: RegionSlot { offset: 0, capacity: 2048 },
+            bootloader: RegionSlot { offset: 2048, capacity: 2048 },
+        };
+        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, PersistentState::new(1));
+        Dispatcher::new(agent, NODE)
+    }
+
+    /// COBS-encodes a command packet the way a host would put it on the wire.
+    fn wire_command(kind: Kind, payload: &[u8]) -> ([u8; 256], usize) {
+        let mut raw = [0u8; 200];
+        let raw_len = Packet::write(NODE, kind, payload, &mut raw).unwrap();
+        let mut wire = [0u8; 256];
+        let mut encoder = Encoder::new(&raw[..raw_len]);
+        let mut pos = 0;
+        while let Some(byte) = encoder.pull() {
+            wire[pos] = byte;
+            pos += 1;
+        }
+        (wire, pos)
+    }
+
+    /// Feeds a wire command into the dispatcher and decodes the response packet.
+    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
+        let (wire, len) = wire_command(kind, payload);
+        let mut response = None;
+        for &byte in &wire[..len] {
+            if let Some(frame) = dispatcher.feed(byte) {
+                let mut copy = [0u8; 128];
+                copy[..frame.len()].copy_from_slice(frame);
+                response = Some((copy, frame.len()));
+            }
+        }
+        let (wire_resp, wire_resp_len) = response.expect("expected a response");
+
+        let mut scratch = [0u8; 128];
+        let mut decoder = Decoder::new();
+        let mut done = None;
+        for &byte in &wire_resp[..wire_resp_len] {
+            if let Some(n) = decoder.feed(byte, &mut scratch).unwrap() {
+                done = Some(n);
+            }
+        }
+        let n = done.expect("response frame did not complete");
+        let packet = Packet::parse(&scratch[..n]).unwrap();
+        let mut payload_out = [0u8; 64];
+        payload_out[..packet.payload.len()].copy_from_slice(packet.payload);
+        (packet.kind, payload_out, packet.payload.len())
+    }
+
+    fn signed_image(payload: &[u8]) -> [u8; HEADER_LEN] {
+        let header = ImageHeader {
+            kind: ImageKind::Application,
+            region: Region::ApplicationCode,
+            target_id: TARGET,
+            fw_version: 5,
+            payload_len: 0,
+            payload_crc32: 0,
+            hmac: [0u8; 32],
+        };
+        let full = header.sign(HMAC::new(KEY), payload).unwrap();
+        let mut only_header = [0u8; HEADER_LEN];
+        only_header.copy_from_slice(&full);
+        only_header
+    }
+
+    #[test]
+    fn probe_returns_status() {
+        let mut dispatcher = make_dispatcher();
+        let (kind, _payload, _len) = exchange(&mut dispatcher, Kind::BootProbe, &[]);
+        assert_eq!(kind, Kind::BootStatus);
+    }
+
+    #[test]
+    fn ignores_frame_for_other_node() {
+        let mut dispatcher = make_dispatcher();
+        // A well-formed probe addressed to a different node id.
+        let mut raw = [0u8; 32];
+        let raw_len = Packet::write(NODE + 1, Kind::BootProbe, &[], &mut raw).unwrap();
+        let mut encoder = Encoder::new(&raw[..raw_len]);
+        let mut got = false;
+        while let Some(byte) = encoder.pull() {
+            if dispatcher.feed(byte).is_some() {
+                got = true;
+            }
+        }
+        assert!(!got, "must not answer a frame addressed to another node");
+    }
+
+    #[test]
+    #[expect(clippy::cast_possible_truncation, reason = "index < 200 fits in a u8")]
+    fn full_update_flow() {
+        let mut dispatcher = make_dispatcher();
+        let payload: [u8; 200] = core::array::from_fn(|i| i as u8);
+        let header = signed_image(&payload);
+
+        let (kind, _p, _l) = exchange(&mut dispatcher, Kind::BootBegin, &header);
+        assert_eq!(kind, Kind::BootAck);
+
+        let mut offset = 0usize;
+        for chunk in payload.chunks(32) {
+            let mut data = [0u8; 64];
+            data[..4].copy_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+            data[4..4 + chunk.len()].copy_from_slice(chunk);
+            let (kind, _p, _l) = exchange(&mut dispatcher, Kind::BootData, &data[..4 + chunk.len()]);
+            assert_eq!(kind, Kind::BootAck);
+            offset += chunk.len();
+        }
+
+        let (kind, _p, _l) = exchange(&mut dispatcher, Kind::BootCommit, &[]);
+        assert_eq!(kind, Kind::BootAck);
+        assert_eq!(dispatcher.agent().pending_program(), Some(Region::ApplicationCode));
+        assert_eq!(dispatcher.agent().status().staged, StagedState::Ready);
+    }
+}

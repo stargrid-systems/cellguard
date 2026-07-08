@@ -23,6 +23,7 @@
 #![warn(missing_docs)]
 
 pub mod command;
+pub mod dispatch;
 pub mod image;
 pub mod io;
 pub mod mac;
