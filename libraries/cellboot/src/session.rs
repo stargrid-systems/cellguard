@@ -6,7 +6,7 @@
 //! itself. After a successful commit, [`UpdateAgent::pending_program`] tells the
 //! caller which region is ready, so the caller can hand off to the programmer.
 
-use crate::hmac::Hmac;
+use sha256::Hmac;
 use crate::image::{HEADER_LEN, ImageHeader, Region, Verifier};
 use crate::io::ImageStore;
 use crate::protocol::{Command, NackReason, Response};
@@ -244,10 +244,8 @@ impl<'k, S: ImageStore> UpdateAgent<'k, S> {
     reason = "tests build and inspect fixed-size buffers and payloads with in-range indices"
 )]
 mod tests {
-    use std::vec::Vec;
-
     use super::{RegionSlot, StagingLayout, UpdateAgent};
-    use crate::hmac::Hmac;
+    use sha256::Hmac;
     use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use crate::io::ImageStore;
     use crate::protocol::{Command, NackReason, Response};
@@ -312,6 +310,14 @@ mod tests {
         only_header
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a wrapping byte ramp is exactly the intended test payload"
+    )]
+    fn ramp300() -> [u8; 300] {
+        core::array::from_fn(|i| i as u8)
+    }
+
     fn run_update(agent: &mut UpdateAgent<MemStore>, header: &[u8; HEADER_LEN], payload: &[u8]) -> Response {
         assert!(matches!(
             agent.handle(Command::Begin { header: *header }),
@@ -329,7 +335,7 @@ mod tests {
 
     #[test]
     fn happy_path_stages_and_verifies() {
-        let payload: Vec<u8> = (0..300u32).map(|i| (i & 0xFF) as u8).collect();
+        let payload = ramp300();
         let header = signed_image(&payload);
         let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, PersistentState::new(1));
 
@@ -348,7 +354,7 @@ mod tests {
 
     #[test]
     fn tampered_payload_is_rejected() {
-        let payload: Vec<u8> = (0..300u32).map(|i| (i & 0xFF) as u8).collect();
+        let payload = ramp300();
         let header = signed_image(&payload);
         let mut tampered = payload;
         tampered[100] ^= 0x01;

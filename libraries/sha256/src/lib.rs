@@ -1,7 +1,24 @@
-//! SHA-256 (FIPS 180-4).
+//! Table-free SHA-256 (FIPS 180-4), HMAC-SHA256 (RFC 2104), and a small MAC
+//! abstraction.
 //!
-//! A small, dependency-free, streaming implementation used as the hash for
-//! [`crate::hmac`]. It can also be used on its own for plain digests.
+//! Everything here is `#![no_std]`, dependency-free, allocation-free, and
+//! streaming: feed data with `update` and read the result with `finalize`.
+//!
+//! The SHA-256 core lives at the crate root. HMAC-SHA256 is in [`hmac`] and the
+//! [`Mac`](mac::Mac) abstraction plus constant-time comparison are in [`mac`].
+//!
+//! A note on AVR: the LLVM AVR backend has a known miscompilation of
+//! rotate-and-add-heavy code (rust-lang/rust#109000) that can silently corrupt
+//! hash output at some optimization settings. Any AVR build MUST run a
+//! known-answer test against the vectors below at its production flags.
+#![no_std]
+#![warn(missing_docs)]
+
+pub use self::hmac::Hmac;
+pub use self::mac::{Mac, ct_eq};
+
+pub mod hmac;
+pub mod mac;
 
 /// Length of a SHA-256 digest in bytes.
 pub const DIGEST_LEN: usize = 32;
@@ -279,7 +296,6 @@ mod tests {
 
     #[test]
     fn multi_block() {
-        // 1000 'a' bytes spans several blocks and forces the streaming path.
         let mut hasher = super::Sha256::new();
         for _ in 0..1000 {
             hasher.update(b"a");

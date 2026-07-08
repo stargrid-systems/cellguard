@@ -11,8 +11,8 @@
 
 use core::fmt;
 
-use crate::crc32::Crc32;
-use crate::mac::{Mac, ct_eq};
+use crc::Crc32;
+use sha256::{Mac, ct_eq};
 
 /// Total length of the image header in bytes.
 pub const HEADER_LEN: usize = 64;
@@ -213,7 +213,7 @@ impl ImageHeader {
     /// `u32` length field.
     pub fn sign<M: Mac>(mut self, mut mac: M, payload: &[u8]) -> Result<[u8; HEADER_LEN], SignError> {
         self.payload_len = u32::try_from(payload.len()).map_err(|_| SignError::PayloadTooLarge)?;
-        self.payload_crc32 = crate::crc32::checksum(payload);
+        self.payload_crc32 = crc::checksum32(payload);
         let prefix = self.serialize();
         mac.update(prefix.split_at(MAC_PREFIX_LEN).0);
         mac.update(payload);
@@ -333,12 +333,18 @@ impl<M: Mac> Verifier<M> {
 
 #[cfg(test)]
 mod tests {
-    use std::vec::Vec;
-
     use super::{HEADER_LEN, ImageHeader, ImageKind, ParseError, Region, VerifyError, Verifier};
-    use crate::hmac::Hmac;
+    use sha256::Hmac;
 
     const KEY: &[u8] = b"unit-test-shared-key";
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "index stays below 200 which fits in a u8"
+    )]
+    fn ramp() -> [u8; 200] {
+        core::array::from_fn(|i| i as u8)
+    }
 
     fn build_signed(payload: &[u8]) -> [u8; HEADER_LEN] {
         let header = ImageHeader {
@@ -377,7 +383,7 @@ mod tests {
 
     #[test]
     fn verifies_good_image() {
-        let payload: Vec<u8> = (0u8..200).collect();
+        let payload = ramp();
         let header_bytes = build_signed(&payload);
         let (header, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
         assert_eq!(header.target_id, 0x1234);
@@ -389,7 +395,7 @@ mod tests {
 
     #[test]
     fn detects_tampered_payload() {
-        let payload: Vec<u8> = (0u8..200).collect();
+        let payload = ramp();
         let header_bytes = build_signed(&payload);
         let (_, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
         let mut tampered = payload;
@@ -403,7 +409,7 @@ mod tests {
 
     #[test]
     fn detects_short_payload() {
-        let payload: Vec<u8> = (0u8..200).collect();
+        let payload = ramp();
         let header_bytes = build_signed(&payload);
         let (_, mut verifier) = Verifier::new(Hmac::new(KEY), &header_bytes).unwrap();
         verifier.feed(payload.get(..100).unwrap());
@@ -412,7 +418,7 @@ mod tests {
 
     #[test]
     fn detects_wrong_key() {
-        let payload: Vec<u8> = (0u8..200).collect();
+        let payload = ramp();
         let header_bytes = build_signed(&payload);
         let (_, mut verifier) = Verifier::new(Hmac::new(b"wrong-key"), &header_bytes).unwrap();
         for chunk in payload.chunks(7) {

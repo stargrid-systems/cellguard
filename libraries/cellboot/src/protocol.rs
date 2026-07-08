@@ -15,7 +15,6 @@
 //! Encoding is buffer-based and allocation-free. The [`image`](crate::image)
 //! header travels inside a `Begin`, and a payload chunk travels inside a `Data`.
 
-use crate::crc32;
 use crate::image::HEADER_LEN;
 use crate::state::{PersistentState, STATE_LEN};
 
@@ -269,7 +268,7 @@ fn encode_frame(opcode: u8, body_a: &[u8], body_b: &[u8], out: &mut [u8]) -> Res
 
     let len_value = u16::try_from(payload).map_err(|_| ProtocolError::BadLength)?;
 
-    let mut crc = crc32::Crc32::new();
+    let mut crc = crc::Crc32::new();
     crc.update(&[opcode]);
     crc.update(body_a);
     crc.update(body_b);
@@ -304,7 +303,7 @@ fn split_frame(frame: &[u8]) -> Result<(u8, &[u8]), ProtocolError> {
         crc_bytes.get(2).copied().unwrap_or(0),
         crc_bytes.get(3).copied().unwrap_or(0),
     ]);
-    if crc32::checksum(opcode_and_body) != expected {
+    if crc::checksum32(opcode_and_body) != expected {
         return Err(ProtocolError::BadCrc);
     }
     let opcode = opcode_and_body.first().copied().ok_or(ProtocolError::BadLength)?;
@@ -335,11 +334,10 @@ impl<'a> Writer<'a> {
 #[cfg(test)]
 #[expect(
     clippy::indexing_slicing,
-    reason = "tests build and inspect fixed-size frame buffers with in-range indices"
+    clippy::cast_possible_truncation,
+    reason = "tests build and inspect fixed-size frame buffers with in-range values"
 )]
 mod tests {
-    use std::vec::Vec;
-
     use super::{Command, NackReason, ProtocolError, Response, frame_len};
     use crate::image::HEADER_LEN;
     use crate::state::PersistentState;
@@ -396,7 +394,7 @@ mod tests {
 
     #[test]
     fn data_chunk_borrows_input() {
-        let payload: Vec<u8> = (0u8..100).collect();
+        let payload: [u8; 100] = core::array::from_fn(|i| i as u8);
         let mut buf = [0u8; 256];
         let n = Command::Data { offset: 0, chunk: &payload }.encode(&mut buf).unwrap();
         match Command::decode(&buf[..n]).unwrap() {

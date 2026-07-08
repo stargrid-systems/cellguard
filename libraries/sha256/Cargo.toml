@@ -1,7 +1,7 @@
 [package]
-name = "cellboot"
+name = "sha256"
 version = "0.1.0"
-description = "Hardware-independent core of the CellGuard bootloader and firmware-update system."
+description = "Table-free SHA-256, HMAC-SHA256, and a MAC abstraction for the CellGuard firmware."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,8 +10,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-crc.workspace = true
-sha256.workspace = true
 
 [lints]
 workspace = true

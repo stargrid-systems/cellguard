@@ -21,6 +21,14 @@ dependencies = [
 [[package]]
 name = "cellboot"
 version = "0.1.0"
+dependencies = [
+ "crc",
+ "sha256",
+]
+
+[[package]]
+name = "crc"
+version = "0.1.0"
 
 [[package]]
 name = "embedded-hal"
@@ -61,6 +69,10 @@ dependencies = [
  "embedded-hal",
  "embedded-hal-mock",
 ]
+
+[[package]]
+name = "sha256"
+version = "0.1.0"
 
 [[package]]
 name = "tca9535"

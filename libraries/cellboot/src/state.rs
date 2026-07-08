@@ -7,7 +7,6 @@
 
 use core::fmt;
 
-use crate::crc32;
 
 /// Serialized length of a [`PersistentState`] record in bytes.
 pub const STATE_LEN: usize = 28;
@@ -172,7 +171,7 @@ impl PersistentState {
         out[8..12].copy_from_slice(&self.agent_version.to_le_bytes());
         out[12..16].copy_from_slice(&self.app_version.to_le_bytes());
         out[16..20].copy_from_slice(&self.staged_version.to_le_bytes());
-        let crc = crc32::checksum(&out[0..24]);
+        let crc = crc::checksum32(&out[0..24]);
         out[24..28].copy_from_slice(&crc.to_le_bytes());
         out
     }
@@ -186,7 +185,7 @@ impl PersistentState {
     /// an error should fall back to [`PersistentState::new`].
     pub fn parse(bytes: &[u8; STATE_LEN]) -> Result<Self, StateError> {
         let stored_crc = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
-        if crc32::checksum(&bytes[0..24]) != stored_crc {
+        if crc::checksum32(&bytes[0..24]) != stored_crc {
             return Err(StateError::BadCrc);
         }
         if bytes[0] != STATE_FORMAT_VERSION {
@@ -287,7 +286,7 @@ mod tests {
         let mut bytes = PersistentState::new(1).serialize();
         bytes[0] = 9;
         // Recompute the CRC so the format check is what trips, not the CRC.
-        let crc = crate::crc32::checksum(&bytes[0..24]);
+        let crc = crc::checksum32(&bytes[0..24]);
         bytes[24..28].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(PersistentState::parse(&bytes), Err(StateError::UnsupportedFormat(9)));
     }

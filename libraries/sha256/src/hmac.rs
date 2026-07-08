@@ -1,7 +1,7 @@
 //! HMAC-SHA256 (RFC 2104) used to authenticate firmware images.
 
 use crate::mac::Mac;
-use crate::sha256::{BLOCK_LEN, DIGEST_LEN, Sha256};
+use crate::{BLOCK_LEN, DIGEST_LEN, Sha256};
 
 const IPAD: u8 = 0x36;
 const OPAD: u8 = 0x5C;
@@ -30,7 +30,7 @@ impl Hmac {
     pub fn new(key: &[u8]) -> Self {
         let mut block = [0u8; BLOCK_LEN];
         if key.len() > BLOCK_LEN {
-            block[..DIGEST_LEN].copy_from_slice(&crate::sha256::digest(key));
+            block[..DIGEST_LEN].copy_from_slice(&crate::digest(key));
         } else {
             block[..key.len()].copy_from_slice(key);
         }
