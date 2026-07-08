@@ -1,0 +1,21 @@
+[package]
+name = "cellguard-protocol"
+version = "0.1.0"
+description = "Universal COBS-framed packet protocol for the CellGuard RS485 bus."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# Adds the bootloader message kinds to the central registry. Additive.
+bootloader = []
+
+[dependencies]
+zerocopy = { workspace = true, features = ["derive"] }
+crc.workspace = true
+
+[lints]
+workspace = true
