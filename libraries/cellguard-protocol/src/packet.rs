@@ -120,7 +120,7 @@ impl<'a> Packet<'a> {
     /// Writes a decoded frame for this packet into `out`, returning its length.
     ///
     /// The result is the pre-COBS frame. The caller COBS-encodes it onto the
-    /// wire with [`crate::cobs::Encoder`].
+    /// wire with [`crate::Encoder`].
     ///
     /// # Errors
     ///

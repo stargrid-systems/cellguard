@@ -4,8 +4,7 @@
 //! and from [`cellguard_protocol`] packets using the bootloader [`Kind`]s, so
 //! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
 
-use cellguard_protocol::kind::Kind;
-use cellguard_protocol::packet::{Error as PacketError, Packet};
+use cellguard_protocol::{Error as PacketError, Kind, Packet};
 
 use crate::image::HEADER_LEN;
 use crate::state::PersistentState;
@@ -83,7 +82,7 @@ impl Response {
     /// Writes this response as a packet frame into `out`, returning its length.
     ///
     /// The result is the pre-COBS frame; the caller COBS-encodes it with
-    /// [`cellguard_protocol::cobs::Encoder`].
+    /// [`cellguard_protocol::Encoder`].
     ///
     /// # Errors
     ///
@@ -173,8 +172,7 @@ impl core::error::Error for MapError {}
 
 #[cfg(test)]
 mod tests {
-    use cellguard_protocol::kind::Kind;
-    use cellguard_protocol::packet::Packet;
+    use cellguard_protocol::{Kind, Packet};
 
     use super::{Command, MapError, NackReason, Response};
     use crate::image::HEADER_LEN;
