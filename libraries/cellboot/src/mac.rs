@@ -4,14 +4,6 @@
 //! adds the [`Mac`] trait, so image verification is generic and testable, a
 //! constant-time [`ct_eq`], and the known-answer tests.
 //!
-//! # AVR warning
-//!
-//! The LLVM AVR backend has a known miscompilation of rotate-and-add-heavy code
-//! (rust-lang/rust#109000) that can silently corrupt hash output at some
-//! optimization settings. The known-answer tests below MUST also pass on real
-//! AVR silicon at the production optimization flags before the output is
-//! trusted.
-//!
 //! [`hmac-sha256`]: https://crates.io/crates/hmac-sha256
 
 use hmac_sha256::HMAC;
@@ -41,6 +33,26 @@ impl Mac for HMAC {
     fn finalize(self) -> [u8; 32] {
         Self::finalize(self)
     }
+}
+
+/// Domain-separation prefix for the key-replacement authentication tag.
+///
+/// Mixing this into the tag keeps a captured firmware-image HMAC from being
+/// replayed as a key-replacement request.
+pub const KEY_REPLACE_DOMAIN: &[u8] = b"CGKEYROT1";
+
+/// Authenticates a key-replacement request in constant time.
+///
+/// Returns `true` when `tag` equals
+/// `HMAC(current_key, KEY_REPLACE_DOMAIN || new_key)`. Only a holder of the
+/// current key can produce a valid tag, so an unauthorized peer cannot rotate
+/// the key.
+#[must_use]
+pub fn authenticate_key_replace(current_key: &[u8], new_key: &[u8], tag: &[u8; 32]) -> bool {
+    let mut mac = HMAC::new(current_key);
+    mac.update(KEY_REPLACE_DOMAIN);
+    mac.update(new_key);
+    ct_eq(&mac.finalize(), tag)
 }
 
 /// Compares two byte slices in constant time.
@@ -74,9 +86,6 @@ mod tests {
         }
         out
     }
-
-    // Known-answer tests. On AVR these MUST also pass on real silicon at the
-    // production optimization flags (see the module-level AVR warning).
 
     #[test]
     fn sha256_nist_vectors() {

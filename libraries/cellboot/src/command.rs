@@ -9,6 +9,12 @@ use cellguard_protocol::{Error as PacketError, Kind, Packet};
 use crate::image::HEADER_LEN;
 use crate::state::PersistentState;
 
+/// Length of the shared authentication key in bytes.
+pub const KEY_LEN: usize = 16;
+
+/// Length of a key-replacement authentication tag in bytes.
+const TAG_LEN: usize = 32;
+
 /// A command from the host to the update agent.
 ///
 /// `Data` borrows its chunk from the packet, so mapping a command does not copy
@@ -33,6 +39,13 @@ pub enum Command<'a> {
     Commit,
     /// Abandon the current update.
     Abort,
+    /// Replace the shared authentication key (development only).
+    ReplaceKey {
+        /// The new key.
+        new_key: [u8; KEY_LEN],
+        /// Authentication tag over the new key, keyed with the current key.
+        tag: [u8; TAG_LEN],
+    },
 }
 
 impl<'a> Command<'a> {
@@ -57,6 +70,21 @@ impl<'a> Command<'a> {
                     u32::from_le_bytes(offset_bytes.try_into().map_err(|_| MapError::BadPayload)?);
                 let chunk = packet.payload.get(4..).ok_or(MapError::BadPayload)?;
                 Ok(Self::Data { offset, chunk })
+            }
+            Kind::BootReplaceKey => {
+                let new_key = packet
+                    .payload
+                    .get(..KEY_LEN)
+                    .ok_or(MapError::BadPayload)?
+                    .try_into()
+                    .map_err(|_| MapError::BadPayload)?;
+                let tag = packet
+                    .payload
+                    .get(KEY_LEN..KEY_LEN + TAG_LEN)
+                    .ok_or(MapError::BadPayload)?
+                    .try_into()
+                    .map_err(|_| MapError::BadPayload)?;
+                Ok(Self::ReplaceKey { new_key, tag })
             }
             other => Err(MapError::NotBootCommand(other)),
         }
@@ -116,6 +144,8 @@ pub enum NackReason {
     StorageError,
     /// The image failed verification at commit.
     VerifyFailed,
+    /// A key-replacement request failed authentication.
+    Unauthorized,
 }
 
 impl NackReason {
@@ -130,6 +160,7 @@ impl NackReason {
             Self::TooLarge => 4,
             Self::StorageError => 5,
             Self::VerifyFailed => 6,
+            Self::Unauthorized => 7,
         }
     }
 
@@ -144,6 +175,7 @@ impl NackReason {
             4 => Some(Self::TooLarge),
             5 => Some(Self::StorageError),
             6 => Some(Self::VerifyFailed),
+            7 => Some(Self::Unauthorized),
             _ => None,
         }
     }
@@ -174,7 +206,7 @@ impl core::error::Error for MapError {}
 mod tests {
     use cellguard_protocol::{Kind, Packet};
 
-    use super::{Command, MapError, NackReason, Response};
+    use super::{Command, KEY_LEN, MapError, NackReason, Response, TAG_LEN};
     use crate::image::HEADER_LEN;
     use crate::state::PersistentState;
 
@@ -190,6 +222,26 @@ mod tests {
         assert_eq!(command_from_bytes(Kind::BootProbe, &[], &mut buf), Command::Probe);
         assert_eq!(command_from_bytes(Kind::BootCommit, &[], &mut buf), Command::Commit);
         assert_eq!(command_from_bytes(Kind::BootAbort, &[], &mut buf), Command::Abort);
+    }
+
+    #[test]
+    fn maps_replace_key() {
+        let mut payload = [0u8; KEY_LEN + TAG_LEN];
+        payload[..KEY_LEN].copy_from_slice(&[0xC5; KEY_LEN]);
+        payload[KEY_LEN..].copy_from_slice(&[0x3A; TAG_LEN]);
+        let mut buf = [0u8; 128];
+        assert_eq!(
+            command_from_bytes(Kind::BootReplaceKey, &payload, &mut buf),
+            Command::ReplaceKey { new_key: [0xC5; KEY_LEN], tag: [0x3A; TAG_LEN] }
+        );
+    }
+
+    #[test]
+    fn replace_key_rejects_short_payload() {
+        let mut buf = [0u8; 128];
+        let n = Packet::write(1, Kind::BootReplaceKey, &[0u8; KEY_LEN], &mut buf).unwrap();
+        let packet = Packet::parse(&buf[..n]).unwrap();
+        assert_eq!(Command::from_packet(packet), Err(MapError::BadPayload));
     }
 
     #[test]

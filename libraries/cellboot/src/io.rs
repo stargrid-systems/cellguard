@@ -97,3 +97,47 @@ pub trait SystemControl {
     /// Resets the system. Does not return.
     fn reset(&mut self) -> !;
 }
+
+/// Persistent storage for the shared authentication key.
+///
+/// The key normally lives in the AVR128 USERROW, provisioned once at the
+/// factory. Only development builds provide a writable implementation; see
+/// [`NoKeyStore`] for the production default.
+pub trait KeyStore {
+    /// Error type reported by the store.
+    type Error;
+
+    /// Persists `key` as the new authentication key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is locked or the write fails.
+    fn write_key(&mut self, key: &[u8]) -> Result<(), Self::Error>;
+}
+
+/// A [`KeyStore`] that rejects every write.
+///
+/// This is the production default: the key is locked and can never be replaced
+/// over the bus, so a `BootReplaceKey` command is answered with a rejection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoKeyStore;
+
+impl KeyStore for NoKeyStore {
+    type Error = KeyLocked;
+
+    fn write_key(&mut self, _key: &[u8]) -> Result<(), Self::Error> {
+        Err(KeyLocked)
+    }
+}
+
+/// The error returned by [`NoKeyStore`]: key replacement is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyLocked;
+
+impl core::fmt::Display for KeyLocked {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("key replacement is disabled")
+    }
+}
+
+impl core::error::Error for KeyLocked {}

@@ -13,7 +13,7 @@
 use cellguard_protocol::{Decoder, Encoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet};
 
 use crate::command::Command;
-use crate::io::ImageStore;
+use crate::io::{ImageStore, KeyStore};
 use crate::session::UpdateAgent;
 use crate::state::STATE_LEN;
 
@@ -28,17 +28,17 @@ const MAX_RESPONSE_WIRE: usize = MAX_RESPONSE_FRAME + MAX_RESPONSE_FRAME.div_cei
 ///
 /// `RX` sizes the receive buffer and must be large enough for the biggest
 /// incoming frame (a `Begin` header, or a `Data` chunk plus its overhead).
-pub struct Dispatcher<'k, S, const RX: usize> {
-    agent: UpdateAgent<'k, S>,
+pub struct Dispatcher<'k, S, K, const RX: usize> {
+    agent: UpdateAgent<'k, S, K>,
     id: u8,
     decoder: Decoder,
     rx: [u8; RX],
     tx: [u8; MAX_RESPONSE_WIRE],
 }
 
-impl<'k, S: ImageStore, const RX: usize> Dispatcher<'k, S, RX> {
+impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
     /// Creates a dispatcher for node `id` around `agent`.
-    pub const fn new(agent: UpdateAgent<'k, S>, id: u8) -> Self {
+    pub const fn new(agent: UpdateAgent<'k, S, K>, id: u8) -> Self {
         Self {
             agent,
             id,
@@ -51,7 +51,7 @@ impl<'k, S: ImageStore, const RX: usize> Dispatcher<'k, S, RX> {
     /// Returns the wrapped agent, e.g. to read its status or check
     /// [`UpdateAgent::pending_program`].
     #[must_use]
-    pub const fn agent(&self) -> &UpdateAgent<'k, S> {
+    pub const fn agent(&self) -> &UpdateAgent<'k, S, K> {
         &self.agent
     }
 
@@ -98,7 +98,7 @@ mod tests {
 
     use super::Dispatcher;
     use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use crate::io::ImageStore;
+    use crate::io::{ImageStore, NoKeyStore};
     use crate::session::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::state::{PersistentState, StagedState};
 
@@ -133,12 +133,12 @@ mod tests {
         }
     }
 
-    fn make_dispatcher() -> Dispatcher<'static, MemStore, 512> {
+    fn make_dispatcher() -> Dispatcher<'static, MemStore, NoKeyStore, 512> {
         let layout = StagingLayout {
             application: RegionSlot { offset: 0, capacity: 2048 },
             bootloader: RegionSlot { offset: 2048, capacity: 2048 },
         };
-        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, PersistentState::new(1));
+        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, NoKeyStore, PersistentState::new(1));
         Dispatcher::new(agent, NODE)
     }
 
@@ -157,7 +157,7 @@ mod tests {
     }
 
     /// Feeds a wire command into the dispatcher and decodes the response packet.
-    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
+    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
         let (wire, len) = wire_command(kind, payload);
         let mut response = None;
         for &byte in &wire[..len] {

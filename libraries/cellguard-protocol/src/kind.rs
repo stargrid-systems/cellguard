@@ -60,6 +60,11 @@ pub enum Kind {
     /// Bootloader response: a command was rejected.
     #[cfg(feature = "bootloader")]
     BootNack = 16,
+    /// Bootloader request: replace the shared authentication key. The payload is
+    /// the new key followed by an authentication tag over it. Development use
+    /// only, and inert once the key store is locked.
+    #[cfg(feature = "bootloader")]
+    BootReplaceKey = 17,
 }
 
 impl Kind {
