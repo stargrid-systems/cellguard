@@ -22,15 +22,15 @@
 #![no_std]
 #![warn(missing_docs)]
 
+pub use self::command::{Command, MapError, NackReason, Response};
 pub use self::image::{ImageHeader, ImageKind, ParseError, Region, SignError, VerifyError, Verifier};
 pub use self::mac::{Mac, ct_eq};
-pub use self::protocol::{Command, NackReason, ProtocolError, Response};
 pub use self::session::{RegionSlot, StagingLayout, UpdateAgent};
 pub use self::state::{AppHealth, PersistentState, StagedState, StateError, UpdateOutcome};
 
+pub mod command;
 pub mod image;
 pub mod io;
 pub mod mac;
-pub mod protocol;
 pub mod session;
 pub mod state;

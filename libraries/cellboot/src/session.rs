@@ -9,7 +9,7 @@
 use hmac_sha256::HMAC;
 use crate::image::{HEADER_LEN, ImageHeader, Region, Verifier};
 use crate::io::ImageStore;
-use crate::protocol::{Command, NackReason, Response};
+use crate::command::{Command, NackReason, Response};
 use crate::state::{PersistentState, StagedState, UpdateOutcome};
 
 const HEADER_LEN_U32: u32 = 64;
@@ -248,7 +248,7 @@ mod tests {
     use hmac_sha256::HMAC;
     use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use crate::io::ImageStore;
-    use crate::protocol::{Command, NackReason, Response};
+    use crate::command::{Command, NackReason, Response};
     use crate::state::{PersistentState, StagedState, UpdateOutcome};
 
     const KEY: &[u8] = b"session-test-key";

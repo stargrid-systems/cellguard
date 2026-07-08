@@ -12,6 +12,7 @@ rust-version.workspace = true
 [dependencies]
 crc.workspace = true
 hmac-sha256.workspace = true
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
 
 [lints]
 workspace = true

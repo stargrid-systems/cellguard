@@ -22,6 +22,7 @@ dependencies = [
 name = "cellboot"
 version = "0.1.0"
 dependencies = [
+ "cellguard-protocol",
  "crc",
  "hmac-sha256",
 ]
