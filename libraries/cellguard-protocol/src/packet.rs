@@ -174,10 +174,6 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {}
 
 #[cfg(test)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "tests inspect fixed-size frame buffers with in-range indices"
-)]
 mod tests {
     use super::{Error, Header, Packet};
     use crate::kind::Kind;

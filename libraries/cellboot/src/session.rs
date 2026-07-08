@@ -239,10 +239,6 @@ impl<'k, S: ImageStore> UpdateAgent<'k, S> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "tests build and inspect fixed-size buffers and payloads with in-range indices"
-)]
 mod tests {
     use super::{RegionSlot, StagingLayout, UpdateAgent};
     use hmac_sha256::HMAC;

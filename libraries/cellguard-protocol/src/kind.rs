@@ -7,8 +7,15 @@
 //! keep fixed discriminants so a trace of a bootloader exchange reads the same
 //! everywhere.
 
+use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
+
 /// A message kind. The `u8` discriminant is what travels on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not every byte is a valid kind, so this derives [`TryFromBytes`] rather than
+/// `FromBytes`: an unknown discriminant is rejected instead of accepted.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, TryFromBytes, IntoBytes, Immutable, KnownLayout, Unaligned,
+)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Kind {
@@ -63,35 +70,12 @@ impl Kind {
     }
 
     /// Parses a wire byte into a kind, or `None` if it is not known.
+    ///
+    /// Validity is derived from the enum discriminants by [`TryFromBytes`], so
+    /// this cannot drift out of sync with the variants.
     #[must_use]
-    pub const fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            1 => Some(Self::ReadDeviceId),
-            2 => Some(Self::ReadSerialNumber),
-            3 => Some(Self::ReadTemperature),
-            4 => Some(Self::DeviceId),
-            5 => Some(Self::SerialNumber),
-            6 => Some(Self::Temperature),
-            7 => Some(Self::Ack),
-            8 => Some(Self::Nack),
-            #[cfg(feature = "bootloader")]
-            9 => Some(Self::BootProbe),
-            #[cfg(feature = "bootloader")]
-            10 => Some(Self::BootBegin),
-            #[cfg(feature = "bootloader")]
-            11 => Some(Self::BootData),
-            #[cfg(feature = "bootloader")]
-            12 => Some(Self::BootCommit),
-            #[cfg(feature = "bootloader")]
-            13 => Some(Self::BootAbort),
-            #[cfg(feature = "bootloader")]
-            14 => Some(Self::BootStatus),
-            #[cfg(feature = "bootloader")]
-            15 => Some(Self::BootAck),
-            #[cfg(feature = "bootloader")]
-            16 => Some(Self::BootNack),
-            _ => None,
-        }
+    pub fn from_u8(value: u8) -> Option<Self> {
+        Self::try_read_from_bytes(&[value]).ok()
     }
 }
 

@@ -4,7 +4,8 @@
 //! and from [`cellguard_protocol`] packets using the bootloader [`Kind`]s, so
 //! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
 
-use cellguard_protocol::{Error as PacketError, Kind, Packet};
+use cellguard_protocol::kind::Kind;
+use cellguard_protocol::packet::{Error as PacketError, Packet};
 
 use crate::image::HEADER_LEN;
 use crate::state::PersistentState;
@@ -171,12 +172,9 @@ impl core::fmt::Display for MapError {
 impl core::error::Error for MapError {}
 
 #[cfg(test)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "tests build payloads and frames in fixed-size buffers with in-range indices"
-)]
 mod tests {
-    use cellguard_protocol::{Kind, Packet};
+    use cellguard_protocol::kind::Kind;
+    use cellguard_protocol::packet::Packet;
 
     use super::{Command, MapError, NackReason, Response};
     use crate::image::HEADER_LEN;

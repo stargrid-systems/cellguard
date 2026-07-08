@@ -15,10 +15,6 @@ mod decode;
 mod encode;
 
 #[cfg(test)]
-#[expect(
-    clippy::indexing_slicing,
-    reason = "tests move bytes through fixed-size scratch buffers with in-range indices"
-)]
 mod tests {
     use super::{Decoder, Encoder};
 

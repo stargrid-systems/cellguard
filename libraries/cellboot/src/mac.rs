@@ -65,10 +65,6 @@ mod tests {
 
     use super::ct_eq;
 
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "nibble indices are bounded to 0..16 and pairs come from chunks_exact_mut(2)"
-    )]
     fn hex(bytes: &[u8; 32]) -> [u8; 64] {
         const LUT: &[u8; 16] = b"0123456789abcdef";
         let mut out = [0u8; 64];
