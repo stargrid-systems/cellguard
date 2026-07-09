@@ -10,7 +10,7 @@
 //! for other nodes down the daisy chain is a separate concern and not handled
 //! here.
 
-use cellguard_protocol::{Decoder, Encoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet};
+use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
 use crate::command::Command;
 use crate::io::{ImageStore, KeyStore};
@@ -75,20 +75,9 @@ impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
 
         let mut raw = [0u8; MAX_RESPONSE_FRAME];
         let raw_len = response.to_packet(self.id, &mut raw).ok()?;
-        let wire_len = encode_cobs(raw.get(..raw_len)?, &mut self.tx)?;
+        let wire_len = encode_frame(raw.get(..raw_len)?, &mut self.tx)?;
         self.tx.get(..wire_len)
     }
-}
-
-/// COBS-encodes `frame` into `out`, returning the encoded length.
-fn encode_cobs(frame: &[u8], out: &mut [u8]) -> Option<usize> {
-    let mut encoder = Encoder::new(frame);
-    let mut pos = 0;
-    while let Some(byte) = encoder.pull() {
-        *out.get_mut(pos)? = byte;
-        pos = pos.checked_add(1)?;
-    }
-    Some(pos)
 }
 
 #[cfg(test)]

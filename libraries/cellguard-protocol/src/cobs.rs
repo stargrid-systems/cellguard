@@ -14,6 +14,22 @@ pub use self::encode::Encoder;
 mod decode;
 mod encode;
 
+/// Encodes `input` as a complete COBS frame, including the terminator, into
+/// `out`.
+///
+/// Returns the number of bytes written, or `None` if `out` is too small. This
+/// is the buffer-to-buffer convenience over [`Encoder`] for callers that have a
+/// whole frame ready to send.
+pub fn encode_frame(input: &[u8], out: &mut [u8]) -> Option<usize> {
+    let mut encoder = Encoder::new(input);
+    let mut pos = 0;
+    while let Some(byte) = encoder.pull() {
+        *out.get_mut(pos)? = byte;
+        pos = pos.checked_add(1)?;
+    }
+    Some(pos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Decoder, Encoder};

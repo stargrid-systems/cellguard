@@ -13,7 +13,7 @@
 #![no_std]
 #![warn(missing_docs)]
 
-pub use self::cobs::{DecodeError, Decoder, Encoder};
+pub use self::cobs::{DecodeError, Decoder, Encoder, encode_frame};
 pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 

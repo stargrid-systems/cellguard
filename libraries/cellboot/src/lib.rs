@@ -30,3 +30,4 @@ pub mod mac;
 pub mod programmer;
 pub mod session;
 pub mod state;
+pub mod supervisor;

@@ -65,6 +65,14 @@ pub enum Kind {
     /// only, and inert once the key store is locked.
     #[cfg(feature = "bootloader")]
     BootReplaceKey = 17,
+    /// Programmer request (main MCU to `cellprog`): program a staged image into
+    /// a target. The payload selects which staged image.
+    #[cfg(feature = "bootloader")]
+    ProgProgram = 18,
+    /// Programmer result (`cellprog` to main MCU): the outcome of a
+    /// [`Kind::ProgProgram`] request.
+    #[cfg(feature = "bootloader")]
+    ProgResult = 19,
 }
 
 impl Kind {
