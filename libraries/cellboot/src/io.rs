@@ -33,36 +33,53 @@ pub trait ImageStore {
     fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), Self::Error>;
 }
 
-/// A writer for a target's non-volatile program memory.
+/// A streaming writer for a target's non-volatile program memory.
 ///
-/// On `CellGuard` this is implemented by the `ATtiny406` programmer over UPDI. The
-/// AVR128 never programs its own flash.
+/// On `CellGuard` this is implemented by the `ATtiny406` programmer over UPDI, so
+/// the AVR128 never programs its own flash. It streams so the 256-byte
+/// programmer can push a 512-byte-page target: [`NvmWriter::write`] is called
+/// with sequential, sub-page chunks and the implementation handles the target's
+/// page mechanics.
 pub trait NvmWriter {
     /// Error type reported by the writer.
     type Error;
 
-    /// Size of a program-memory page in bytes.
-    ///
-    /// Addresses passed to [`NvmWriter::write_page`] must be page-aligned and
-    /// `data` must be exactly this long.
-    fn page_size(&self) -> usize;
-
-    /// Erases and writes one page of program memory at `address`.
+    /// Begins a programming session: enters programming mode (halting the
+    /// target) and erases the program memory to be written.
     ///
     /// # Errors
     ///
-    /// Returns an error if the address is misaligned, the length is wrong, or
-    /// the write fails.
-    fn write_page(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error>;
+    /// Returns an error if the target cannot be entered or erased.
+    fn begin(&mut self) -> Result<(), Self::Error>;
 
-    /// Reads `buf.len()` bytes of program memory starting at `address`.
+    /// Writes `data` at `address`, extending the previous write.
     ///
-    /// Used to read the target back for verification.
+    /// Chunks arrive in ascending, contiguous order starting from a page
+    /// boundary. The implementation buffers into the target's page and commits
+    /// full pages as they fill.
     ///
     /// # Errors
     ///
-    /// Returns an error if the range is out of bounds or the read fails.
+    /// Returns an error if the write fails.
+    fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error>;
+
+    /// Reads `buf.len()` bytes back from `address` for verification.
+    ///
+    /// Any page still buffered from [`NvmWriter::write`] is committed first, so a
+    /// read always reflects what will be in flash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the read fails.
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error>;
+
+    /// Ends the session: commits any buffered page, leaves programming mode, and
+    /// lets the target run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the final commit or release fails.
+    fn finish(&mut self) -> Result<(), Self::Error>;
 }
 
 /// Persistent storage for the updater's own state.

@@ -27,5 +27,6 @@ pub mod dispatch;
 pub mod image;
 pub mod io;
 pub mod mac;
+pub mod programmer;
 pub mod session;
 pub mod state;
