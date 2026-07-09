@@ -28,6 +28,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellboot-drivers"
+version = "0.1.0"
+dependencies = [
+ "cat25",
+ "cellboot",
+ "embedded-hal",
+ "embedded-hal-mock",
+]
+
+[[package]]
 name = "cellguard-protocol"
 version = "0.1.0"
 dependencies = [
