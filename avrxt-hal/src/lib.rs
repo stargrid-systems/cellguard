@@ -25,13 +25,24 @@
 //!
 //! # Peripherals
 //!
-//! clock ([`clock`]), delay ([`delay`]), GPIO ([`gpio`]), I2C/TWI ([`twi`]),
-//! SPI ([`spi`]), USART ([`usart`]), timer PWM ([`pwm`]), ADC ([`adc`]), DAC
-//! ([`dac`]), voltage reference ([`vref`]), watchdog ([`wdt`]), RTC ([`rtc`]),
-//! custom logic ([`ccl`]), op-amps ([`opamp`]), zero-cross ([`zcd`]) and the
-//! signature row ([`sigrow`]). AVR128 also exposes the non-volatile memory
-//! controller ([`nvmctrl`]) for on-chip EEPROM and USERROW. tinyAVR covers the
-//! subset that maps to its peripherals: clock, delay, gpio, usart, adc and wdt.
+//! - clock ([`clock`])
+//! - delay ([`delay`])
+//! - GPIO ([`gpio`])
+//! - I2C/TWI ([`twi`])
+//! - SPI ([`spi`])
+//! - USART ([`usart`])
+//! - timer PWM ([`pwm`])
+//! - ADC ([`adc`])
+//! - DAC ([`dac`])
+//! - voltage reference ([`vref`])
+//! - watchdog ([`wdt`])
+//! - RTC ([`rtc`])
+//! - custom logic ([`ccl`])
+//! - op-amps ([`opamp`])
+//! - zero-cross ([`zcd`])
+//! - signature row ([`sigrow`])
+//! - non-volatile memory controller ([`nvmctrl`], AVR128 only) for on-chip
+//!   EEPROM and USERROW
 
 #![no_std]
 #![allow(

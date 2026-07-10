@@ -1,14 +1,14 @@
 //! Non-volatile memory controller (NVMCTRL) for AVR128 DA/DB.
 //!
 //! [`Nvm`] programs the on-chip EEPROM and the USERROW. It is generic over an
-//! [`NvmInstance`] (implemented for each AVR128 `NVMCTRL`). Program flash is not
-//! written here: on `CellGuard` a separate programmer drives the target over
-//! UPDI, so a running application never rewrites its own code.
+//! [`NvmInstance`] (implemented for each AVR128 `NVMCTRL`). Program flash is
+//! not written here: on `CellGuard` a separate programmer drives the target
+//! over UPDI, so a running application never rewrites its own code.
 //!
 //! `NVMCTRL.CTRLA` is configuration-change protected with the SPM signature, so
 //! every command goes through [`CcpUnlock::unlock_spm`] inside
-//! `avr_device::interrupt::free`: an interrupt cannot land in the unlock window.
-//! Do not run an NVM operation from an interrupt handler.
+//! `avr_device::interrupt::free`: an interrupt cannot land in the unlock
+//! window. Do not run an NVM operation from an interrupt handler.
 //!
 //! The register command sequences here follow the AVR Dx model and match the
 //! DxCore reference flows. They cannot be exercised without hardware, so treat
@@ -34,39 +34,18 @@ const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError
     }
 }
 
-/// Reads one byte from a memory-mapped NVM address.
-#[inline]
-fn read_byte(addr: u16) -> u8 {
-    // SAFETY: `addr` is a data-space address of memory-mapped NVM, bounds
-    // checked by the caller against the region size. A volatile byte read of
-    // mapped NVM has no side effects.
-    unsafe { core::ptr::read_volatile(addr as *const u8) }
-}
-
-/// Writes one byte to a memory-mapped NVM address.
-///
-/// The store loads the NVM page buffer (EEPROM) or is committed by the armed
-/// flash command (USERROW). The caller issues the matching NVM command.
-#[inline]
-fn write_byte(addr: u16, val: u8) {
-    // SAFETY: `addr` is a data-space address of memory-mapped NVM, bounds
-    // checked by the caller against the region size. The store only affects the
-    // NVM page buffer or the armed flash write, which the caller then commits.
-    unsafe { core::ptr::write_volatile(addr as *mut u8, val) }
-}
-
-/// An `NVMCTRL` peripheral. Implemented for each AVR128 device. Not for external
-/// use.
+/// An `NVMCTRL` peripheral. Implemented for each AVR128 device. Not for
+/// external use.
 ///
 /// The associated constants give each region's data-space base and size, so a
 /// future part with a different map only changes these values.
 pub trait NvmInstance {
-    /// Data-space base address of the on-chip EEPROM.
-    const EEPROM_START: u16;
+    /// Data-space base pointer of the on-chip EEPROM.
+    const EEPROM_START: *mut u8;
     /// On-chip EEPROM size in bytes.
     const EEPROM_SIZE: u16;
-    /// Data-space base address of the USERROW.
-    const USERROW_START: u16;
+    /// Data-space base pointer of the USERROW.
+    const USERROW_START: *mut u8;
     /// USERROW size in bytes.
     const USERROW_SIZE: u16;
 
@@ -121,10 +100,12 @@ impl<T: NvmInstance> Nvm<T> {
     /// [`NvmError::OutOfBounds`] if the range leaves the EEPROM.
     pub fn read_eeprom(&self, offset: u16, buf: &mut [u8]) -> Result<(), NvmError> {
         check_bounds(offset, buf.len(), T::EEPROM_SIZE)?;
-        let mut addr = T::EEPROM_START + offset;
+        let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
         for slot in buf {
-            *slot = read_byte(addr);
-            addr += 1;
+            // SAFETY: `check_bounds` kept `offset + buf.len()` inside the EEPROM,
+            // so every `addr` stays within the mapped region.
+            *slot = unsafe { addr.read_volatile() };
+            addr = addr.wrapping_add(1);
         }
         Ok(())
     }
@@ -146,12 +127,15 @@ impl<T: NvmInstance> Nvm<T> {
         cpu: &C,
     ) -> Result<(), NvmError> {
         check_bounds(offset, data.len(), T::EEPROM_SIZE)?;
-        let mut addr = T::EEPROM_START + offset;
+        let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
         for &b in data {
             self.instance.wait_eeprom_ready();
-            write_byte(addr, b);
+            // SAFETY: `check_bounds` kept `offset + data.len()` inside the
+            // EEPROM, so every `addr` stays within the mapped region. The store
+            // loads the page buffer; the command below commits it.
+            unsafe { addr.write_volatile(b) };
             self.protected(cpu, T::command_eeprom_erase_write);
-            addr += 1;
+            addr = addr.wrapping_add(1);
         }
         self.instance.wait_eeprom_ready();
         self.protected(cpu, T::command_none);
@@ -168,10 +152,12 @@ impl<T: NvmInstance> Nvm<T> {
     /// [`NvmError::OutOfBounds`] if the range leaves the USERROW.
     pub fn read_userrow(&self, offset: u16, buf: &mut [u8]) -> Result<(), NvmError> {
         check_bounds(offset, buf.len(), T::USERROW_SIZE)?;
-        let mut addr = T::USERROW_START + offset;
+        let mut addr = T::USERROW_START.wrapping_add(offset as usize);
         for slot in buf {
-            *slot = read_byte(addr);
-            addr += 1;
+            // SAFETY: `check_bounds` kept `offset + buf.len()` inside the
+            // USERROW, so every `addr` stays within the mapped region.
+            *slot = unsafe { addr.read_volatile() };
+            addr = addr.wrapping_add(1);
         }
         Ok(())
     }
@@ -193,14 +179,17 @@ impl<T: NvmInstance> Nvm<T> {
 
         self.instance.wait_flash_ready();
         self.protected(cpu, T::command_flash_page_erase);
-        write_byte(T::USERROW_START, 0xFF);
+        // SAFETY: `USERROW_START` is the base of the mapped USERROW region.
+        unsafe { T::USERROW_START.write_volatile(0xFF) };
         self.instance.wait_flash_ready();
 
         self.protected(cpu, T::command_flash_write);
         let mut addr = T::USERROW_START;
         for &b in data {
-            write_byte(addr, b);
-            addr += 1;
+            // SAFETY: `check_bounds` kept `data.len()` inside the USERROW, so
+            // every `addr` stays within the mapped region.
+            unsafe { addr.write_volatile(b) };
+            addr = addr.wrapping_add(1);
         }
         self.instance.wait_flash_ready();
 
@@ -216,9 +205,9 @@ macro_rules! impl_nvm_instance {
     ($NVMCTRL:ty) => {
         impl NvmInstance for $NVMCTRL {
             // AVR128 DA/DB data-space map (data sheet memory overview).
-            const EEPROM_START: u16 = 0x1400;
+            const EEPROM_START: *mut u8 = 0x1400 as *mut u8;
             const EEPROM_SIZE: u16 = 512;
-            const USERROW_START: u16 = 0x1080;
+            const USERROW_START: *mut u8 = 0x1080 as *mut u8;
             const USERROW_SIZE: u16 = 32;
 
             #[inline(always)]
