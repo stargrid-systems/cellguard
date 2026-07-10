@@ -5,8 +5,22 @@
 //! store without re-implementing the trait itself (the orphan rule needs the
 //! adapter to live in a crate that owns either the trait or the type, so each
 //! adapter is a local newtype here).
+//!
+//! # Features
+//!
+//! Features are additive and off by default.
+//!
+//! - `avr128`: on-chip NVM adapters ([`EepromState`], [`UserRowKeyStore`])
+//!   backed by `avrxt-hal`. This pulls in the HAL, so it only builds for the
+//!   `avr-none` target.
 #![no_std]
 #![warn(missing_docs)]
+
+#[cfg(feature = "avr128")]
+pub use self::avr128::{EepromState, UserRowKeyStore};
+
+#[cfg(feature = "avr128")]
+mod avr128;
 
 use cat25::{Cat25, Error};
 use cellboot::io::ImageStore;

@@ -31,6 +31,12 @@ unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 unwrap_used = "warn"
 
+# `cellboot-drivers`'s `avr128` feature pulls `avr-device` through `avrxt-hal`.
+# The AVR128 PACs live in the sibling fork, so match its rev here. Inert for
+# host builds, which never compile `avr-device`.
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
+
 [workspace.dependencies]
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }

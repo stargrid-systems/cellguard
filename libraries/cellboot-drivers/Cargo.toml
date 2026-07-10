@@ -13,9 +13,16 @@ rust-version.workspace = true
 cellboot.workspace = true
 cat25.workspace = true
 embedded-hal.workspace = true
+avrxt-hal = { path = "../../avrxt-hal", optional = true }
 
 [dev-dependencies]
 embedded-hal-mock = { workspace = true, features = ["eh1"] }
+
+[features]
+# On-chip NVM adapters for AVR128 (EEPROM state store, USERROW key store).
+# Pulls in `avrxt-hal`, so it only builds for the `avr-none` target. The
+# firmware selects the concrete device via an `avrxt-hal` device feature.
+avr128 = ["dep:avrxt-hal"]
 
 [lints]
 workspace = true
