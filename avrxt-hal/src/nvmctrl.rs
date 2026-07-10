@@ -8,7 +8,10 @@
 //! `NVMCTRL.CTRLA` is configuration-change protected with the SPM signature, so
 //! every command goes through [`CcpUnlock::unlock_spm`] inside
 //! `avr_device::interrupt::free`: an interrupt cannot land in the unlock
-//! window. Do not run an NVM operation from an interrupt handler.
+//! window. Do not run an NVM operation from an interrupt handler. This includes
+//! a plain store to the mapped EEPROM, USERROW, or flash region: such a store
+//! loads the page buffer that a foreground write is about to commit, so an
+//! interrupt that does so mid-write corrupts the buffer.
 //!
 //! The register command sequences here follow the AVR Dx model and match the
 //! DxCore reference flows.
@@ -129,20 +132,23 @@ impl<T: NvmInstance> Nvm<T> {
     ) -> Result<(), NvmError> {
         check_bounds(offset, data.len(), T::EEPROM_SIZE)?;
         let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
+        self.instance.wait_eeprom_ready();
         for &b in data {
-            self.instance.wait_eeprom_ready();
             // SAFETY: `check_bounds` kept `offset + data.len()` inside the
             // EEPROM, so every `addr` stays within the mapped region. The store
             // loads the page buffer; the command below commits it.
             unsafe { addr.write_volatile(b) };
             self.protected(cpu, T::command_eeprom_erase_write);
+            self.instance.wait_eeprom_ready();
+            // Check per byte so a mid-loop failure stops here instead of
+            // writing the rest against a faulted controller.
+            if self.instance.write_error() {
+                self.protected(cpu, T::command_none);
+                return Err(NvmError::WriteFailed);
+            }
             addr = addr.wrapping_add(1);
         }
-        self.instance.wait_eeprom_ready();
         self.protected(cpu, T::command_none);
-        if self.instance.write_error() {
-            return Err(NvmError::WriteFailed);
-        }
         Ok(())
     }
 
