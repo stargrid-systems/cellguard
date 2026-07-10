@@ -10,9 +10,9 @@ use cellboot::image::{HEADER_LEN, ImageHeader, Region};
 use cellboot::io::{ImageStore, KeyStore};
 use hmac_sha256::HMAC;
 
-use crate::command::{Command, NackReason, Response};
-use crate::state::{PersistentState, StagedState, UpdateOutcome};
-use crate::verify::Verifier;
+use crate::update::command::{Command, NackReason, Response};
+use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
+use crate::update::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
 const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
@@ -141,7 +141,7 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
     }
 
     fn on_replace_key(&mut self, new_key: &[u8], tag: &[u8; 32]) -> Response {
-        if !crate::mac::authenticate_key_replace(self.key, new_key, tag) {
+        if !crate::update::mac::authenticate_key_replace(self.key, new_key, tag) {
             return Response::Nack(NackReason::Unauthorized);
         }
         if self.key_store.write_key(new_key).is_err() {
@@ -264,9 +264,9 @@ mod tests {
     use hmac_sha256::HMAC;
 
     use super::{RegionSlot, StagingLayout, UpdateAgent};
-    use crate::command::{Command, KEY_LEN, NackReason, Response};
-    use crate::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
-    use crate::state::{PersistentState, StagedState, UpdateOutcome};
+    use crate::update::command::{Command, KEY_LEN, NackReason, Response};
+    use crate::update::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
+    use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
 
     const KEY: &[u8] = b"session-test-key";
     const TARGET: u16 = 0x2A2A;
@@ -321,7 +321,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = crate::verify::sign(header, HMAC::new(KEY), payload).unwrap();
+        let full = crate::update::verify::sign(header, HMAC::new(KEY), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header

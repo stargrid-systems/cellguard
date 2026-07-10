@@ -13,9 +13,9 @@
 use cellboot::io::{ImageStore, KeyStore};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
-use crate::command::Command;
-use crate::session::UpdateAgent;
-use crate::state::STATE_LEN;
+use crate::update::command::Command;
+use crate::update::session::UpdateAgent;
+use crate::update::state::STATE_LEN;
 
 /// Largest pre-COBS response frame: a status reply (header + state + CRC).
 const MAX_RESPONSE_FRAME: usize = HEADER_LEN + STATE_LEN + PAYLOAD_CRC_LEN;
@@ -88,8 +88,8 @@ mod tests {
     use hmac_sha256::HMAC;
 
     use super::Dispatcher;
-    use crate::session::{RegionSlot, StagingLayout, UpdateAgent};
-    use crate::state::{PersistentState, StagedState};
+    use crate::update::session::{RegionSlot, StagingLayout, UpdateAgent};
+    use crate::update::state::{PersistentState, StagedState};
 
     const KEY: &[u8] = b"dispatch-test-key";
     const TARGET: u16 = 0x33;
@@ -183,7 +183,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = crate::verify::sign(header, HMAC::new(KEY), payload).unwrap();
+        let full = crate::update::verify::sign(header, HMAC::new(KEY), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header

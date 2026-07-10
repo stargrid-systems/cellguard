@@ -12,7 +12,7 @@ use core::fmt;
 use cellboot::image::{HEADER_LEN, ImageHeader, MAC_PREFIX_LEN, ParseError};
 use crc::Crc32;
 
-use crate::mac::{Mac, ct_eq};
+use crate::update::mac::{Mac, ct_eq};
 
 /// Signs `payload` and returns the complete header bytes.
 ///

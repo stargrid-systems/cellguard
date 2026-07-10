@@ -7,7 +7,7 @@
 use cellguard_protocol::{Error as PacketError, Kind, Packet};
 
 use cellboot::image::HEADER_LEN;
-use crate::state::PersistentState;
+use crate::update::state::PersistentState;
 
 /// Length of the shared authentication key in bytes.
 pub const KEY_LEN: usize = 16;
@@ -208,7 +208,7 @@ mod tests {
 
     use super::{Command, KEY_LEN, MapError, NackReason, Response, TAG_LEN};
     use cellboot::image::HEADER_LEN;
-    use crate::state::PersistentState;
+    use crate::update::state::PersistentState;
 
     fn command_from_bytes<'a>(kind: Kind, payload: &[u8], buf: &'a mut [u8]) -> Command<'a> {
         let n = Packet::write(1, kind, payload, buf).unwrap();
