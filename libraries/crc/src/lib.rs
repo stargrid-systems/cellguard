@@ -14,5 +14,6 @@
 pub use self::crc16::{Crc16, checksum16};
 pub use self::crc32::{Crc32, checksum32};
 
+mod bitwise;
 mod crc16;
 mod crc32;

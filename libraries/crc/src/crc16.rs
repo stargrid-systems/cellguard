@@ -1,10 +1,10 @@
 //! CRC-16/MODBUS, polynomial `0xA001`, initial value `0xFFFF`, no final xor.
 
+use crate::bitwise::CrcCore;
+
 /// Incremental CRC-16/MODBUS calculator.
 #[derive(Debug, Clone)]
-pub struct Crc16 {
-    state: u16,
-}
+pub struct Crc16(CrcCore<u16>);
 
 impl Default for Crc16 {
     fn default() -> Self {
@@ -16,24 +16,19 @@ impl Crc16 {
     /// Creates a calculator in its initial state.
     #[must_use]
     pub const fn new() -> Self {
-        Self { state: 0xFFFF }
+        Self(CrcCore::new(0xFFFF))
     }
 
     /// Feeds `data` into the calculator.
     pub fn update(&mut self, data: &[u8]) {
-        for &byte in data {
-            self.state ^= u16::from(byte);
-            for _ in 0..8 {
-                let mask = (self.state & 1).wrapping_neg();
-                self.state = (self.state >> 1) ^ (0xA001 & mask);
-            }
-        }
+        self.0.update(data);
     }
 
     /// Consumes the calculator and returns the final CRC-16 value.
     #[must_use]
     pub const fn finalize(self) -> u16 {
-        self.state
+        // CRC-16/MODBUS has no final xor.
+        self.0.state()
     }
 }
 
@@ -52,6 +47,11 @@ mod tests {
     #[test]
     fn modbus_known_vector() {
         assert_eq!(checksum16(b"123456789"), 0x4B37);
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(checksum16(b""), 0xFFFF);
     }
 
     #[test]
