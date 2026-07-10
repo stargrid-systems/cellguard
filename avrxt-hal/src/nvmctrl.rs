@@ -11,8 +11,9 @@
 //! window. Do not run an NVM operation from an interrupt handler.
 //!
 //! The register command sequences here follow the AVR Dx model and match the
-//! DxCore reference flows. They cannot be exercised without hardware, so treat
-//! the marked sequences as bench-verify.
+//! DxCore reference flows.
+
+use core::mem::MaybeUninit;
 
 use crate::clock::CcpUnlock;
 
@@ -24,14 +25,6 @@ pub enum NvmError {
     OutOfBounds,
     /// The controller reported a write error (`STATUS.ERROR`).
     WriteFailed,
-}
-
-/// Checks that `[offset, offset + len)` fits within a region of `size` bytes.
-const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError> {
-    match (offset as usize).checked_add(len) {
-        Some(end) if end <= size as usize => Ok(()),
-        _ => Err(NvmError::OutOfBounds),
-    }
 }
 
 /// An `NVMCTRL` peripheral. Implemented for each AVR128 device. Not for
@@ -99,22 +92,30 @@ impl<T: NvmInstance> Nvm<T> {
     ///
     /// [`NvmError::OutOfBounds`] if the range leaves the EEPROM.
     pub fn read_eeprom(&self, offset: u16, buf: &mut [u8]) -> Result<(), NvmError> {
-        check_bounds(offset, buf.len(), T::EEPROM_SIZE)?;
-        let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
-        for slot in buf {
-            // SAFETY: `check_bounds` kept `offset + buf.len()` inside the EEPROM,
-            // so every `addr` stays within the mapped region.
-            *slot = unsafe { addr.read_volatile() };
-            addr = addr.wrapping_add(1);
-        }
+        self.read_eeprom_uninit(offset, as_uninit(buf))?;
         Ok(())
+    }
+
+    /// Reads `buf.len()` bytes from the on-chip EEPROM at `offset` into an
+    /// uninitialized buffer, returning the bytes that were read.
+    ///
+    /// # Errors
+    ///
+    /// [`NvmError::OutOfBounds`] if the range leaves the EEPROM.
+    pub fn read_eeprom_uninit<'a>(
+        &self,
+        offset: u16,
+        buf: &'a mut [MaybeUninit<u8>],
+    ) -> Result<&'a mut [u8], NvmError> {
+        // SAFETY: `EEPROM_START` bases the mapped EEPROM of `EEPROM_SIZE` bytes.
+        unsafe { read_region(offset, buf, T::EEPROM_START, T::EEPROM_SIZE) }
     }
 
     /// Writes `data` to the on-chip EEPROM at `offset`.
     ///
     /// Uses the erase-write command per byte, so callers do not pre-erase. This
     /// follows the DxCore EEPROM flow: store the byte to load the page buffer,
-    /// then issue `EEERWR` to commit it. Bench-verify.
+    /// then issue `EEERWR` to commit it.
     ///
     /// # Errors
     ///
@@ -151,15 +152,24 @@ impl<T: NvmInstance> Nvm<T> {
     ///
     /// [`NvmError::OutOfBounds`] if the range leaves the USERROW.
     pub fn read_userrow(&self, offset: u16, buf: &mut [u8]) -> Result<(), NvmError> {
-        check_bounds(offset, buf.len(), T::USERROW_SIZE)?;
-        let mut addr = T::USERROW_START.wrapping_add(offset as usize);
-        for slot in buf {
-            // SAFETY: `check_bounds` kept `offset + buf.len()` inside the
-            // USERROW, so every `addr` stays within the mapped region.
-            *slot = unsafe { addr.read_volatile() };
-            addr = addr.wrapping_add(1);
-        }
+        self.read_userrow_uninit(offset, as_uninit(buf))?;
         Ok(())
+    }
+
+    /// Reads `buf.len()` bytes from the USERROW at `offset` into an
+    /// uninitialized buffer, returning the bytes that were read.
+    ///
+    /// # Errors
+    ///
+    /// [`NvmError::OutOfBounds`] if the range leaves the USERROW.
+    pub fn read_userrow_uninit<'a>(
+        &self,
+        offset: u16,
+        buf: &'a mut [MaybeUninit<u8>],
+    ) -> Result<&'a mut [u8], NvmError> {
+        // SAFETY: `USERROW_START` bases the mapped USERROW of `USERROW_SIZE`
+        // bytes.
+        unsafe { read_region(offset, buf, T::USERROW_START, T::USERROW_SIZE) }
     }
 
     /// Erases the USERROW and writes `data` from its start.
@@ -168,7 +178,6 @@ impl<T: NvmInstance> Nvm<T> {
     /// whole page then writes `data`. Bytes past `data` are left erased
     /// (`0xFF`). Follows the AVR Dx flash flow (command-first): arm `FLPER`,
     /// trigger the erase with a store, then arm `FLWR` and store the bytes.
-    /// Bench-verify.
     ///
     /// # Errors
     ///
@@ -201,6 +210,55 @@ impl<T: NvmInstance> Nvm<T> {
     }
 }
 
+/// Checks that `[offset, offset + len)` fits within a region of `size` bytes.
+const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError> {
+    match (offset as usize).checked_add(len) {
+        Some(end) if end <= size as usize => Ok(()),
+        _ => Err(NvmError::OutOfBounds),
+    }
+}
+
+/// Views an initialized byte slice as uninitialized, so an initialized read can
+/// reuse the uninitialized read path. Sound because a `u8` is always a valid
+/// `MaybeUninit<u8>`.
+fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
+    let len = buf.len();
+    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`.
+    unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), len) }
+}
+
+/// Reads `buf.len()` bytes from the data-space region based at `start` into an
+/// uninitialized buffer, returning the now-initialized bytes.
+///
+/// # Safety
+///
+/// `start` must be the base of a readable data-space region of at least `size`
+/// bytes, so that `[start, start + size)` is a valid mapped range.
+///
+/// # Errors
+///
+/// [`NvmError::OutOfBounds`] if the range leaves the region.
+unsafe fn read_region(
+    offset: u16,
+    buf: &mut [MaybeUninit<u8>],
+    start: *mut u8,
+    size: u16,
+) -> Result<&mut [u8], NvmError> {
+    check_bounds(offset, buf.len(), size)?;
+    let mut addr = start.wrapping_add(offset as usize);
+    for slot in buf.iter_mut() {
+        // SAFETY: the caller guarantees `start`/`size` map a real region, and
+        // `check_bounds` kept every `addr` inside it.
+        slot.write(unsafe { addr.read_volatile() });
+        addr = addr.wrapping_add(1);
+    }
+    let len = buf.len();
+    let ptr = buf.as_mut_ptr().cast::<u8>();
+    // SAFETY: every slot in `buf` was written above, so the region is a fully
+    // initialized `[u8]` for the borrow of `buf`.
+    Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
+}
+
 macro_rules! impl_nvm_instance {
     ($NVMCTRL:ty) => {
         impl NvmInstance for $NVMCTRL {
@@ -212,11 +270,11 @@ macro_rules! impl_nvm_instance {
 
             #[inline(always)]
             fn wait_flash_ready(&self) {
-                while self.status().read().fbusy().bit_is_set() {}
+                crate::wait::spin_until(|| self.status().read().fbusy().bit_is_clear());
             }
             #[inline(always)]
             fn wait_eeprom_ready(&self) {
-                while self.status().read().eebusy().bit_is_set() {}
+                crate::wait::spin_until(|| self.status().read().eebusy().bit_is_clear());
             }
             #[inline(always)]
             fn write_error(&self) -> bool {

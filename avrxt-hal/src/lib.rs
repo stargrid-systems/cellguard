@@ -41,9 +41,10 @@
 //! - op-amps ([`opamp`])
 //! - zero-cross ([`zcd`])
 //! - signature row ([`sigrow`])
-//! - non-volatile memory controller ([`nvmctrl`], AVR128 only) for on-chip
-//!   EEPROM and USERROW
-
+#![cfg_attr(
+    feature = "_avr128",
+    doc = "- non-volatile memory controller ([`nvmctrl`]) for on-chip EEPROM and USERROW"
+)]
 #![no_std]
 #![allow(
     unused_macros,
