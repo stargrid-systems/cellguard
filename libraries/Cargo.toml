@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ads131m08", "cat25", "cellboot", "cellprog", "cellguard-protocol", "crc", "p3t1755", "tca9535"]
+members = ["ads131m08", "cat25", "cellboot", "cellcore", "cellprog", "cellguard-protocol", "crc", "p3t1755", "tca9535"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]
@@ -46,5 +46,6 @@ avrxt-hal = { path = "../avrxt-hal" }
 crc = { path = "crc" }
 cat25 = { path = "cat25" }
 cellboot = { path = "cellboot" }
+cellcore = { path = "cellcore" }
 cellprog = { path = "cellprog" }
 cellguard-protocol = { path = "cellguard-protocol" }

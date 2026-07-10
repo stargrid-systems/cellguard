@@ -102,10 +102,17 @@ version = "0.1.0"
 dependencies = [
  "avrxt-hal",
  "cat25",
- "cellguard-protocol",
- "crc",
  "embedded-hal",
  "embedded-hal-mock",
+]
+
+[[package]]
+name = "cellcore"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-protocol",
+ "crc",
  "hmac-sha256",
 ]
 

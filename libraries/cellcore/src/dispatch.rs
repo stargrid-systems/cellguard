@@ -10,10 +10,10 @@
 //! for other nodes down the daisy chain is a separate concern and not handled
 //! here.
 
+use cellboot::io::{ImageStore, KeyStore};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
 use crate::command::Command;
-use crate::io::{ImageStore, KeyStore};
 use crate::session::UpdateAgent;
 use crate::state::STATE_LEN;
 
@@ -82,12 +82,12 @@ impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
 
 #[cfg(test)]
 mod tests {
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::io::{ImageStore, NoKeyStore};
     use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
     use hmac_sha256::HMAC;
 
     use super::Dispatcher;
-    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use crate::io::{ImageStore, NoKeyStore};
     use crate::session::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::state::{PersistentState, StagedState};
 
@@ -183,7 +183,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = header.sign(HMAC::new(KEY), payload).unwrap();
+        let full = crate::verify::sign(header, HMAC::new(KEY), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header

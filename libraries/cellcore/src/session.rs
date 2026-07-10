@@ -6,11 +6,13 @@
 //! itself. After a successful commit, [`UpdateAgent::pending_program`] tells the
 //! caller which region is ready, so the caller can hand off to the programmer.
 
+use cellboot::image::{HEADER_LEN, ImageHeader, Region};
+use cellboot::io::{ImageStore, KeyStore};
 use hmac_sha256::HMAC;
-use crate::image::{HEADER_LEN, ImageHeader, Region, Verifier};
-use crate::io::{ImageStore, KeyStore};
+
 use crate::command::{Command, NackReason, Response};
 use crate::state::{PersistentState, StagedState, UpdateOutcome};
+use crate::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
 const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
@@ -41,8 +43,9 @@ impl StagingLayout {
         match region {
             Region::ApplicationCode => Some(self.application),
             Region::Bootloader => Some(self.bootloader),
-            // The factory region is not a firmware-update target.
-            Region::Factory => None,
+            // The factory region, and any region added later, is not a
+            // firmware-update target.
+            _ => None,
         }
     }
 }
@@ -81,7 +84,7 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
     /// `target_id` is this device's identity, used to reject images built for a
     /// different device. `key` is the shared HMAC key, normally a slice over the
     /// USERROW. `key_store` writes a replacement key (use
-    /// [`NoKeyStore`](crate::io::NoKeyStore) in production). `state` is the state
+    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production). `state` is the state
     /// loaded from persistent storage at boot.
     pub const fn new(
         store: S,
@@ -256,11 +259,12 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RegionSlot, StagingLayout, UpdateAgent};
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::io::{ImageStore, KeyStore, NoKeyStore};
     use hmac_sha256::HMAC;
+
+    use super::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::command::{Command, KEY_LEN, NackReason, Response};
-    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use crate::io::{ImageStore, KeyStore, NoKeyStore};
     use crate::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
     use crate::state::{PersistentState, StagedState, UpdateOutcome};
 
@@ -317,7 +321,7 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = header.sign(HMAC::new(KEY), payload).unwrap();
+        let full = crate::verify::sign(header, HMAC::new(KEY), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header

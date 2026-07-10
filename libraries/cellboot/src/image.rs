@@ -5,16 +5,11 @@
 //! image, a CRC-32 over the payload for corruption detection, and an
 //! HMAC-SHA256 tag over the header and payload for authenticity.
 //!
-//! [`Verifier`] streams the header and payload through a [`Mac`] and a
-//! [`Crc32`], so an image staged in external storage can be checked in chunks
-//! without ever holding it whole in RAM.
+//! This module defines only the format and its parsing. Signing and streaming
+//! verification live in the `cellcore` crate, so the `cellprog` programmer links
+//! no crypto.
 
 use core::fmt;
-
-#[cfg(feature = "agent")]
-use crc::Crc32;
-#[cfg(feature = "agent")]
-use crate::mac::{Mac, ct_eq};
 
 /// Total length of the image header in bytes.
 pub const HEADER_LEN: usize = 64;
@@ -74,8 +69,9 @@ pub enum Region {
 }
 
 impl Region {
+    /// Returns the wire byte for this region.
     #[must_use]
-    pub(crate) const fn to_code(self) -> u8 {
+    pub const fn to_code(self) -> u8 {
         match self {
             Self::ApplicationCode => 0,
             Self::Bootloader => 1,
@@ -83,7 +79,9 @@ impl Region {
         }
     }
 
-    pub(crate) const fn from_code(code: u8) -> Option<Self> {
+    /// Parses a wire byte into a region.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
         match code {
             0 => Some(Self::ApplicationCode),
             1 => Some(Self::Bootloader),
@@ -197,178 +195,11 @@ impl ImageHeader {
         out[MAC_PREFIX_LEN..HEADER_LEN].copy_from_slice(&self.hmac);
         out
     }
-
-    /// Signs `payload` and returns the complete header bytes.
-    ///
-    /// The payload length and CRC-32 are derived from `payload`, then the tag
-    /// is computed over the header prefix followed by the payload using the
-    /// keyed `mac`. The `payload_len`, `payload_crc32`, and `hmac` fields of
-    /// `self` are ignored on input and filled in the result.
-    ///
-    /// This is the host-side counterpart to [`Verifier`]. It needs the whole
-    /// payload at once because the CRC lives inside the signed prefix, so a
-    /// device never signs, it only verifies.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignError::PayloadTooLarge`] if the payload does not fit in a
-    /// `u32` length field.
-    #[cfg(feature = "agent")]
-    pub fn sign<M: Mac>(mut self, mut mac: M, payload: &[u8]) -> Result<[u8; HEADER_LEN], SignError> {
-        self.payload_len = u32::try_from(payload.len()).map_err(|_| SignError::PayloadTooLarge)?;
-        self.payload_crc32 = crc::checksum32(payload);
-        let prefix = self.serialize();
-        mac.update(prefix.split_at(MAC_PREFIX_LEN).0);
-        mac.update(payload);
-        self.hmac = mac.finalize();
-        Ok(self.serialize())
-    }
 }
 
-/// An error returned when an image cannot be signed.
-#[cfg(feature = "agent")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SignError {
-    /// The payload is larger than a `u32` length field can describe.
-    PayloadTooLarge,
-}
-
-#[cfg(feature = "agent")]
-impl fmt::Display for SignError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PayloadTooLarge => f.write_str("payload too large"),
-        }
-    }
-}
-
-#[cfg(feature = "agent")]
-impl core::error::Error for SignError {}
-
-/// The reason an image failed verification.
-#[cfg(feature = "agent")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum VerifyError {
-    /// The number of payload bytes fed did not match the header.
-    WrongLength,
-    /// The payload CRC-32 did not match the header.
-    CorruptPayload,
-    /// The authentication tag did not match.
-    BadTag,
-}
-
-#[cfg(feature = "agent")]
-impl fmt::Display for VerifyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::WrongLength => f.write_str("payload length mismatch"),
-            Self::CorruptPayload => f.write_str("payload CRC mismatch"),
-            Self::BadTag => f.write_str("authentication tag mismatch"),
-        }
-    }
-}
-
-#[cfg(feature = "agent")]
-impl core::error::Error for VerifyError {}
-
-/// Streams an image through a [`Mac`] and a [`Crc32`] to check it.
-///
-/// Construct it from the raw header bytes and a freshly keyed MAC, feed the
-/// payload with [`Verifier::feed`], then call [`Verifier::finish`]. The payload
-/// may be fed in any number of chunks.
-#[cfg(feature = "agent")]
-pub struct Verifier<M: Mac> {
-    mac: M,
-    crc: Crc32,
-    expected_tag: [u8; 32],
-    expected_crc: u32,
-    payload_len: u32,
-    fed: u32,
-}
-
-#[cfg(feature = "agent")]
-impl<M: Mac> Verifier<M> {
-    /// Starts verifying an image.
-    ///
-    /// Parses `header_bytes`, primes `mac` with the header prefix, and returns
-    /// the parsed header alongside the verifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ParseError`] if the header cannot be parsed.
-    pub fn new(mut mac: M, header_bytes: &[u8; HEADER_LEN]) -> Result<(ImageHeader, Self), ParseError> {
-        let header = ImageHeader::parse(header_bytes)?;
-        mac.update(&header_bytes[..MAC_PREFIX_LEN]);
-        let verifier = Self {
-            mac,
-            crc: Crc32::new(),
-            expected_tag: header.hmac,
-            expected_crc: header.payload_crc32,
-            payload_len: header.payload_len,
-            fed: 0,
-        };
-        Ok((header, verifier))
-    }
-
-    /// Feeds a chunk of payload bytes.
-    pub fn feed(&mut self, chunk: &[u8]) {
-        self.mac.update(chunk);
-        self.crc.update(chunk);
-        self.fed = self.fed.saturating_add(chunk.len().try_into().unwrap_or(u32::MAX));
-    }
-
-    /// Consumes the verifier and reports whether the image is valid.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`VerifyError`] if the fed length, the payload CRC, or the
-    /// authentication tag did not match the header.
-    pub fn finish(self) -> Result<(), VerifyError> {
-        if self.fed != self.payload_len {
-            return Err(VerifyError::WrongLength);
-        }
-        // The tag is authoritative, but the CRC gives a cheaper corruption
-        // signal and is checked first.
-        if self.crc.finalize() != self.expected_crc {
-            return Err(VerifyError::CorruptPayload);
-        }
-        if ct_eq(&self.mac.finalize(), &self.expected_tag) {
-            Ok(())
-        } else {
-            Err(VerifyError::BadTag)
-        }
-    }
-}
-
-#[cfg(all(test, feature = "agent"))]
+#[cfg(test)]
 mod tests {
-    use super::{HEADER_LEN, ImageHeader, ImageKind, ParseError, Region, VerifyError, Verifier};
-    use hmac_sha256::HMAC;
-
-    const KEY: &[u8] = b"unit-test-shared-key";
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "index stays below 200 which fits in a u8"
-    )]
-    fn ramp() -> [u8; 200] {
-        core::array::from_fn(|i| i as u8)
-    }
-
-    fn build_signed(payload: &[u8]) -> [u8; HEADER_LEN] {
-        let header = ImageHeader {
-            kind: ImageKind::Application,
-            region: Region::ApplicationCode,
-            target_id: 0x1234,
-            fw_version: 42,
-            payload_len: 0,
-            payload_crc32: 0,
-            hmac: [0u8; 32],
-        };
-        header.sign(HMAC::new(KEY), payload).unwrap()
-    }
+    use super::{HEADER_LEN, ImageHeader, ImageKind, ParseError, Region};
 
     #[test]
     fn roundtrip_header() {
@@ -390,51 +221,5 @@ mod tests {
         let mut bytes = [0u8; HEADER_LEN];
         bytes[4] = super::FORMAT_VERSION;
         assert_eq!(ImageHeader::parse(&bytes), Err(ParseError::BadMagic));
-    }
-
-    #[test]
-    fn verifies_good_image() {
-        let payload = ramp();
-        let header_bytes = build_signed(&payload);
-        let (header, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
-        assert_eq!(header.target_id, 0x1234);
-        for chunk in payload.chunks(7) {
-            verifier.feed(chunk);
-        }
-        assert_eq!(verifier.finish(), Ok(()));
-    }
-
-    #[test]
-    fn detects_tampered_payload() {
-        let payload = ramp();
-        let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
-        let mut tampered = payload;
-        if let Some(first) = tampered.first_mut() {
-            *first ^= 0x01;
-        }
-        verifier.feed(&tampered);
-        // CRC catches the flip before the tag does.
-        assert_eq!(verifier.finish(), Err(VerifyError::CorruptPayload));
-    }
-
-    #[test]
-    fn detects_short_payload() {
-        let payload = ramp();
-        let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(HMAC::new(KEY), &header_bytes).unwrap();
-        verifier.feed(payload.get(..100).unwrap());
-        assert_eq!(verifier.finish(), Err(VerifyError::WrongLength));
-    }
-
-    #[test]
-    fn detects_wrong_key() {
-        let payload = ramp();
-        let header_bytes = build_signed(&payload);
-        let (_, mut verifier) = Verifier::new(HMAC::new(b"wrong-key"), &header_bytes).unwrap();
-        for chunk in payload.chunks(7) {
-            verifier.feed(chunk);
-        }
-        assert_eq!(verifier.finish(), Err(VerifyError::BadTag));
     }
 }

@@ -1,0 +1,19 @@
+[package]
+name = "cellcore"
+version = "0.1.0"
+description = "Hardware-independent update-agent logic for the CellGuard core MCU."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cellboot.workspace = true
+crc.workspace = true
+hmac-sha256.workspace = true
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
+
+[lints]
+workspace = true

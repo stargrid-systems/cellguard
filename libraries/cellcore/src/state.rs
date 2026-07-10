@@ -1,7 +1,7 @@
 //! The persistent, probe-able updater state.
 //!
 //! [`PersistentState`] is the small record the updater keeps in a
-//! [`crate::io::StateStore`]. It survives a program-memory rewrite and is what a
+//! [`cellboot::io::StateStore`]. It survives a program-memory rewrite and is what a
 //! `Probe` command reports back, so an operator can ask a device what firmware
 //! it runs, whether that firmware is healthy, and how the last update went.
 
@@ -135,7 +135,7 @@ pub struct PersistentState {
     /// State of the staged image.
     pub staged: StagedState,
     /// Region the staged image targets, or `None` when nothing is staged.
-    pub staged_region: Option<crate::image::Region>,
+    pub staged_region: Option<cellboot::image::Region>,
     /// Result of the most recent update attempt.
     pub last_outcome: UpdateOutcome,
     /// Boots since the application last confirmed itself.
@@ -166,7 +166,7 @@ impl PersistentState {
         out[1] = self.app_health.to_code();
         out[2] = self.staged.to_code();
         out[3] = self.last_outcome.to_code();
-        out[4] = self.staged_region.map_or(NO_REGION, crate::image::Region::to_code);
+        out[4] = self.staged_region.map_or(NO_REGION, cellboot::image::Region::to_code);
         out[6..8].copy_from_slice(&self.boot_count.to_le_bytes());
         out[8..12].copy_from_slice(&self.agent_version.to_le_bytes());
         out[12..16].copy_from_slice(&self.app_version.to_le_bytes());
@@ -197,7 +197,7 @@ impl PersistentState {
         let staged_region = if bytes[4] == NO_REGION {
             None
         } else {
-            Some(crate::image::Region::from_code(bytes[4]).ok_or(StateError::BadField)?)
+            Some(cellboot::image::Region::from_code(bytes[4]).ok_or(StateError::BadField)?)
         };
 
         let boot_count = u16::from_le_bytes([bytes[6], bytes[7]]);
@@ -245,7 +245,7 @@ impl core::error::Error for StateError {}
 #[cfg(test)]
 mod tests {
     use super::{AppHealth, PersistentState, STATE_LEN, StagedState, StateError, UpdateOutcome};
-    use crate::image::Region;
+    use cellboot::image::Region;
 
     fn sample() -> PersistentState {
         PersistentState {
