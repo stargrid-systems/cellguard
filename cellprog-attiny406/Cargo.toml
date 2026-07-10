@@ -1,0 +1,31 @@
+[package]
+name = "cellprog-attiny406"
+version = "0.1.0"
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "cellprog-attiny406"
+test = false
+bench = false
+
+[dependencies]
+avrxt-hal = { path = "../avrxt-hal", features = ["attiny406"] }
+avr-device = { version = "0.8", features = ["attiny406", "rt"] }
+embedded-hal = { version = "1", default-features = false }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
+
+[profile.dev]
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
