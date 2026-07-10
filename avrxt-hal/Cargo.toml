@@ -7,12 +7,6 @@ license = "AGPL-3.0-or-later"
 description = "Hardware abstraction layer for Microchip modern-AVR (AVRxt) devices: AVR128 DB/DA and tinyAVR."
 repository = "https://github.com/stargrid-systems/cellguard"
 
-[dependencies]
-avr-device = { version = "0.8" }
-embedded-hal = { version = "1", default-features = false }
-embedded-io = { version = "0.7", default-features = false }
-ufmt = { version = "0.2", optional = true }
-
 [features]
 # Implement `ufmt::uWrite` for the USART so it can be used with `uwrite!`.
 ufmt = ["dep:ufmt"]
@@ -27,6 +21,12 @@ avr128da64 = ["avr-device/avr128da64", "_avr128"]
 
 attiny406 = ["avr-device/attiny406", "_tinyavr"]
 attiny416 = ["avr-device/attiny416", "_tinyavr"]
+
+[dependencies]
+avr-device = { version = "0.8" }
+embedded-hal = { version = "1", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+ufmt = { version = "0.2", optional = true }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }

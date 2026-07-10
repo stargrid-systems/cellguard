@@ -10,10 +10,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-cellboot.workspace = true
-crc.workspace = true
-hmac-sha256.workspace = true
+cellboot = { workspace = true }
 cellguard-protocol = { workspace = true, features = ["bootloader"] }
+crc = { workspace = true }
+hmac-sha256 = { workspace = true }
 
 [lints]
 workspace = true
