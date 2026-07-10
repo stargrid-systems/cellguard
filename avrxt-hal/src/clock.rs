@@ -23,6 +23,11 @@ pub trait CcpUnlock {
     /// Writes the IOREG signature to `CPU.CCP`, opening the ~4-cycle window in
     /// which the next protected store is accepted.
     fn unlock_ioreg(&self);
+
+    /// Writes the SPM signature to `CPU.CCP`, opening the window for the next
+    /// protected store. `NVMCTRL.CTRLA` is protected with this signature, not
+    /// the IOREG one.
+    fn unlock_spm(&self);
 }
 
 // Shared body, invoked from the family submodule that owns each device. Exposed
@@ -33,6 +38,10 @@ macro_rules! impl_ccp_unlock {
             #[inline(always)]
             fn unlock_ioreg(&self) {
                 self.ccp().write(|w| w.ccp().ioreg());
+            }
+            #[inline(always)]
+            fn unlock_spm(&self) {
+                self.ccp().write(|w| w.ccp().spm());
             }
         }
     };
