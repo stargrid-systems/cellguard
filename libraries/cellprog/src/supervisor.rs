@@ -12,7 +12,7 @@
 
 use cellguard_protocol::{Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
-use crate::io::{ImageStore, NvmWriter};
+use cellboot::io::{ImageStore, NvmWriter};
 use crate::programmer::{ProgramError, program};
 
 /// Streaming scratch buffer size the programmer uses.
@@ -189,8 +189,8 @@ mod tests {
     use cellguard_protocol::{Decoder, Kind, Packet, encode_frame};
 
     use super::{ProgLayout, ProgStatus, SourceSlot, Supervisor};
-    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use crate::io::{ImageStore, NvmWriter};
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::io::{ImageStore, NvmWriter};
 
     const STORE_CAP: usize = 2048;
     const FLASH_CAP: usize = 1024;

@@ -11,7 +11,9 @@
 
 use core::fmt;
 
+#[cfg(feature = "agent")]
 use crc::Crc32;
+#[cfg(feature = "agent")]
 use crate::mac::{Mac, ct_eq};
 
 /// Total length of the image header in bytes.
@@ -211,6 +213,7 @@ impl ImageHeader {
     ///
     /// Returns [`SignError::PayloadTooLarge`] if the payload does not fit in a
     /// `u32` length field.
+    #[cfg(feature = "agent")]
     pub fn sign<M: Mac>(mut self, mut mac: M, payload: &[u8]) -> Result<[u8; HEADER_LEN], SignError> {
         self.payload_len = u32::try_from(payload.len()).map_err(|_| SignError::PayloadTooLarge)?;
         self.payload_crc32 = crc::checksum32(payload);
@@ -223,6 +226,7 @@ impl ImageHeader {
 }
 
 /// An error returned when an image cannot be signed.
+#[cfg(feature = "agent")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SignError {
@@ -230,6 +234,7 @@ pub enum SignError {
     PayloadTooLarge,
 }
 
+#[cfg(feature = "agent")]
 impl fmt::Display for SignError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -238,9 +243,11 @@ impl fmt::Display for SignError {
     }
 }
 
+#[cfg(feature = "agent")]
 impl core::error::Error for SignError {}
 
 /// The reason an image failed verification.
+#[cfg(feature = "agent")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VerifyError {
@@ -252,6 +259,7 @@ pub enum VerifyError {
     BadTag,
 }
 
+#[cfg(feature = "agent")]
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -262,6 +270,7 @@ impl fmt::Display for VerifyError {
     }
 }
 
+#[cfg(feature = "agent")]
 impl core::error::Error for VerifyError {}
 
 /// Streams an image through a [`Mac`] and a [`Crc32`] to check it.
@@ -269,6 +278,7 @@ impl core::error::Error for VerifyError {}
 /// Construct it from the raw header bytes and a freshly keyed MAC, feed the
 /// payload with [`Verifier::feed`], then call [`Verifier::finish`]. The payload
 /// may be fed in any number of chunks.
+#[cfg(feature = "agent")]
 pub struct Verifier<M: Mac> {
     mac: M,
     crc: Crc32,
@@ -278,6 +288,7 @@ pub struct Verifier<M: Mac> {
     fed: u32,
 }
 
+#[cfg(feature = "agent")]
 impl<M: Mac> Verifier<M> {
     /// Starts verifying an image.
     ///
@@ -331,7 +342,7 @@ impl<M: Mac> Verifier<M> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "agent"))]
 mod tests {
     use super::{HEADER_LEN, ImageHeader, ImageKind, ParseError, Region, VerifyError, Verifier};
     use hmac_sha256::HMAC;

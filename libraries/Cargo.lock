@@ -100,20 +100,13 @@ dependencies = [
 name = "cellboot"
 version = "0.1.0"
 dependencies = [
- "cellguard-protocol",
- "crc",
- "hmac-sha256",
-]
-
-[[package]]
-name = "cellboot-drivers"
-version = "0.1.0"
-dependencies = [
  "avrxt-hal",
  "cat25",
- "cellboot",
+ "cellguard-protocol",
+ "crc",
  "embedded-hal",
  "embedded-hal-mock",
+ "hmac-sha256",
 ]
 
 [[package]]
@@ -122,6 +115,15 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "zerocopy",
+]
+
+[[package]]
+name = "cellprog"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-protocol",
+ "crc",
 ]
 
 [[package]]

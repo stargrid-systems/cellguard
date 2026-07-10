@@ -15,8 +15,8 @@
 
 use crc::Crc32;
 
-use crate::image::{HEADER_LEN, ImageHeader, ParseError};
-use crate::io::{ImageStore, NvmWriter};
+use cellboot::image::{HEADER_LEN, ImageHeader, ParseError};
+use cellboot::io::{ImageStore, NvmWriter};
 
 const HEADER_LEN_U32: u32 = 64;
 const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
@@ -151,8 +151,8 @@ pub enum ProgramError<S, N> {
 #[cfg(test)]
 mod tests {
     use super::{ProgramError, program};
-    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use crate::io::{ImageStore, NvmWriter};
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::io::{ImageStore, NvmWriter};
 
     const STORE_CAP: usize = 1024;
     const FLASH_CAP: usize = 1024;

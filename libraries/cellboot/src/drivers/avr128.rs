@@ -7,7 +7,8 @@
 
 use avrxt_hal::clock::CcpUnlock;
 use avrxt_hal::nvmctrl::{Nvm, NvmError, NvmInstance};
-use cellboot::io::{KeyStore, StateStore};
+
+use crate::io::{KeyStore, StateStore};
 
 /// A [`StateStore`] backed by a slot in the on-chip EEPROM.
 ///
@@ -53,10 +54,10 @@ impl<T: NvmInstance, C: CcpUnlock> StateStore for EepromState<'_, T, C> {
 
 /// A development-only [`KeyStore`] backed by the AVR128 USERROW.
 ///
-/// Production locks the USERROW and uses `cellboot::io::NoKeyStore` instead;
-/// this writable path exists so a key can be replaced over a trusted bus during
-/// bring-up. Writing the key erases the whole USERROW page, so the key must own
-/// it (it is written from offset 0).
+/// Production locks the USERROW and uses [`NoKeyStore`](crate::io::NoKeyStore)
+/// instead; this writable path exists so a key can be replaced over a trusted
+/// bus during bring-up. Writing the key erases the whole USERROW page, so the
+/// key must own it (it is written from offset 0).
 pub struct UserRowKeyStore<'a, T: NvmInstance, C: CcpUnlock> {
     nvm: &'a Nvm<T>,
     cpu: &'a C,
