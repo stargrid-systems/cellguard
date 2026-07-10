@@ -10,7 +10,9 @@
 //! polls it and calls [`Supervisor::recover`] when the main MCU goes silent,
 //! which reprograms it from the golden image.
 
-use cellguard_protocol::{Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, encode_frame};
+use cellguard_protocol::{
+    Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
+};
 
 use cellboot::io::{ImageStore, NvmWriter};
 use crate::programmer::{ProgramError, program};
@@ -24,55 +26,6 @@ const RESULT_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
 /// Worst-case COBS-encoded size of a result frame, including the terminator.
 const RESULT_WIRE: usize = RESULT_FRAME + RESULT_FRAME.div_ceil(254) + 1;
 
-/// Which staged image the programmer should flash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Source {
-    /// The application image staged in the App Code region.
-    AppStaged,
-    /// The bootloader image staged in the Bootloader region.
-    BootloaderStaged,
-    /// The known-good golden image, used for recovery.
-    Golden,
-}
-
-impl Source {
-    const fn from_code(code: u8) -> Option<Self> {
-        match code {
-            0 => Some(Self::AppStaged),
-            1 => Some(Self::BootloaderStaged),
-            2 => Some(Self::Golden),
-            _ => None,
-        }
-    }
-}
-
-/// The outcome of a program attempt, reported in a `ProgResult`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ProgStatus {
-    /// The target was programmed, verified, and released.
-    Ok,
-    /// The staged image did not match its CRC.
-    CorruptSource,
-    /// The written flash did not match its CRC.
-    VerifyFailed,
-    /// The store or writer failed, or the header did not parse.
-    Failed,
-}
-
-impl ProgStatus {
-    #[must_use]
-    const fn to_code(self) -> u8 {
-        match self {
-            Self::Ok => 0,
-            Self::CorruptSource => 1,
-            Self::VerifyFailed => 2,
-            Self::Failed => 3,
-        }
-    }
-}
-
 /// Where each source image sits in the store and where it maps in the target.
 #[derive(Debug, Clone, Copy)]
 pub struct SourceSlot {
@@ -82,23 +35,23 @@ pub struct SourceSlot {
     pub target_base: u32,
 }
 
-/// Maps each [`Source`] to its slot.
+/// Maps each [`ProgSource`] to its slot.
 #[derive(Debug, Clone, Copy)]
 pub struct ProgLayout {
-    /// Slot for [`Source::AppStaged`].
+    /// Slot for [`ProgSource::AppStaged`].
     pub app: SourceSlot,
-    /// Slot for [`Source::BootloaderStaged`].
+    /// Slot for [`ProgSource::BootloaderStaged`].
     pub bootloader: SourceSlot,
-    /// Slot for [`Source::Golden`].
+    /// Slot for [`ProgSource::Golden`].
     pub golden: SourceSlot,
 }
 
 impl ProgLayout {
-    const fn slot(&self, source: Source) -> SourceSlot {
+    const fn slot(&self, source: ProgSource) -> SourceSlot {
         match source {
-            Source::AppStaged => self.app,
-            Source::BootloaderStaged => self.bootloader,
-            Source::Golden => self.golden,
+            ProgSource::AppStaged => self.app,
+            ProgSource::BootloaderStaged => self.bootloader,
+            ProgSource::Golden => self.golden,
         }
     }
 }
@@ -133,7 +86,7 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
     }
 
     /// Programs the target from `source`, returning the outcome.
-    pub fn program(&mut self, source: Source) -> ProgStatus {
+    pub fn program(&mut self, source: ProgSource) -> ProgStatus {
         let slot = self.layout.slot(source);
         match program(
             &mut self.store,
@@ -153,7 +106,7 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
     /// Reprograms the main MCU from the golden image. Called by the firmware
     /// when the `TINY_ALIVE` heartbeat is lost.
     pub fn recover(&mut self) -> ProgStatus {
-        self.program(Source::Golden)
+        self.program(ProgSource::Golden)
     }
 
     /// Feeds one received wire byte from the main MCU link.
@@ -172,7 +125,7 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
             if packet.id != self.id || packet.kind != Kind::ProgProgram {
                 return None;
             }
-            Source::from_code(*packet.payload.first()?)?
+            ProgSource::from_code(*packet.payload.first()?)?
         };
 
         let status = self.program(source);
@@ -186,9 +139,9 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
 
 #[cfg(test)]
 mod tests {
-    use cellguard_protocol::{Decoder, Kind, Packet, encode_frame};
+    use cellguard_protocol::{Decoder, Kind, Packet, ProgStatus, encode_frame};
 
-    use super::{ProgLayout, ProgStatus, SourceSlot, Supervisor};
+    use super::{ProgLayout, SourceSlot, Supervisor};
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::{ImageStore, NvmWriter};
 
