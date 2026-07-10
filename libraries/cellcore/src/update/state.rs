@@ -5,8 +5,22 @@
 //! `Probe` command reports back, so an operator can ask a device what firmware
 //! it runs, whether that firmware is healthy, and how the last update went.
 
+use cellboot::io::StateStore;
 use core::fmt;
 
+/// Loads the persisted state, falling back to a fresh one on any problem.
+///
+/// A read error, a wrong length, a bad CRC, or an unknown field all resolve to
+/// [`PersistentState::new`], so a blank or corrupt store never blocks boot. Call
+/// this once at boot and pass the result to
+/// [`UpdateAgent::new`](crate::update::session::UpdateAgent::new).
+pub fn load<St: StateStore>(store: &mut St, agent_version: u32) -> PersistentState {
+    let mut buf = [0u8; STATE_LEN];
+    match store.load(&mut buf) {
+        Ok(()) => PersistentState::parse(&buf).unwrap_or_else(|_| PersistentState::new(agent_version)),
+        Err(_) => PersistentState::new(agent_version),
+    }
+}
 
 /// Serialized length of a [`PersistentState`] record in bytes.
 pub const STATE_LEN: usize = 28;

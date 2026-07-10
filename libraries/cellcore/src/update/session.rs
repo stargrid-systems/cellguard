@@ -7,7 +7,7 @@
 //! caller which region is ready, so the caller can hand off to the programmer.
 
 use cellboot::image::{HEADER_LEN, ImageHeader, Region};
-use cellboot::io::{ImageStore, KeyStore};
+use cellboot::io::{ImageStore, KeyStore, StateStore};
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, NackReason, Response};
@@ -68,30 +68,33 @@ struct Receiving {
 }
 
 /// The device-side update agent.
-pub struct UpdateAgent<'k, S, K> {
+pub struct UpdateAgent<'k, S, K, St> {
     store: S,
     layout: StagingLayout,
     target_id: u16,
     key: &'k [u8],
     key_store: K,
+    state_store: St,
     state: PersistentState,
     session: Session,
 }
 
-impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
+impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Creates an agent.
     ///
     /// `target_id` is this device's identity, used to reject images built for a
     /// different device. `key` is the shared HMAC key, normally a slice over the
     /// USERROW. `key_store` writes a replacement key (use
-    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production). `state` is the state
-    /// loaded from persistent storage at boot.
+    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production). `state_store`
+    /// persists the probe-able state, and `state` is the state already loaded
+    /// from it at boot (see [`crate::update::state::load`]).
     pub const fn new(
         store: S,
         layout: StagingLayout,
         target_id: u16,
         key: &'k [u8],
         key_store: K,
+        state_store: St,
         state: PersistentState,
     ) -> Self {
         Self {
@@ -100,6 +103,7 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
             target_id,
             key,
             key_store,
+            state_store,
             state,
             session: Session::Idle,
         }
@@ -129,15 +133,27 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
     }
 
     /// Handles one command and returns the response.
+    ///
+    /// When the command changes the probe-able state, the new state is written
+    /// through to the [`StateStore`] so a probe after a reset reflects reality.
+    /// A `Data` chunk does not touch the state, so a large transfer causes no
+    /// extra store writes. The write-through is best-effort: a store failure is
+    /// not reported here, since the in-RAM state still drives the current
+    /// session and the handoff that follows a commit.
     pub fn handle(&mut self, command: Command<'_>) -> Response {
-        match command {
+        let before = self.state;
+        let response = match command {
             Command::Probe => Response::Status(self.state),
             Command::Begin { header } => self.on_begin(&header),
             Command::Data { offset, chunk } => self.on_data(offset, chunk),
             Command::Commit => self.on_commit(),
             Command::Abort => self.on_abort(),
             Command::ReplaceKey { new_key, tag } => self.on_replace_key(&new_key, &tag),
+        };
+        if self.state != before {
+            let _ = self.state_store.store(&self.state.serialize());
         }
+        response
     }
 
     fn on_replace_key(&mut self, new_key: &[u8], tag: &[u8; 32]) -> Response {
@@ -260,13 +276,14 @@ impl<'k, S: ImageStore, K: KeyStore> UpdateAgent<'k, S, K> {
 #[cfg(test)]
 mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use cellboot::io::{ImageStore, KeyStore, NoKeyStore};
+    use cellboot::io::{ImageStore, KeyStore, NoKeyStore, StateStore};
+    use core::cell::RefCell;
     use hmac_sha256::HMAC;
 
     use super::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::update::command::{Command, KEY_LEN, NackReason, Response};
     use crate::update::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
-    use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
+    use crate::update::state::{PersistentState, STATE_LEN, StagedState, UpdateOutcome};
 
     const KEY: &[u8] = b"session-test-key";
     const TARGET: u16 = 0x2A2A;
@@ -304,6 +321,42 @@ mod tests {
         }
     }
 
+    /// A state store that drops writes and reports an empty load.
+    struct NullStateStore;
+
+    impl StateStore for NullStateStore {
+        type Error = ();
+
+        fn load(&mut self, _buf: &mut [u8]) -> Result<(), ()> {
+            Err(())
+        }
+
+        fn store(&mut self, _data: &[u8]) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    /// A state store backed by shared bytes, so a second agent can load what a
+    /// first one persisted. `None` stands in for a blank store.
+    struct SharedStore<'a>(&'a RefCell<Option<[u8; STATE_LEN]>>);
+
+    impl StateStore for SharedStore<'_> {
+        type Error = ();
+
+        fn load(&mut self, buf: &mut [u8]) -> Result<(), ()> {
+            let guard = self.0.borrow();
+            let bytes = guard.as_ref().ok_or(())?;
+            buf.get_mut(..STATE_LEN).ok_or(())?.copy_from_slice(bytes);
+            Ok(())
+        }
+
+        fn store(&mut self, data: &[u8]) -> Result<(), ()> {
+            let bytes: [u8; STATE_LEN] = data.get(..STATE_LEN).ok_or(())?.try_into().map_err(|_| ())?;
+            *self.0.borrow_mut() = Some(bytes);
+            Ok(())
+        }
+    }
+
     fn layout() -> StagingLayout {
         StagingLayout {
             application: RegionSlot { offset: 0, capacity: 2048 },
@@ -335,7 +388,7 @@ mod tests {
         core::array::from_fn(|i| i as u8)
     }
 
-    fn run_update(agent: &mut UpdateAgent<MemStore, NoKeyStore>, header: &[u8; HEADER_LEN], payload: &[u8]) -> Response {
+    fn run_update<St: StateStore>(agent: &mut UpdateAgent<'_, MemStore, NoKeyStore, St>, header: &[u8; HEADER_LEN], payload: &[u8]) -> Response {
         assert!(matches!(
             agent.handle(Command::Begin { header: *header }),
             Response::Ack { next_offset: 0 }
@@ -354,7 +407,7 @@ mod tests {
     fn happy_path_stages_and_verifies() {
         let payload = ramp300();
         let header = signed_image(&payload);
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
 
         assert!(matches!(agent.handle(Command::Probe), Response::Status(_)));
         assert!(matches!(run_update(&mut agent, &header, &payload), Response::Ack { .. }));
@@ -375,7 +428,7 @@ mod tests {
         let header = signed_image(&payload);
         let mut tampered = payload;
         tampered[100] ^= 0x01;
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
 
         assert_eq!(run_update(&mut agent, &header, &tampered), Response::Nack(NackReason::VerifyFailed));
         assert_eq!(agent.pending_program(), None);
@@ -386,7 +439,7 @@ mod tests {
     fn wrong_target_is_rejected() {
         let payload = [1u8, 2, 3];
         let header = signed_image(&payload);
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), 0x9999, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), 0x9999, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         assert_eq!(
             agent.handle(Command::Begin { header }),
             Response::Nack(NackReason::WrongTarget)
@@ -397,7 +450,7 @@ mod tests {
     fn out_of_order_data_is_rejected() {
         let payload = [1u8, 2, 3, 4, 5, 6];
         let header = signed_image(&payload);
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         agent.handle(Command::Begin { header });
         assert_eq!(
             agent.handle(Command::Data { offset: 99, chunk: &payload }),
@@ -407,7 +460,7 @@ mod tests {
 
     #[test]
     fn data_without_begin_is_rejected() {
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         assert_eq!(
             agent.handle(Command::Data { offset: 0, chunk: b"x" }),
             Response::Nack(NackReason::BadState)
@@ -418,7 +471,7 @@ mod tests {
     fn abort_clears_session() {
         let payload = [1u8, 2, 3, 4];
         let header = signed_image(&payload);
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         agent.handle(Command::Begin { header });
         assert!(matches!(agent.handle(Command::Abort), Response::Ack { .. }));
         assert_eq!(agent.status().last_outcome, UpdateOutcome::Aborted);
@@ -449,7 +502,7 @@ mod tests {
     #[test]
     fn key_replace_authorized_writes_new_key() {
         let store = AcceptingKeyStore;
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, store, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, store, NullStateStore, PersistentState::new(1));
         let new_key = [0x5Au8; KEY_LEN];
         let tag = replace_key_tag(KEY, &new_key);
 
@@ -464,7 +517,7 @@ mod tests {
     #[test]
     fn key_replace_rejects_bad_tag() {
         let store = AcceptingKeyStore;
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, store, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, store, NullStateStore, PersistentState::new(1));
         let new_key = [0x5Au8; KEY_LEN];
         let mut tag = replace_key_tag(KEY, &new_key);
         tag[0] ^= 0x01;
@@ -476,7 +529,7 @@ mod tests {
 
     #[test]
     fn key_replace_rejected_when_locked() {
-        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let mut agent = UpdateAgent::new(MemStore::new(), layout(), TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         let new_key = [0x5Au8; KEY_LEN];
         let tag = replace_key_tag(KEY, &new_key);
         // Authentication passes, but a locked key store refuses the write.
@@ -484,5 +537,43 @@ mod tests {
             agent.handle(Command::ReplaceKey { new_key, tag }),
             Response::Nack(NackReason::StorageError)
         );
+    }
+
+    #[test]
+    fn state_persists_across_reset() {
+        let backing = RefCell::new(None);
+        let payload = ramp300();
+        let header = signed_image(&payload);
+
+        {
+            let mut agent = UpdateAgent::new(
+                MemStore::new(), layout(), TARGET, KEY, NoKeyStore, SharedStore(&backing), PersistentState::new(1),
+            );
+            assert!(matches!(run_update(&mut agent, &header, &payload), Response::Ack { .. }));
+        }
+
+        // Reset: a fresh agent loads what the first one persisted at commit.
+        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        assert_eq!(restored.staged, StagedState::Ready);
+        assert_eq!(restored.staged_region, Some(Region::ApplicationCode));
+        assert_eq!(restored.last_outcome, UpdateOutcome::Success);
+        assert_eq!(restored.staged_version, 5);
+    }
+
+    #[test]
+    fn abort_is_persisted() {
+        let backing = RefCell::new(None);
+        let payload = [1u8, 2, 3, 4];
+        let header = signed_image(&payload);
+        {
+            let mut agent = UpdateAgent::new(
+                MemStore::new(), layout(), TARGET, KEY, NoKeyStore, SharedStore(&backing), PersistentState::new(1),
+            );
+            agent.handle(Command::Begin { header });
+            agent.handle(Command::Abort);
+        }
+        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        assert_eq!(restored.staged, StagedState::Empty);
+        assert_eq!(restored.last_outcome, UpdateOutcome::Aborted);
     }
 }

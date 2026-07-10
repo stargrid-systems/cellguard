@@ -10,7 +10,7 @@
 //! for other nodes down the daisy chain is a separate concern and not handled
 //! here.
 
-use cellboot::io::{ImageStore, KeyStore};
+use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
 use crate::update::command::Command;
@@ -28,17 +28,19 @@ const MAX_RESPONSE_WIRE: usize = MAX_RESPONSE_FRAME + MAX_RESPONSE_FRAME.div_cei
 ///
 /// `RX` sizes the receive buffer and must be large enough for the biggest
 /// incoming frame (a `Begin` header, or a `Data` chunk plus its overhead).
-pub struct Dispatcher<'k, S, K, const RX: usize> {
-    agent: UpdateAgent<'k, S, K>,
+pub struct Dispatcher<'k, S, K, St, const RX: usize> {
+    agent: UpdateAgent<'k, S, K, St>,
     id: u8,
     decoder: Decoder,
     rx: [u8; RX],
     tx: [u8; MAX_RESPONSE_WIRE],
 }
 
-impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
+impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize>
+    Dispatcher<'k, S, K, St, RX>
+{
     /// Creates a dispatcher for node `id` around `agent`.
-    pub const fn new(agent: UpdateAgent<'k, S, K>, id: u8) -> Self {
+    pub const fn new(agent: UpdateAgent<'k, S, K, St>, id: u8) -> Self {
         Self {
             agent,
             id,
@@ -51,7 +53,7 @@ impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
     /// Returns the wrapped agent, e.g. to read its status or check
     /// [`UpdateAgent::pending_program`].
     #[must_use]
-    pub const fn agent(&self) -> &UpdateAgent<'k, S, K> {
+    pub const fn agent(&self) -> &UpdateAgent<'k, S, K, St> {
         &self.agent
     }
 
@@ -83,7 +85,7 @@ impl<'k, S: ImageStore, K: KeyStore, const RX: usize> Dispatcher<'k, S, K, RX> {
 #[cfg(test)]
 mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use cellboot::io::{ImageStore, NoKeyStore};
+    use cellboot::io::{ImageStore, NoKeyStore, StateStore};
     use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
     use hmac_sha256::HMAC;
 
@@ -122,12 +124,27 @@ mod tests {
         }
     }
 
-    fn make_dispatcher() -> Dispatcher<'static, MemStore, NoKeyStore, 512> {
+    /// A state store that drops writes and reports an empty load.
+    struct NullStateStore;
+
+    impl StateStore for NullStateStore {
+        type Error = ();
+
+        fn load(&mut self, _buf: &mut [u8]) -> Result<(), ()> {
+            Err(())
+        }
+
+        fn store(&mut self, _data: &[u8]) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    fn make_dispatcher() -> Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512> {
         let layout = StagingLayout {
             application: RegionSlot { offset: 0, capacity: 2048 },
             bootloader: RegionSlot { offset: 2048, capacity: 2048 },
         };
-        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, NoKeyStore, PersistentState::new(1));
+        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
         Dispatcher::new(agent, NODE)
     }
 
@@ -146,7 +163,7 @@ mod tests {
     }
 
     /// Feeds a wire command into the dispatcher and decodes the response packet.
-    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
+    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
         let (wire, len) = wire_command(kind, payload);
         let mut response = None;
         for &byte in &wire[..len] {
