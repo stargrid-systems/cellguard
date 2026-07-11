@@ -1,45 +1,56 @@
 //! The programming layer for AVR Dx targets (NVMCTRL v2).
 //!
 //! [`Programmer`] unlocks the target, resets it into programming mode, and
-//! erases, writes, and reads back flash over the [`Updi`] link.
+//! erases, writes, and reads back flash over the [`Updi`] driver.
 //!
 //! The data-space addresses, NVM command values, key strings, and status bits
 //! below come from the AVR128DB datasheet, cross-checked against `pymcuprog`.
 
-use crate::link::{RESET_RELEASE, RESET_REQUEST, Updi, UpdiError, UpdiLink, cs};
+use crate::driver::{RESET_RELEASE, RESET_REQUEST, Updi, UpdiError, cs};
+use crate::link::UpdiLink;
 
-// --- AVR Dx (NVMCTRL v2) data-space layout. ---
-
-/// NVMCTRL command register.
-pub const NVMCTRL_CTRLA: u32 = 0x1000;
-/// NVMCTRL status register.
-pub const NVMCTRL_STATUS: u32 = 0x1002;
 /// Base of program flash in the 24-bit UPDI address space.
 pub const FLASH_BASE: u32 = 0x80_0000;
-
+/// Total program-flash size in bytes (AVR128DB).
+pub const FLASH_SIZE: u32 = 128 * 1024;
 /// Flash page size in bytes (AVR128DB).
 pub const PAGE_SIZE: u32 = 512;
 
-// NVMCTRL.CTRLA commands.
-pub const CMD_NONE: u8 = 0x00;
-pub const CMD_FLWR: u8 = 0x02;
-pub const CMD_FLPER: u8 = 0x08;
+/// NVM controller registers, commands, and status flags.
+pub mod nvmctrl {
+    /// Command register.
+    pub const CTRLA: u32 = 0x1000;
+    /// Status register.
+    pub const STATUS: u32 = 0x1002;
 
-// NVMCTRL.STATUS flags.
-pub const STATUS_FBUSY: u8 = 1 << 0;
-pub const STATUS_ERROR_MASK: u8 = 0x70;
+    /// No command (disarm the controller).
+    pub const CMD_NONE: u8 = 0x00;
+    /// Flash write.
+    pub const CMD_FLWR: u8 = 0x02;
+    /// Flash page erase.
+    pub const CMD_FLPER: u8 = 0x08;
 
-// Unlock keys. Sent least-significant byte first by `Updi::key`.
+    /// Flash busy.
+    pub const STATUS_FBUSY: u8 = 1 << 0;
+    /// Any write-error bit.
+    pub const STATUS_ERROR_MASK: u8 = 0x70;
+}
+
+/// ASI status-register bits, read over the CS space.
+pub mod asi {
+    /// Chip-erase key accepted (`ASI_KEY_STATUS`).
+    pub const KEYSTAT_CHIPERASE: u8 = 1 << 3;
+    /// NVMPROG key accepted (`ASI_KEY_STATUS`).
+    pub const KEYSTAT_NVMPROG: u8 = 1 << 4;
+    /// Target locked (`ASI_SYS_STATUS`).
+    pub const SYS_LOCKSTATUS: u8 = 1 << 0;
+    /// Programming mode active (`ASI_SYS_STATUS`).
+    pub const SYS_NVMPROG: u8 = 1 << 3;
+}
+
+/// Unlock keys. Sent least-significant byte first by `Updi::key`.
 const KEY_NVMPROG: &[u8; 8] = b"NVMProg ";
 const KEY_CHIPERASE: &[u8; 8] = b"NVMErase";
-
-// ASI_KEY_STATUS bits.
-pub const KEYSTAT_CHIPERASE: u8 = 1 << 3;
-pub const KEYSTAT_NVMPROG: u8 = 1 << 4;
-
-// ASI_SYS_STATUS bits.
-pub const SYS_LOCKSTATUS: u8 = 1 << 0;
-pub const SYS_NVMPROG: u8 = 1 << 3;
 
 /// Guard time written to UPDI.CTRLA. `0` selects the largest guard time, the
 /// safest choice for bring-up. A shorter guard time is faster.
@@ -61,6 +72,10 @@ pub enum ProgError<E> {
     Locked,
     /// The target never reported programming mode.
     EnterTimeout,
+    /// A chip erase did not complete within the poll bound.
+    EraseTimeout,
+    /// A flash offset was misaligned or out of range.
+    InvalidOffset,
     /// An NVM operation stayed busy past the poll bound.
     Busy,
     /// The NVM controller reported a write error.
@@ -107,7 +122,7 @@ impl<L: UpdiLink> Programmer<L> {
         }
         self.updi.stcs(cs::CTRLA, GUARD_TIME)?;
         self.updi.key(KEY_NVMPROG)?;
-        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & KEYSTAT_NVMPROG == 0 {
+        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & asi::KEYSTAT_NVMPROG == 0 {
             return Err(ProgError::KeyRejected);
         }
         self.reset()?;
@@ -119,42 +134,60 @@ impl<L: UpdiLink> Programmer<L> {
     ///
     /// # Errors
     ///
-    /// Returns [`ProgError::NotAlive`] or [`ProgError::KeyRejected`] on the
-    /// matching failure, or [`ProgError::Updi`] on a transport error.
+    /// Returns [`ProgError::NotAlive`], [`ProgError::KeyRejected`], or
+    /// [`ProgError::EraseTimeout`] on the matching failure, or
+    /// [`ProgError::Updi`] on a transport error.
     pub fn chip_erase(&mut self) -> Result<(), ProgError<L::Error>> {
         self.updi.break_()?;
         if self.updi.ldcs(cs::STATUSA)? == 0 {
             return Err(ProgError::NotAlive);
         }
         self.updi.key(KEY_CHIPERASE)?;
-        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & KEYSTAT_CHIPERASE == 0 {
+        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & asi::KEYSTAT_CHIPERASE == 0 {
             return Err(ProgError::KeyRejected);
         }
-        self.reset()
+        self.reset()?;
+        self.wait_erase_done()
     }
 
-    /// Erases the flash page containing `flash_offset`.
+    /// Erases the flash page starting at `flash_offset`.
     ///
     /// # Errors
     ///
-    /// Returns [`ProgError::Busy`] or [`ProgError::NvmError`] on an NVM
-    /// failure, or [`ProgError::Updi`] on a transport error.
+    /// Returns [`ProgError::InvalidOffset`] if `flash_offset` is not
+    /// page-aligned or is out of range, [`ProgError::Busy`] or
+    /// [`ProgError::NvmError`] on an NVM failure, or [`ProgError::Updi`] on
+    /// a transport error.
     pub fn erase_flash_page(&mut self, flash_offset: u32) -> Result<(), ProgError<L::Error>> {
-        self.nvm_command(CMD_FLPER)?;
+        if !flash_offset.is_multiple_of(PAGE_SIZE) || flash_offset >= FLASH_SIZE {
+            return Err(ProgError::InvalidOffset);
+        }
+        self.nvm_command(nvmctrl::CMD_FLPER)?;
         // On NVMCTRL v2 a write to any address in the page triggers the erase.
-        self.updi
-            .sts8(FLASH_BASE.saturating_add(flash_offset), 0xFF)?;
-        self.wait_flash_ready()?;
-        self.nvm_command(CMD_NONE)?;
-        Ok(())
+        let r = self.do_erase(flash_offset);
+        // Always disarm, even on failure, so a later read cannot misfire into
+        // the still-armed controller.
+        let disarm = self.nvm_command(nvmctrl::CMD_NONE);
+        r.and(disarm)
     }
 
-    /// Writes `data` to flash at `flash_offset`. The page must be erased first.
+    fn do_erase(&mut self, flash_offset: u32) -> Result<(), ProgError<L::Error>> {
+        self.updi.sts8(FLASH_BASE + flash_offset, 0xFF)?;
+        self.wait_flash_ready()
+    }
+
+    /// Writes `data` to flash at `flash_offset`. Every page it touches must be
+    /// erased first.
+    ///
+    /// `flash_offset` must be word-aligned (even). Data that spans a page
+    /// boundary is programmed one page at a time.
     ///
     /// # Errors
     ///
-    /// Returns [`ProgError::Busy`] or [`ProgError::NvmError`] on an NVM
-    /// failure, or [`ProgError::Updi`] on a transport error.
+    /// Returns [`ProgError::InvalidOffset`] if `flash_offset` is misaligned or
+    /// the write runs past the end of flash, [`ProgError::Busy`] or
+    /// [`ProgError::NvmError`] on an NVM failure, or [`ProgError::Updi`] on a
+    /// transport error.
     pub fn write_flash(
         &mut self,
         flash_offset: u32,
@@ -163,20 +196,73 @@ impl<L: UpdiLink> Programmer<L> {
         if data.is_empty() {
             return Ok(());
         }
-        self.nvm_command(CMD_FLWR)?;
-        self.updi
-            .set_pointer(FLASH_BASE.saturating_add(flash_offset))?;
-        self.updi.st_inc(data)?;
-        self.wait_flash_ready()?;
-        self.nvm_command(CMD_NONE)?;
+        // Flash programs in 16-bit words, so the start must be word-aligned.
+        if !flash_offset.is_multiple_of(2) {
+            return Err(ProgError::InvalidOffset);
+        }
+        let len = u32::try_from(data.len()).map_err(|_| ProgError::InvalidOffset)?;
+        let end = flash_offset
+            .checked_add(len)
+            .ok_or(ProgError::InvalidOffset)?;
+        if end > FLASH_SIZE {
+            return Err(ProgError::InvalidOffset);
+        }
+
+        let mut offset = flash_offset;
+        let mut rest = data;
+        while !rest.is_empty() {
+            // Bytes up to the next page boundary belong to the current page.
+            let page_end = (offset / PAGE_SIZE + 1) * PAGE_SIZE;
+            let to_boundary = usize::try_from(page_end - offset).unwrap_or(rest.len());
+            if rest.len() <= to_boundary {
+                self.write_page_segment(offset, rest)?;
+                break;
+            }
+            let (segment, tail) = rest.split_at(to_boundary);
+            self.write_page_segment(offset, segment)?;
+            offset = page_end;
+            rest = tail;
+        }
         Ok(())
+    }
+
+    fn write_page_segment(
+        &mut self,
+        offset: u32,
+        segment: &[u8],
+    ) -> Result<(), ProgError<L::Error>> {
+        self.nvm_command(nvmctrl::CMD_FLWR)?;
+        let r = self.stream_words(offset, segment);
+        // Always disarm, even on failure.
+        let disarm = self.nvm_command(nvmctrl::CMD_NONE);
+        r.and(disarm)
+    }
+
+    fn stream_words(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
+        self.updi.set_pointer(FLASH_BASE + offset)?;
+        // Split off an odd trailing byte so the even head streams as whole words.
+        let (head, tail) = if segment.len().is_multiple_of(2) {
+            (segment, &[][..])
+        } else {
+            segment.split_at(segment.len() - 1)
+        };
+        if !head.is_empty() {
+            self.updi.st_inc(head)?;
+        }
+        if let [last] = tail {
+            // Pad the odd tail with the erased value so the controller commits
+            // the final word instead of leaving it half written.
+            self.updi.st_inc(&[*last, 0xFF])?;
+        }
+        self.wait_flash_ready()
     }
 
     /// Reads `buf.len()` bytes from flash at `flash_offset`.
     ///
     /// # Errors
     ///
-    /// Returns [`ProgError::Updi`] on a transport error.
+    /// Returns [`ProgError::InvalidOffset`] if the read runs past the end of
+    /// flash, or [`ProgError::Updi`] on a transport error.
     pub fn read_flash(
         &mut self,
         flash_offset: u32,
@@ -185,8 +271,14 @@ impl<L: UpdiLink> Programmer<L> {
         if buf.is_empty() {
             return Ok(());
         }
-        self.updi
-            .set_pointer(FLASH_BASE.saturating_add(flash_offset))?;
+        let len = u32::try_from(buf.len()).map_err(|_| ProgError::InvalidOffset)?;
+        let end = flash_offset
+            .checked_add(len)
+            .ok_or(ProgError::InvalidOffset)?;
+        if end > FLASH_SIZE {
+            return Err(ProgError::InvalidOffset);
+        }
+        self.updi.set_pointer(FLASH_BASE + flash_offset)?;
         self.updi.ld_inc(buf)?;
         Ok(())
     }
@@ -209,28 +301,42 @@ impl<L: UpdiLink> Programmer<L> {
     fn wait_prog_mode(&mut self) -> Result<(), ProgError<L::Error>> {
         for _ in 0..MAX_POLL {
             let status = self.updi.ldcs(cs::ASI_SYS_STATUS)?;
-            if status & SYS_LOCKSTATUS != 0 {
+            if status & asi::SYS_LOCKSTATUS != 0 {
                 return Err(ProgError::Locked);
             }
-            if status & SYS_NVMPROG != 0 {
+            if status & asi::SYS_NVMPROG != 0 {
                 return Ok(());
             }
         }
         Err(ProgError::EnterTimeout)
     }
 
+    fn wait_erase_done(&mut self) -> Result<(), ProgError<L::Error>> {
+        // The chip erase clears the lock. Wait for it so a following enter()
+        // does not race a target that is still erasing. A target that was
+        // already unlocked reads LOCKSTATUS clear from the first poll, so also
+        // wait for the NVM controller to leave FBUSY. Data-space reads work
+        // once unlocked, which is exactly when this check runs.
+        for _ in 0..MAX_POLL {
+            if self.updi.ldcs(cs::ASI_SYS_STATUS)? & asi::SYS_LOCKSTATUS == 0 {
+                return self.wait_flash_ready();
+            }
+        }
+        Err(ProgError::EraseTimeout)
+    }
+
     fn nvm_command(&mut self, cmd: u8) -> Result<(), ProgError<L::Error>> {
-        self.updi.sts8(NVMCTRL_CTRLA, cmd)?;
+        self.updi.sts8(nvmctrl::CTRLA, cmd)?;
         Ok(())
     }
 
     fn wait_flash_ready(&mut self) -> Result<(), ProgError<L::Error>> {
         for _ in 0..MAX_POLL {
-            let status = self.updi.lds8(NVMCTRL_STATUS)?;
-            if status & STATUS_ERROR_MASK != 0 {
+            let status = self.updi.lds8(nvmctrl::STATUS)?;
+            if status & nvmctrl::STATUS_ERROR_MASK != 0 {
                 return Err(ProgError::NvmError);
             }
-            if status & STATUS_FBUSY == 0 {
+            if status & nvmctrl::STATUS_FBUSY == 0 {
                 return Ok(());
             }
         }
@@ -284,12 +390,12 @@ mod tests {
         let mut prog = Programmer::new(MockTarget::new());
         prog.enter().unwrap();
         prog.erase_flash_page(0).unwrap();
-        prog.write_flash(0, &[0x11, 0x22, 0x33]).unwrap();
+        prog.write_flash(0, &[0x11, 0x22, 0x33, 0x44]).unwrap();
         // Erasing again restores 0xFF across the page.
         prog.erase_flash_page(0).unwrap();
-        let mut back = [0u8; 3];
+        let mut back = [0u8; 4];
         prog.read_flash(0, &mut back).unwrap();
-        assert_eq!(back, [0xFF, 0xFF, 0xFF]);
+        assert_eq!(back, [0xFF, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
@@ -321,5 +427,62 @@ mod tests {
         let mut back = [0u8; 4];
         prog.read_flash(off, &mut back).unwrap();
         assert_eq!(back, [0x5A; 4]);
+    }
+
+    #[test]
+    fn write_across_page_boundary_roundtrips() {
+        let mut prog = Programmer::new(MockTarget::new());
+        prog.enter().unwrap();
+        // Straddle the 512-byte boundary: both touched pages must be erased.
+        prog.erase_flash_page(0).unwrap();
+        prog.erase_flash_page(PAGE_SIZE).unwrap();
+        let data = ramp(40);
+        let off = PAGE_SIZE - 20;
+        prog.write_flash(off, &data[..40]).unwrap();
+        let mut back = [0u8; 40];
+        prog.read_flash(off, &mut back).unwrap();
+        assert_eq!(&back[..], &data[..40]);
+    }
+
+    #[test]
+    fn odd_length_write_roundtrips() {
+        let mut prog = Programmer::new(MockTarget::new());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        let data = [0x01, 0x02, 0x03];
+        prog.write_flash(0, &data).unwrap();
+        let mut back = [0u8; 3];
+        prog.read_flash(0, &mut back).unwrap();
+        assert_eq!(back, data);
+    }
+
+    #[test]
+    fn misaligned_offsets_are_rejected() {
+        let mut prog = Programmer::new(MockTarget::new());
+        prog.enter().unwrap();
+        // Odd write start.
+        assert_eq!(
+            prog.write_flash(1, &[0xAA, 0xBB]),
+            Err(ProgError::InvalidOffset)
+        );
+        // Non-page-aligned erase.
+        assert_eq!(prog.erase_flash_page(1), Err(ProgError::InvalidOffset));
+        // Out-of-range erase.
+        assert_eq!(
+            prog.erase_flash_page(super::FLASH_SIZE),
+            Err(ProgError::InvalidOffset)
+        );
+    }
+
+    #[test]
+    fn write_disarms_controller_on_nvm_error() {
+        // The controller must be disarmed after a failed write so a following
+        // read does not land in an armed write command.
+        let mut prog = Programmer::new(MockTarget::failing());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        assert_eq!(prog.write_flash(0, &[0x11, 0x22]), Err(ProgError::NvmError));
+        // The command register was reset to CMD_NONE despite the error.
+        assert_eq!(prog.free().nvm_command(), super::nvmctrl::CMD_NONE);
     }
 }

@@ -11,9 +11,10 @@
 //! # Layers
 //!
 //! - [`UpdiLink`]: the one transport seam. Send bytes (echo consumed) and
-//!   receive bytes, plus a BREAK.
-//! - [`Updi`]: the link layer. The UPDI instruction set (`LDCS`, `STCS`, `LDS`,
-//!   `STS`, `LD`, `ST`, `REPEAT`, `KEY`) over a [`UpdiLink`].
+//!   receive bytes, plus a BREAK. Lives in `link`.
+//! - [`Updi`]: the driver. The UPDI instruction set (`LDCS`, `STCS`, `LDS`,
+//!   `STS`, `LD`, `ST`, `REPEAT`, `KEY`) over a [`UpdiLink`]. Lives in
+//!   `driver`.
 //! - [`Programmer`]: the programming layer for AVR Dx (NVMCTRL v2). Unlock,
 //!   reset into programming mode, erase, write, and read back flash.
 //!
@@ -25,9 +26,11 @@
 #![no_std]
 #![warn(missing_docs)]
 
-pub use self::link::{Updi, UpdiError, UpdiLink};
+pub use self::driver::{Updi, UpdiError};
+pub use self::link::UpdiLink;
 pub use self::programmer::{PAGE_SIZE, ProgError, Programmer};
 
+mod driver;
 mod link;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;

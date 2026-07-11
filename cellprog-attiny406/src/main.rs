@@ -52,14 +52,21 @@ fn main() -> ! {
     let _tx = portb.p2.into_output_high();
     let _rx = portb.p3.into_input();
 
-    let usart = Usart::with_frame(dp.USART0, f_cpu, UPDI_BAUD, Frame::EIGHT_E_2);
-    let mut programmer = Programmer::new(UsartUpdiLink::new(usart));
-
-    // Bring-up smoke test: try to enter programming mode on the target. With no
-    // target attached the reads time out and this returns an error, so the blink
-    // rate just reports the outcome. The full supervisor (staged-image source,
+    // Bring-up smoke test: build the UPDI USART and try to enter programming
+    // mode on the target. With no target attached the reads time out, so the
+    // blink rate reports the outcome. The full supervisor (staged-image source,
     // ProgProgram handling, golden recovery) comes next.
-    let period_ms = if programmer.enter().is_ok() { 100 } else { 500 };
+    let period_ms = match Usart::builder(dp.USART0, f_cpu)
+        .baud(UPDI_BAUD)
+        .frame(Frame::EIGHT_E_2)
+        .build()
+    {
+        Ok(usart) => {
+            let mut programmer = Programmer::new(UsartUpdiLink::new(usart));
+            if programmer.enter().is_ok() { 100 } else { 500 }
+        }
+        Err(_) => 1000,
+    };
 
     let mut heartbeat = porta.p7.into_output_high();
     loop {

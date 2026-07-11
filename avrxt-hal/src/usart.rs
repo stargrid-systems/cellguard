@@ -1,17 +1,22 @@
 //! Asynchronous USART implementing [`embedded_io`] `Read`/`Write` (and
 //! `ufmt::uWrite` with the `ufmt` feature).
 //!
-//! [`Usart`] is generic over a [`UsartInstance`]. The frame defaults to 8N1;
-//! [`Usart::with_frame`] selects another [`Frame`], for example [`Frame::EIGHT_E_2`]
-//! for a UPDI programmer. Pin routing (`PORTMUX`) and pin direction (TxD output,
-//! RxD input) are the application's responsibility.
+//! [`Usart`] is generic over a [`UsartInstance`]. Build one with
+//! [`Usart::builder`], which requires an explicit baud rate and [`Frame`].
+//! There is no default frame. Use [`Frame::EIGHT_N_1`] for plain 8N1 or
+//! [`Frame::EIGHT_E_2`] for a UPDI programmer. Pin routing (`PORTMUX`) and pin
+//! direction (TxD output, RxD input) are the application's responsibility.
 
 #[cfg(feature = "ufmt")]
 use core::convert::Infallible;
 
+pub use self::builder::{Builder, Unset};
+
+mod builder;
+
 /// Default receive timeout, in milliseconds. A byte may never arrive, so the
 /// blocking read gives up after this long. Override with
-/// [`Usart::with_timeout_ms`].
+/// [`Builder::rx_timeout_ms`].
 const DEFAULT_RX_TIMEOUT_MS: u32 = 1000;
 
 /// Baud register value for the slowest baud, used to stretch a BREAK.
@@ -43,10 +48,9 @@ impl embedded_io::Error for Error {
 }
 
 /// Parity mode of a USART frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parity {
     /// No parity bit.
-    #[default]
     None,
     /// Even parity.
     Even,
@@ -55,17 +59,17 @@ pub enum Parity {
 }
 
 /// Number of stop bits in a USART frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopBits {
     /// One stop bit.
-    #[default]
     One,
     /// Two stop bits.
     Two,
 }
 
-/// USART frame format. The character size is fixed at 8 data bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// USART frame format. The character size is fixed at 8 data bits. There is no
+/// default: a caller must pick a frame explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Frame {
     /// Parity mode.
     pub parity: Parity,
@@ -74,18 +78,52 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// 8 data bits, no parity, one stop bit. The default.
-    pub const EIGHT_N_1: Self = Self { parity: Parity::None, stop_bits: StopBits::One };
+    /// 8 data bits, no parity, one stop bit.
+    pub const EIGHT_N_1: Self = Self {
+        parity: Parity::None,
+        stop_bits: StopBits::One,
+    };
     /// 8 data bits, even parity, two stop bits. The UPDI frame format.
-    pub const EIGHT_E_2: Self = Self { parity: Parity::Even, stop_bits: StopBits::Two };
+    pub const EIGHT_E_2: Self = Self {
+        parity: Parity::Even,
+        stop_bits: StopBits::Two,
+    };
 }
 
 /// Computes the async-normal-mode baud register value for `baud` bits/s.
 ///
-/// `BAUD = (64 * f_CLK_PER) / (16 * baud)`.
+/// `BAUD = (64 * f_CLK_PER) / (16 * baud)`. Returns [`None`] when the result
+/// does not fit the 16-bit register, which happens when `baud` is too low (or
+/// too high) for `f_cpu_hz`.
 #[must_use]
-const fn baud_reg(f_cpu_hz: u32, baud: u32) -> u16 {
-    ((64u64 * f_cpu_hz as u64) / (16 * baud as u64)) as u16
+const fn baud_reg(f_cpu_hz: u32, baud: u32) -> Option<u16> {
+    let denom = 16 * baud as u64;
+    // Round to nearest so an inexact divisor does not skew the line rate.
+    let reg = (64u64 * f_cpu_hz as u64 + denom / 2) / denom;
+    if reg == 0 || reg > u16::MAX as u64 {
+        None
+    } else {
+        Some(reg as u16)
+    }
+}
+
+/// The requested baud rate cannot be represented for the configured
+/// `f_cpu_hz`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BaudUnattainable;
+
+impl core::fmt::Display for BaudUnattainable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("baud rate unattainable for this clock")
+    }
+}
+
+impl core::error::Error for BaudUnattainable {}
+
+/// Computes the baud register value, mapping an out-of-range result to
+/// [`BaudUnattainable`]. Shared by [`Usart::set_baud`] and the builder.
+fn baud_reg_checked(f_cpu_hz: u32, baud: u32) -> Result<u16, BaudUnattainable> {
+    baud_reg(f_cpu_hz, baud).ok_or(BaudUnattainable)
 }
 
 /// A USART peripheral. Implemented for each device's `USART0`..`USART5`. Not
@@ -117,38 +155,17 @@ pub struct Usart<T: UsartInstance> {
     f_cpu_hz: u32,
     baud_reg: u16,
     rx_budget: u32,
+    tx_pending: bool,
 }
 
 impl<T: UsartInstance> Usart<T> {
-    /// Enables the USART in 8N1 mode at `baud` bits/s, with the default receive
-    /// timeout (1 s).
+    /// Starts building a USART on `instance`. The returned [`Builder`] requires
+    /// an explicit baud rate and [`Frame`] before it can [`build`].
+    ///
+    /// [`build`]: Builder::build
     #[must_use]
-    pub fn new(instance: T, f_cpu_hz: u32, baud: u32) -> Self {
-        Self::build(instance, f_cpu_hz, baud, Frame::EIGHT_N_1, DEFAULT_RX_TIMEOUT_MS)
-    }
-
-    /// Like [`Usart::new`], but with a caller-chosen [`Frame`] format.
-    #[must_use]
-    pub fn with_frame(instance: T, f_cpu_hz: u32, baud: u32, frame: Frame) -> Self {
-        Self::build(instance, f_cpu_hz, baud, frame, DEFAULT_RX_TIMEOUT_MS)
-    }
-
-    /// Like [`Usart::new`], but with a caller-chosen receive timeout in
-    /// milliseconds (approximate, derived from `f_cpu_hz`).
-    #[must_use]
-    pub fn with_timeout_ms(instance: T, f_cpu_hz: u32, baud: u32, rx_timeout_ms: u32) -> Self {
-        Self::build(instance, f_cpu_hz, baud, Frame::EIGHT_N_1, rx_timeout_ms)
-    }
-
-    fn build(instance: T, f_cpu_hz: u32, baud: u32, frame: Frame, rx_timeout_ms: u32) -> Self {
-        let reg = baud_reg(f_cpu_hz, baud);
-        instance.configure(reg, frame);
-        Self {
-            instance,
-            f_cpu_hz,
-            baud_reg: reg,
-            rx_budget: crate::wait::budget_ms(f_cpu_hz, rx_timeout_ms),
-        }
+    pub fn builder(instance: T, f_cpu_hz: u32) -> Builder<T, Unset, Unset> {
+        Builder::new(instance, f_cpu_hz)
     }
 
     /// Releases the underlying peripheral.
@@ -157,22 +174,47 @@ impl<T: UsartInstance> Usart<T> {
     }
 
     /// Changes the baud rate to `baud` bits/s.
-    pub fn set_baud(&mut self, baud: u32) {
-        self.baud_reg = baud_reg(self.f_cpu_hz, baud);
-        self.instance.set_baud_reg(self.baud_reg);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BaudUnattainable`] when `baud` cannot be represented for this
+    /// `f_cpu_hz`.
+    pub fn set_baud(&mut self, baud: u32) -> Result<(), BaudUnattainable> {
+        let reg = baud_reg_checked(self.f_cpu_hz, baud)?;
+        // Let any in-flight frame drain before changing baud, otherwise the
+        // trailing frame is truncated when the baud register changes.
+        self.drain_tx();
+        self.baud_reg = reg;
+        self.instance.set_baud_reg(reg);
+        Ok(())
     }
 
     /// Sends a BREAK: holds the line low well beyond one frame, then restores
     /// the baud rate.
     ///
-    /// A UPDI host uses this to reset the target's UPDI state machine. The break
-    /// byte is echoed on a one-wire link, so drain the receiver afterwards.
+    /// A UPDI host uses this to reset the target's UPDI state machine. The
+    /// break byte is echoed on a one-wire link, so drain the receiver
+    /// afterwards.
     pub fn send_break(&mut self) {
+        // Let any in-flight frame drain before changing baud, otherwise the
+        // trailing frame is truncated when the baud register changes.
+        self.drain_tx();
         self.instance.set_baud_reg(BREAK_BAUD_REG);
         self.write_byte(0x00);
-        crate::wait::spin_until(|| self.instance.tx_complete());
-        self.instance.clear_tx_complete();
+        self.drain_tx();
         self.instance.set_baud_reg(self.baud_reg);
+    }
+
+    /// Waits for a pending transmission to fully leave the shift register, then
+    /// clears the transmit-complete flag. Does nothing when nothing is pending:
+    /// TXCIF stays 0 until the first frame completes, so waiting on it before
+    /// any transmission would spin until the defensive budget panics.
+    fn drain_tx(&mut self) {
+        if self.tx_pending {
+            crate::wait::spin_until(|| self.instance.tx_complete());
+            self.instance.clear_tx_complete();
+            self.tx_pending = false;
+        }
     }
 
     /// Blocks until the transmit buffer can accept a byte, then writes it. The
@@ -182,6 +224,7 @@ impl<T: UsartInstance> Usart<T> {
     pub fn write_byte(&mut self, byte: u8) {
         crate::wait::spin_until(|| self.instance.tx_ready());
         self.instance.push(byte);
+        self.tx_pending = true;
     }
 
     /// Blocks until a byte is received, then returns it. Returns
@@ -209,10 +252,9 @@ impl<T: UsartInstance> embedded_io::Write for Usart<T> {
         Ok(buf.len())
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        // TXCIF is sticky, so clear it after waiting. Otherwise the next flush
-        // would see the stale flag and return while a byte is still shifting out.
-        crate::wait::spin_until(|| self.instance.tx_complete());
-        self.instance.clear_tx_complete();
+        // Drains only when a frame is pending, and clears the sticky TXCIF
+        // afterwards so the next flush does not return on a stale flag.
+        self.drain_tx();
         Ok(())
     }
 }
@@ -338,7 +380,7 @@ impl_usarts!(
     avr_device::avr128da64::USART4,
     avr_device::avr128da64::USART5,
 );
-// tinyAVR has a single USART0. The attiny406 ATDF flattens `CTRLC`; the older
+// tinyAVR has a single USART0. The attiny406 ATDF flattens `CTRLC`. The older
 // attiny416 ATDF models it with register modes.
 #[cfg(feature = "attiny406")]
 impl_usarts!(chsize, pmode, sbmode; avr_device::attiny406::USART0);

@@ -7,14 +7,12 @@
 //! end to end without hardware. It emulates only the instructions this crate
 //! emits.
 
-use crate::link::{
+use crate::driver::{
     ACK, OP_KEY, OP_LD, OP_LDCS, OP_LDS, OP_REPEAT, OP_ST, OP_STCS, OP_STS, PTR_INC, PTR_SET,
-    RESET_RELEASE, RESET_REQUEST, SYNCH, UpdiLink, cs,
+    RESET_RELEASE, RESET_REQUEST, SYNCH, cs,
 };
-use crate::programmer::{
-    CMD_FLPER, CMD_FLWR, FLASH_BASE, KEYSTAT_CHIPERASE, KEYSTAT_NVMPROG, NVMCTRL_CTRLA,
-    NVMCTRL_STATUS, PAGE_SIZE, SYS_LOCKSTATUS, SYS_NVMPROG,
-};
+use crate::link::UpdiLink;
+use crate::programmer::{FLASH_BASE, PAGE_SIZE, asi, nvmctrl};
 
 /// Mask for the opcode field (the high three bits of an instruction byte).
 const OP_MASK: u8 = 0xE0;
@@ -56,6 +54,8 @@ pub struct MockTarget {
     sys_status: u8,
     locked: bool,
     reset_pending: bool,
+    fail_nvm: bool,
+    nvm_status: u8,
     nvm_cmd: u8,
     pointer: u32,
     repeat: usize,
@@ -75,6 +75,8 @@ impl MockTarget {
             sys_status: 0,
             locked: false,
             reset_pending: false,
+            fail_nvm: false,
+            nvm_status: 0,
             nvm_cmd: 0,
             pointer: 0,
             repeat: 1,
@@ -93,10 +95,24 @@ impl MockTarget {
         t
     }
 
+    /// A target whose NVM controller reports an error on every flash write.
+    #[must_use]
+    pub const fn failing() -> Self {
+        let mut t = Self::new();
+        t.fail_nvm = true;
+        t
+    }
+
     /// Reads a flash byte, for test assertions.
     #[must_use]
     pub fn flash_at(&self, offset: usize) -> u8 {
         self.flash.get(offset).copied().unwrap_or(0)
+    }
+
+    /// The current NVM command register value, for test assertions.
+    #[must_use]
+    pub const fn nvm_command(&self) -> u8 {
+        self.nvm_cmd
     }
 
     fn push(&mut self, byte: u8) {
@@ -123,28 +139,40 @@ impl MockTarget {
     }
 
     fn data_read(&self, addr: u32) -> u8 {
-        if addr == NVMCTRL_STATUS {
-            return 0; // never busy, no error
+        if addr == nvmctrl::STATUS {
+            // The STATUS register is latched at write time and never busy here.
+            // A failing target keeps reporting the error until the next command
+            // is armed. This does not depend on which command is armed at read
+            // time, so the mock stays honest if the programmer reorders its
+            // disarm.
+            return self.nvm_status;
         }
         Self::flash_index(addr).map_or(0, |i| self.flash.get(i).copied().unwrap_or(0))
     }
 
     fn data_write(&mut self, addr: u32, val: u8) {
-        if addr == NVMCTRL_CTRLA {
+        if addr == nvmctrl::CTRLA {
             self.nvm_cmd = val;
+            // Arming a new command clears a previously latched write error.
+            self.nvm_status = 0;
             return;
         }
         let Some(idx) = Self::flash_index(addr) else {
             return;
         };
         match self.nvm_cmd {
-            CMD_FLPER => {
+            nvmctrl::CMD_FLPER => {
                 let page = (idx / PAGE_SIZE as usize) * PAGE_SIZE as usize;
                 for cell in self.flash.iter_mut().skip(page).take(PAGE_SIZE as usize) {
                     *cell = 0xFF;
                 }
             }
-            CMD_FLWR => {
+            nvmctrl::CMD_FLWR => {
+                // A failing target latches the error but still commits the byte,
+                // matching a controller that flags the fault after the write.
+                if self.fail_nvm {
+                    self.nvm_status = nvmctrl::STATUS_ERROR_MASK;
+                }
                 if let Some(slot) = self.flash.get_mut(idx) {
                     *slot = val;
                 }
@@ -157,7 +185,9 @@ impl MockTarget {
         match reg {
             cs::STATUSA => 0x30, // nonzero: alive, UPDI revision in the high nibble
             cs::ASI_KEY_STATUS => self.key_status,
-            cs::ASI_SYS_STATUS => self.sys_status | if self.locked { SYS_LOCKSTATUS } else { 0 },
+            cs::ASI_SYS_STATUS => {
+                self.sys_status | if self.locked { asi::SYS_LOCKSTATUS } else { 0 }
+            }
             _ => 0,
         }
     }
@@ -175,27 +205,26 @@ impl MockTarget {
     }
 
     const fn apply_reset(&mut self) {
-        if self.key_status & KEYSTAT_CHIPERASE != 0 {
+        if self.key_status & asi::KEYSTAT_CHIPERASE != 0 {
             self.flash = [0xFF; FLASH_LEN];
             self.locked = false;
             self.key_status = 0;
             self.sys_status = 0;
-        } else if self.key_status & KEYSTAT_NVMPROG != 0 {
+            self.nvm_status = 0;
+        } else if self.key_status & asi::KEYSTAT_NVMPROG != 0 {
             // Enters programming mode, but a locked device stays locked.
-            self.sys_status |= SYS_NVMPROG;
+            self.sys_status |= asi::SYS_NVMPROG;
         }
     }
 
     fn process_key(&mut self, sent: [u8; 8]) {
         // Keys travel least-significant byte first, so reverse to recover them.
-        let mut key = [0u8; 8];
-        for (dst, src) in key.iter_mut().zip(sent.iter().rev()) {
-            *dst = *src;
-        }
+        let mut key = sent;
+        key.reverse();
         if &key == b"NVMProg " {
-            self.key_status |= KEYSTAT_NVMPROG;
+            self.key_status |= asi::KEYSTAT_NVMPROG;
         } else if &key == b"NVMErase" {
-            self.key_status |= KEYSTAT_CHIPERASE;
+            self.key_status |= asi::KEYSTAT_CHIPERASE;
         }
     }
 
