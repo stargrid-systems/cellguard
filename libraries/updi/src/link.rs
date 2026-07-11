@@ -282,12 +282,14 @@ mod tests {
         }
         fn extend(&mut self, s: &[u8]) {
             for &x in s {
-                self.data[self.len] = x;
-                self.len += 1;
+                if let Some(slot) = self.data.get_mut(self.len) {
+                    *slot = x;
+                    self.len += 1;
+                }
             }
         }
         fn as_slice(&self) -> &[u8] {
-            &self.data[..self.len]
+            self.data.get(..self.len).unwrap_or(&[])
         }
     }
 
