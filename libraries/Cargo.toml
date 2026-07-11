@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ads131m08", "cat25", "crc", "p3t1755", "tca9535"]
+members = ["ads131m08", "cat25", "crc", "p3t1755", "tca9535", "updi"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]

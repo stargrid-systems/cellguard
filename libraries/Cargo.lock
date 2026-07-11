@@ -69,3 +69,7 @@ dependencies = [
  "embedded-hal",
  "embedded-hal-mock",
 ]
+
+[[package]]
+name = "updi"
+version = "0.1.0"
