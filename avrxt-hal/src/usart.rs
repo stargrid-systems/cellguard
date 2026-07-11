@@ -105,6 +105,25 @@ const fn baud_reg(f_cpu_hz: u32, baud: u32) -> Option<u16> {
     }
 }
 
+/// The requested baud rate cannot be represented for the configured
+/// `f_cpu_hz`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BaudUnattainable;
+
+impl core::fmt::Display for BaudUnattainable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("baud rate unattainable for this clock")
+    }
+}
+
+impl core::error::Error for BaudUnattainable {}
+
+/// Computes the baud register value, mapping an out-of-range result to
+/// [`BaudUnattainable`]. Shared by [`Usart::set_baud`] and the builder.
+fn baud_reg_checked(f_cpu_hz: u32, baud: u32) -> Result<u16, BaudUnattainable> {
+    baud_reg(f_cpu_hz, baud).ok_or(BaudUnattainable)
+}
+
 /// A USART peripheral. Implemented for each device's `USART0`..`USART5`. Not
 /// for external use.
 pub trait UsartInstance {
@@ -134,6 +153,7 @@ pub struct Usart<T: UsartInstance> {
     f_cpu_hz: u32,
     baud_reg: u16,
     rx_budget: u32,
+    tx_pending: bool,
 }
 
 impl<T: UsartInstance> Usart<T> {
@@ -155,10 +175,10 @@ impl<T: UsartInstance> Usart<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`builder::BuildError::BaudUnattainable`] when `baud` cannot be
-    /// represented for this `f_cpu_hz`.
-    pub fn set_baud(&mut self, baud: u32) -> Result<(), builder::BuildError> {
-        let reg = baud_reg(self.f_cpu_hz, baud).ok_or(builder::BuildError::BaudUnattainable)?;
+    /// Returns [`BaudUnattainable`] when `baud` cannot be represented for this
+    /// `f_cpu_hz`.
+    pub fn set_baud(&mut self, baud: u32) -> Result<(), BaudUnattainable> {
+        let reg = baud_reg_checked(self.f_cpu_hz, baud)?;
         self.baud_reg = reg;
         self.instance.set_baud_reg(reg);
         Ok(())
@@ -173,13 +193,23 @@ impl<T: UsartInstance> Usart<T> {
     pub fn send_break(&mut self) {
         // Let any in-flight frame drain before changing baud, otherwise the
         // trailing frame is truncated when the baud register changes.
-        crate::wait::spin_until(|| self.instance.tx_complete());
-        self.instance.clear_tx_complete();
+        self.drain_tx();
         self.instance.set_baud_reg(BREAK_BAUD_REG);
         self.write_byte(0x00);
-        crate::wait::spin_until(|| self.instance.tx_complete());
-        self.instance.clear_tx_complete();
+        self.drain_tx();
         self.instance.set_baud_reg(self.baud_reg);
+    }
+
+    /// Waits for a pending transmission to fully leave the shift register, then
+    /// clears the transmit-complete flag. Does nothing when nothing is pending:
+    /// TXCIF stays 0 until the first frame completes, so waiting on it before
+    /// any transmission would spin until the defensive budget panics.
+    fn drain_tx(&mut self) {
+        if self.tx_pending {
+            crate::wait::spin_until(|| self.instance.tx_complete());
+            self.instance.clear_tx_complete();
+            self.tx_pending = false;
+        }
     }
 
     /// Blocks until the transmit buffer can accept a byte, then writes it. The
@@ -189,6 +219,7 @@ impl<T: UsartInstance> Usart<T> {
     pub fn write_byte(&mut self, byte: u8) {
         crate::wait::spin_until(|| self.instance.tx_ready());
         self.instance.push(byte);
+        self.tx_pending = true;
     }
 
     /// Blocks until a byte is received, then returns it. Returns
@@ -216,10 +247,9 @@ impl<T: UsartInstance> embedded_io::Write for Usart<T> {
         Ok(buf.len())
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        // TXCIF is sticky, so clear it after waiting. Otherwise the next flush
-        // would see the stale flag and return while a byte is still shifting out.
-        crate::wait::spin_until(|| self.instance.tx_complete());
-        self.instance.clear_tx_complete();
+        // Drains only when a frame is pending, and clears the sticky TXCIF
+        // afterwards so the next flush does not return on a stale flag.
+        self.drain_tx();
         Ok(())
     }
 }

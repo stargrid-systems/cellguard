@@ -5,28 +5,13 @@
 //! two are required at compile time, so nothing is assumed for the caller. The
 //! receive timeout keeps a default and is the only optional knob.
 
-use super::{DEFAULT_RX_TIMEOUT_MS, Frame, Usart, UsartInstance, baud_reg};
+use super::{
+    BaudUnattainable, DEFAULT_RX_TIMEOUT_MS, Frame, Usart, UsartInstance, baud_reg_checked,
+};
 
 /// A builder field that has not been set yet. `build` is not implemented while
 /// either the baud or the frame still has this type.
 pub struct Unset;
-
-/// A build-time configuration error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildError {
-    /// The requested baud rate cannot be represented for the given `f_cpu_hz`.
-    BaudUnattainable,
-}
-
-impl core::fmt::Display for BuildError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            BuildError::BaudUnattainable => f.write_str("baud rate unattainable for this clock"),
-        }
-    }
-}
-
-impl core::error::Error for BuildError {}
 
 /// Builds a [`Usart`]. The `B` and `F` type parameters track whether the baud
 /// and frame have been set. They start as [`Unset`] and become `u32` and
@@ -90,16 +75,17 @@ impl<T: UsartInstance> Builder<T, u32, Frame> {
     ///
     /// # Errors
     ///
-    /// Returns [`BuildError::BaudUnattainable`] when the baud rate cannot be
-    /// represented for `f_cpu_hz`.
-    pub fn build(self) -> Result<Usart<T>, BuildError> {
-        let reg = baud_reg(self.f_cpu_hz, self.baud).ok_or(BuildError::BaudUnattainable)?;
+    /// Returns [`BaudUnattainable`] when the baud rate cannot be represented
+    /// for `f_cpu_hz`.
+    pub fn build(self) -> Result<Usart<T>, BaudUnattainable> {
+        let reg = baud_reg_checked(self.f_cpu_hz, self.baud)?;
         self.instance.configure(reg, self.frame);
         Ok(Usart {
             instance: self.instance,
             f_cpu_hz: self.f_cpu_hz,
             baud_reg: reg,
             rx_budget: crate::wait::budget_ms(self.f_cpu_hz, self.rx_timeout_ms),
+            tx_pending: false,
         })
     }
 }

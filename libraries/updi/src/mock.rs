@@ -55,6 +55,7 @@ pub struct MockTarget {
     locked: bool,
     reset_pending: bool,
     fail_nvm: bool,
+    nvm_status: u8,
     nvm_cmd: u8,
     pointer: u32,
     repeat: usize,
@@ -75,6 +76,7 @@ impl MockTarget {
             locked: false,
             reset_pending: false,
             fail_nvm: false,
+            nvm_status: 0,
             nvm_cmd: 0,
             pointer: 0,
             repeat: 1,
@@ -138,12 +140,12 @@ impl MockTarget {
 
     fn data_read(&self, addr: u32) -> u8 {
         if addr == nvmctrl::STATUS {
-            // A failing target reports an error while a write is armed. Erase
-            // still succeeds so a test can reach the write path.
-            if self.fail_nvm && self.nvm_cmd == nvmctrl::CMD_FLWR {
-                return nvmctrl::STATUS_ERROR_MASK;
-            }
-            return 0; // never busy, no error
+            // The STATUS register is latched at write time and never busy here.
+            // A failing target keeps reporting the error until the next command
+            // is armed. This does not depend on which command is armed at read
+            // time, so the mock stays honest if the programmer reorders its
+            // disarm.
+            return self.nvm_status;
         }
         Self::flash_index(addr).map_or(0, |i| self.flash.get(i).copied().unwrap_or(0))
     }
@@ -151,6 +153,8 @@ impl MockTarget {
     fn data_write(&mut self, addr: u32, val: u8) {
         if addr == nvmctrl::CTRLA {
             self.nvm_cmd = val;
+            // Arming a new command clears a previously latched write error.
+            self.nvm_status = 0;
             return;
         }
         let Some(idx) = Self::flash_index(addr) else {
@@ -164,6 +168,11 @@ impl MockTarget {
                 }
             }
             nvmctrl::CMD_FLWR => {
+                // A failing target latches the error but still commits the byte,
+                // matching a controller that flags the fault after the write.
+                if self.fail_nvm {
+                    self.nvm_status = nvmctrl::STATUS_ERROR_MASK;
+                }
                 if let Some(slot) = self.flash.get_mut(idx) {
                     *slot = val;
                 }
@@ -201,6 +210,7 @@ impl MockTarget {
             self.locked = false;
             self.key_status = 0;
             self.sys_status = 0;
+            self.nvm_status = 0;
         } else if self.key_status & asi::KEYSTAT_NVMPROG != 0 {
             // Enters programming mode, but a locked device stays locked.
             self.sys_status |= asi::SYS_NVMPROG;

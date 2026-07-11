@@ -1,4 +1,4 @@
-//! The UPDI link layer: the instruction set over a [`UpdiLink`] transport.
+//! The UPDI driver: the instruction set over a [`UpdiLink`] transport.
 //!
 //! Every instruction is prefixed with the SYNCH byte `0x55` so the target can
 //! measure the host baud. Stores are two-phase with an ACK after the address
