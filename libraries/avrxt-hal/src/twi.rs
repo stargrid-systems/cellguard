@@ -38,6 +38,10 @@ impl i2c::Error for Error {
 
 /// Snapshot of the host status flags relevant to a transfer.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per TWI host status bit"
+)]
 pub struct HostStatus {
     pub arbitration_lost: bool,
     pub bus_error: bool,
@@ -87,6 +91,10 @@ impl<T: TwiInstance> Twi<T> {
     /// Like [`Twi::new`], but with a caller-chosen per-wait timeout in
     /// milliseconds (approximate, derived from `f_cpu_hz`).
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "MBAUD is an 8-bit register"
+    )]
     pub fn with_timeout_ms(instance: T, f_cpu_hz: u32, scl_hz: u32, timeout_ms: u32) -> Self {
         let baud = (f_cpu_hz / (2 * scl_hz)).saturating_sub(5) as u8;
         instance.configure(baud);
@@ -150,7 +158,7 @@ impl<T: TwiInstance> Twi<T> {
         })
     }
 
-    fn send_address(&mut self, address: u8, read: bool) -> Result<(), Error> {
+    fn send_address(&self, address: u8, read: bool) -> Result<(), Error> {
         self.instance
             .start_with_address((address << 1) | u8::from(read));
         if read {
@@ -160,11 +168,7 @@ impl<T: TwiInstance> Twi<T> {
         }
     }
 
-    fn run_transaction(
-        &mut self,
-        address: u8,
-        operations: &mut [Operation<'_>],
-    ) -> Result<(), Error> {
+    fn run_transaction(&self, address: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
         let op_count = operations.len();
         let mut prev_read: Option<bool> = None;
 
@@ -178,7 +182,7 @@ impl<T: TwiInstance> Twi<T> {
 
             match op {
                 Operation::Write(buf) => {
-                    for &b in buf.iter() {
+                    for &b in *buf {
                         self.instance.write_byte(b);
                         self.wait_write()?;
                     }

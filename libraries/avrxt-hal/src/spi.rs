@@ -7,8 +7,9 @@
 //!
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
-#[allow(unused_imports, reason = "used only by device impls")]
-use embedded_hal::spi::{self, Mode, Phase, Polarity, SpiBus};
+use embedded_hal::spi::{self, Mode, SpiBus};
+#[cfg(feature = "_avr128")]
+use embedded_hal::spi::{Phase, Polarity};
 
 /// SPI clock prescaler (divides `CLK_PER`).
 #[derive(Clone, Copy)]
@@ -24,6 +25,10 @@ pub enum Prescaler {
 pub enum Error {}
 
 impl spi::Error for Error {
+    #[expect(
+        clippy::uninhabited_references,
+        reason = "required `Error::kind` impl; `Error` is uninhabited"
+    )]
     fn kind(&self) -> spi::ErrorKind {
         match *self {}
     }

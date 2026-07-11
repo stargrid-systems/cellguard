@@ -46,4 +46,5 @@ macro_rules! impl_ccp_unlock {
         }
     };
 }
+#[cfg(any(feature = "_avr128", feature = "_tinyavr"))]
 pub(crate) use impl_ccp_unlock;

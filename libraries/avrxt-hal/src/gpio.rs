@@ -143,6 +143,10 @@ unsafe fn set_pullup(regs: *mut u8, bit: u8, on: bool) {
 pub enum PinError {}
 
 impl embedded_hal::digital::Error for PinError {
+    #[expect(
+        clippy::uninhabited_references,
+        reason = "required `Error::kind` impl; `PinError` is uninhabited"
+    )]
     fn kind(&self) -> embedded_hal::digital::ErrorKind {
         match *self {}
     }
@@ -156,7 +160,7 @@ pub struct Port<P: PortInstance> {
 impl<P: PortInstance> Port<P> {
     /// Claims a PORT peripheral.
     #[must_use]
-    pub fn new(port: P) -> Self {
+    pub const fn new(port: P) -> Self {
         Self { _port: port }
     }
 
@@ -207,7 +211,7 @@ impl<P: PortInstance, const BIT: u8> Pin<P, BIT> {
         "pin does not exist on this port"
     );
 
-    fn new() -> Self {
+    const fn new() -> Self {
         Self { _port: PhantomData }
     }
 

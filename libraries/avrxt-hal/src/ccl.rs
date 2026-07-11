@@ -3,7 +3,7 @@
 //! [`Ccl`] is generic over a [`CclInstance`] (implemented for each device's
 //! `CCL`). Each of the six look-up tables (LUT0..LUT5) computes a programmable
 //! 3-input boolean function (an 8-entry truth table) from three selectable
-//! inputs. On the CellGuard board, LUT5 combines `TINY_ALIVE` and
+//! inputs. On the `CellGuard` board, LUT5 combines `TINY_ALIVE` and
 //! `RS485_PWR_OK` into the system-OK / emergency-off signal.
 //!
 //! Configure each LUT *before* enabling the peripheral.
@@ -90,7 +90,7 @@ pub struct Ccl<T: CclInstance> {
 impl<T: CclInstance> Ccl<T> {
     /// Takes ownership of the CCL peripheral (disabled).
     #[must_use]
-    pub fn new(instance: T) -> Self {
+    pub const fn new(instance: T) -> Self {
         Self { instance }
     }
 

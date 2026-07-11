@@ -5,7 +5,7 @@
 //! [`Usart::builder`], which requires an explicit baud rate and [`Frame`].
 //! There is no default frame. Use [`Frame::EIGHT_N_1`] for plain 8N1 or
 //! [`Frame::EIGHT_E_2`] for a UPDI programmer. Pin routing (`PORTMUX`) and pin
-//! direction (TxD output, RxD input) are the application's responsibility.
+//! direction (`TxD` output, `RxD` input) are the application's responsibility.
 
 #[cfg(feature = "ufmt")]
 use core::convert::Infallible;
@@ -32,7 +32,7 @@ pub enum Error {
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Error::Timeout => f.write_str("USART receive timed out"),
+            Self::Timeout => f.write_str("USART receive timed out"),
         }
     }
 }
@@ -42,7 +42,7 @@ impl core::error::Error for Error {}
 impl embedded_io::Error for Error {
     fn kind(&self) -> embedded_io::ErrorKind {
         match self {
-            Error::Timeout => embedded_io::ErrorKind::TimedOut,
+            Self::Timeout => embedded_io::ErrorKind::TimedOut,
         }
     }
 }
@@ -96,6 +96,10 @@ impl Frame {
 /// does not fit the 16-bit register, which happens when `baud` is too low (or
 /// too high) for `f_cpu_hz`.
 #[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "guarded by the `reg <= u16::MAX` check above"
+)]
 const fn baud_reg(f_cpu_hz: u32, baud: u32) -> Option<u16> {
     let denom = 16 * baud as u64;
     // Round to nearest so an inexact divisor does not skew the line rate.
@@ -164,7 +168,7 @@ impl<T: UsartInstance> Usart<T> {
     ///
     /// [`build`]: Builder::build
     #[must_use]
-    pub fn builder(instance: T, f_cpu_hz: u32) -> Builder<T, Unset, Unset> {
+    pub const fn builder(instance: T, f_cpu_hz: u32) -> Builder<T, Unset, Unset> {
         Builder::new(instance, f_cpu_hz)
     }
 
@@ -227,8 +231,12 @@ impl<T: UsartInstance> Usart<T> {
         self.tx_pending = true;
     }
 
-    /// Blocks until a byte is received, then returns it. Returns
-    /// [`Error::Timeout`] if none arrives within the receive timeout.
+    /// Blocks until a byte is received, then returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Timeout`] if no byte arrives within the receive
+    /// timeout.
     #[inline]
     pub fn read_byte(&mut self) -> Result<u8, Error> {
         for _ in 0..self.rx_budget {
@@ -265,6 +273,10 @@ impl<T: UsartInstance> embedded_io::Read for Usart<T> {
     // returning 0 we block on the first byte (up to the receive timeout) and
     // then drain whatever else is ready. Filling the whole buffer would deadlock
     // a caller waiting on a short final frame.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "indices are bounded by explicit length checks"
+    )]
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if buf.is_empty() {
             return Ok(0);

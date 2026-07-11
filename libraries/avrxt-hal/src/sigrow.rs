@@ -54,6 +54,10 @@ impl TempCalibration {
     /// the temperature sensor taken with the internal 2.048 V reference. If
     /// samples are accumulated, scale the result back to 12 bits first.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "datasheet formula; result is a 12-bit temperature reading"
+    )]
     pub fn kelvin(self, adc_reading: u16) -> u16 {
         // T = (Offset - ADC * Slope) / 4096, with rounding. Matches the data
         // sheet reference code. Wrapping mirrors its unsigned 32-bit math.
@@ -67,6 +71,10 @@ impl TempCalibration {
     ///
     /// See [`kelvin`](Self::kelvin) for the requirements on `adc_reading`.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "kelvin reading fits in i16 for valid ADC values"
+    )]
     pub fn celsius(self, adc_reading: u16) -> i16 {
         self.kelvin(adc_reading) as i16 - 273
     }
@@ -93,7 +101,7 @@ pub struct Sigrow<'a, T: SigrowInstance> {
 impl<'a, T: SigrowInstance> Sigrow<'a, T> {
     /// Borrows the SIGROW peripheral for reading.
     #[must_use]
-    pub fn new(instance: &'a T) -> Self {
+    pub const fn new(instance: &'a T) -> Self {
         Self { instance }
     }
 

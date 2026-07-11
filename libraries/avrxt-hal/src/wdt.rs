@@ -45,7 +45,7 @@ pub struct Watchdog<T: WdtInstance> {
 
 impl<T: WdtInstance> Watchdog<T> {
     /// Starts (or, with [`Period::Off`], disables) the watchdog in normal mode.
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub fn start<C: CcpUnlock>(cpu: &C, instance: T, period: Period) -> Self {
         avr_device::interrupt::free(|_| {

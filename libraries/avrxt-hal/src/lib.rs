@@ -1,4 +1,4 @@
-//! Hardware abstraction layer for Microchip **modern-AVR** (AVRxt) devices:
+//! Hardware abstraction layer for Microchip **modern-AVR** (`AVRxt`) devices:
 //! AVR128DB48 / DB64 / DA64 and the tinyAVR 0/1-series (`attiny406`,
 //! `attiny416`).
 //!

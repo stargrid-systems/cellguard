@@ -94,7 +94,7 @@ pub trait MainClkControl {
 /// # Panics
 /// Panics if the clock switch does not complete within the defensive spin
 /// budget, which means the peripheral is broken or misconfigured.
-#[inline(always)]
+#[inline]
 pub fn set_main_clock_prescaler<C: CcpUnlock, K: MainClkControl>(
     cpu: &C,
     clkctrl: &K,
