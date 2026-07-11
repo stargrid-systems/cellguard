@@ -14,6 +14,7 @@ bench = false
 avr-device = { version = "0.8", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../avrxt-hal", features = ["attiny406"] }
 embedded-hal = { version = "1", default-features = false }
+updi = { path = "../libraries/updi" }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
