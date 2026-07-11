@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ads131m08", "cat25", "crc", "p3t1755", "tca9535"]
+members = ["ads131m08", "cat25", "cellguard-protocol", "crc", "p3t1755", "tca9535"]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]
@@ -32,5 +32,7 @@ unnecessary_safety_doc = "warn"
 unwrap_used = "warn"
 
 [workspace.dependencies]
+crc = { path = "crc" }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }
+zerocopy = { version = "0.8", default-features = false }
