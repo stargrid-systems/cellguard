@@ -1,0 +1,19 @@
+[package]
+name = "updi"
+version = "0.1.0"
+description = "Hardware-independent UPDI host for programming modern-AVR (AVRxt) targets."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[features]
+# Exposes a UPDI target emulator, for downstream tests.
+mock = []
+
+[lints]
+workspace = true
