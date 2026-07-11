@@ -10,13 +10,13 @@
 #[cfg(feature = "ufmt")]
 use core::convert::Infallible;
 
-use self::builder::{Builder, Unset};
+pub use self::builder::{Builder, Unset};
 
-pub mod builder;
+mod builder;
 
 /// Default receive timeout, in milliseconds. A byte may never arrive, so the
 /// blocking read gives up after this long. Override with
-/// [`builder::Builder::rx_timeout_ms`].
+/// [`Builder::rx_timeout_ms`].
 const DEFAULT_RX_TIMEOUT_MS: u32 = 1000;
 
 /// Baud register value for the slowest baud, used to stretch a BREAK.
@@ -160,7 +160,7 @@ impl<T: UsartInstance> Usart<T> {
     /// Starts building a USART on `instance`. The returned [`Builder`] requires
     /// an explicit baud rate and [`Frame`] before it can [`build`].
     ///
-    /// [`build`]: builder::Builder::build
+    /// [`build`]: Builder::build
     #[must_use]
     pub fn builder(instance: T, f_cpu_hz: u32) -> Builder<T, Unset, Unset> {
         Builder::new(instance, f_cpu_hz)
