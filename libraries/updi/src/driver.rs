@@ -199,10 +199,8 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn key(&mut self, key: &[u8; 8]) -> Result<(), UpdiError<L::Error>> {
         self.link.send(&[SYNCH, OP_KEY])?;
-        let mut reversed = [0u8; 8];
-        for (dst, src) in reversed.iter_mut().zip(key.iter().rev()) {
-            *dst = *src;
-        }
+        let mut reversed = *key;
+        reversed.reverse();
         self.link.send(&reversed)?;
         Ok(())
     }

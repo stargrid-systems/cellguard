@@ -219,10 +219,8 @@ impl MockTarget {
 
     fn process_key(&mut self, sent: [u8; 8]) {
         // Keys travel least-significant byte first, so reverse to recover them.
-        let mut key = [0u8; 8];
-        for (dst, src) in key.iter_mut().zip(sent.iter().rev()) {
-            *dst = *src;
-        }
+        let mut key = sent;
+        key.reverse();
         if &key == b"NVMProg " {
             self.key_status |= asi::KEYSTAT_NVMPROG;
         } else if &key == b"NVMErase" {
