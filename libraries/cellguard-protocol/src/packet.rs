@@ -101,10 +101,12 @@ impl<'a> Packet<'a> {
         let kind = Kind::from_u8(header.kind).ok_or(Error::UnknownKind(header.kind))?;
         let payload_len = usize::from(header.payload_len.get());
 
+        let total = payload_len + PAYLOAD_CRC_LEN;
         let payload = rest.get(..payload_len).ok_or(Error::Truncated)?;
-        let crc_bytes = rest
-            .get(payload_len..payload_len + PAYLOAD_CRC_LEN)
-            .ok_or(Error::Truncated)?;
+        let crc_bytes = rest.get(payload_len..total).ok_or(Error::Truncated)?;
+        if rest.len() != total {
+            return Err(Error::Truncated);
+        }
         let expected = u16::from_le_bytes(crc_bytes.try_into().map_err(|_| Error::Truncated)?);
         if crc::checksum16(payload) != expected {
             return Err(Error::BadPayloadCrc);
@@ -146,7 +148,8 @@ impl<'a> Packet<'a> {
 pub enum Error {
     /// The output buffer is too small for the frame.
     BufferTooSmall,
-    /// The frame is shorter than the fields it claims to hold.
+    /// The frame length does not match the fields it claims to hold
+    /// (too short or too long).
     Truncated,
     /// The header CRC did not match.
     BadHeaderCrc,
@@ -221,5 +224,12 @@ mod tests {
         let n = Packet::write(5, Kind::ReadTemperature, b"abc", &mut buf).unwrap();
         buf[super::HEADER_LEN] ^= 0x01;
         assert_eq!(Packet::parse(&buf[..n]), Err(Error::BadPayloadCrc));
+    }
+
+    #[test]
+    fn rejects_trailing_bytes() {
+        let mut buf = [0u8; 64];
+        let n = Packet::write(5, Kind::ReadTemperature, b"abc", &mut buf).unwrap();
+        assert_eq!(Packet::parse(&buf[..=n]), Err(Error::Truncated));
     }
 }

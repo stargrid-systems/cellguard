@@ -35,8 +35,8 @@ impl Decoder {
     ///
     /// Returns `Ok(Some(len))` when a complete frame has been decoded into the
     /// first `len` bytes of `out`, or `Ok(None)` while a frame is still in
-    /// progress. The same `out` buffer must be passed across the calls that make
-    /// up one frame.
+    /// progress. The same `out` buffer must be passed across the calls that
+    /// make up one frame.
     ///
     /// # Errors
     ///
@@ -45,6 +45,7 @@ impl Decoder {
     pub fn feed(&mut self, byte: u8, out: &mut [u8]) -> Result<Option<usize>, DecodeError> {
         match self.state.step(byte) {
             Step::Empty => Ok(Some(0)),
+            Step::Continue => Ok(None),
             Step::FrameStart => {
                 self.pos = 0;
                 Ok(None)
@@ -84,6 +85,7 @@ enum State {
 
 enum Step {
     Empty,
+    Continue,
     FrameStart,
     FrameComplete,
     Data(u8),
@@ -94,8 +96,7 @@ impl State {
     // State transitions after James Munns' `cobs.rs` decoder.
     #[expect(
         clippy::match_same_arms,
-        reason = "each arm documents a distinct COBS state transition even when \
-                  two share a body"
+        reason = "each arm documents a distinct COBS state transition even when two share a body"
     )]
     const fn step(&mut self, byte: u8) -> Step {
         let (ret, next) = match (&self, byte) {
@@ -110,8 +111,8 @@ impl State {
             (Self::Block(i), n) => (Step::Data(n), Self::Block(*i - 1)),
 
             (Self::PartialBlock(0), 0x00) => (Step::FrameComplete, Self::Idle),
-            (Self::PartialBlock(0), 0xFF) => (Step::Empty, Self::PartialBlock(0xFE)),
-            (Self::PartialBlock(0), n) => (Step::Empty, Self::Block(n - 1)),
+            (Self::PartialBlock(0), 0xFF) => (Step::Continue, Self::PartialBlock(0xFE)),
+            (Self::PartialBlock(0), n) => (Step::Continue, Self::Block(n - 1)),
             (Self::PartialBlock(_), 0) => (Step::Error(DecodeError::InvalidFrame), Self::Idle),
             (Self::PartialBlock(i), n) => (Step::Data(n), Self::PartialBlock(*i - 1)),
         };
