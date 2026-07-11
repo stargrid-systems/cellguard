@@ -80,6 +80,9 @@ impl<T: UsartInstance> Builder<T, u32, Frame> {
     pub fn build(self) -> Result<Usart<T>, BaudUnattainable> {
         let reg = baud_reg_checked(self.f_cpu_hz, self.baud)?;
         self.instance.configure(reg, self.frame);
+        // Start from a known TXCIF state. A reused peripheral may leave the
+        // sticky flag set, which would make the first drain return early.
+        self.instance.clear_tx_complete();
         Ok(Usart {
             instance: self.instance,
             f_cpu_hz: self.f_cpu_hz,

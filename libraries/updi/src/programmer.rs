@@ -313,10 +313,13 @@ impl<L: UpdiLink> Programmer<L> {
 
     fn wait_erase_done(&mut self) -> Result<(), ProgError<L::Error>> {
         // The chip erase clears the lock. Wait for it so a following enter()
-        // does not race a target that is still erasing.
+        // does not race a target that is still erasing. A target that was
+        // already unlocked reads LOCKSTATUS clear from the first poll, so also
+        // wait for the NVM controller to leave FBUSY. Data-space reads work
+        // once unlocked, which is exactly when this check runs.
         for _ in 0..MAX_POLL {
             if self.updi.ldcs(cs::ASI_SYS_STATUS)? & asi::SYS_LOCKSTATUS == 0 {
-                return Ok(());
+                return self.wait_flash_ready();
             }
         }
         Err(ProgError::EraseTimeout)

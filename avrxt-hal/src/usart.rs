@@ -97,7 +97,9 @@ impl Frame {
 /// too high) for `f_cpu_hz`.
 #[must_use]
 const fn baud_reg(f_cpu_hz: u32, baud: u32) -> Option<u16> {
-    let reg = (64u64 * f_cpu_hz as u64) / (16 * baud as u64);
+    let denom = 16 * baud as u64;
+    // Round to nearest so an inexact divisor does not skew the line rate.
+    let reg = (64u64 * f_cpu_hz as u64 + denom / 2) / denom;
     if reg == 0 || reg > u16::MAX as u64 {
         None
     } else {
@@ -179,6 +181,9 @@ impl<T: UsartInstance> Usart<T> {
     /// `f_cpu_hz`.
     pub fn set_baud(&mut self, baud: u32) -> Result<(), BaudUnattainable> {
         let reg = baud_reg_checked(self.f_cpu_hz, baud)?;
+        // Let any in-flight frame drain before changing baud, otherwise the
+        // trailing frame is truncated when the baud register changes.
+        self.drain_tx();
         self.baud_reg = reg;
         self.instance.set_baud_reg(reg);
         Ok(())
