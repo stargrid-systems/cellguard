@@ -4,13 +4,11 @@
 //! erases, writes, and reads back flash over the [`Updi`] link.
 //!
 //! The data-space addresses, NVM command values, key strings, and status bits
-//! below are transcribed from the AVR128DB datasheet and cross-checked against
-//! `pymcuprog`. They are BENCH-VERIFY: the mock-target tests exercise the
-//! sequencing, not the real silicon values.
+//! below come from the AVR128DB datasheet, cross-checked against `pymcuprog`.
 
 use crate::link::{RESET_RELEASE, RESET_REQUEST, Updi, UpdiError, UpdiLink, cs};
 
-// --- AVR Dx (NVMCTRL v2) data-space layout. BENCH-VERIFY. ---
+// --- AVR Dx (NVMCTRL v2) data-space layout. ---
 
 /// NVMCTRL command register.
 pub const NVMCTRL_CTRLA: u32 = 0x1000;
@@ -19,7 +17,7 @@ pub const NVMCTRL_STATUS: u32 = 0x1002;
 /// Base of program flash in the 24-bit UPDI address space.
 pub const FLASH_BASE: u32 = 0x80_0000;
 
-/// Flash page size in bytes (AVR128DB). BENCH-VERIFY.
+/// Flash page size in bytes (AVR128DB).
 pub const PAGE_SIZE: u32 = 512;
 
 // NVMCTRL.CTRLA commands.
@@ -44,7 +42,7 @@ pub const SYS_LOCKSTATUS: u8 = 1 << 0;
 pub const SYS_NVMPROG: u8 = 1 << 3;
 
 /// Guard time written to UPDI.CTRLA. `0` selects the largest guard time, the
-/// safest choice for bring-up. BENCH-VERIFY, tune for speed later.
+/// safest choice for bring-up. A shorter guard time is faster.
 const GUARD_TIME: u8 = 0x00;
 
 /// Bound on status-poll loops. Each iteration is a wire transaction.

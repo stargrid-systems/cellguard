@@ -17,7 +17,7 @@ use self::updi_link::UsartUpdiLink;
 
 mod updi_link;
 
-/// UPDI baud. Conservative for bring-up. BENCH-VERIFY, tune for speed later.
+/// UPDI baud. Conservative default.
 const UPDI_BAUD: u32 = 115_200;
 
 #[panic_handler]
@@ -45,7 +45,6 @@ fn main() -> ! {
 
     // Route the programmer USART to the target UPDI line. The mux (U1004) selects
     // channel 1 with A1:A0 = 0b01, so A0 (PA4) high and A1 (PA3) low.
-    // BENCH-VERIFY the mux polarity and enable.
     let _mux_a0 = porta.p4.into_output_high();
     let _mux_a1 = porta.p3.into_output();
 
