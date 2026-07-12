@@ -39,7 +39,7 @@ dependencies = [
 [[package]]
 name = "avr-device"
 version = "0.8.1"
-source = "git+https://github.com/stargrid-systems/avr-device?rev=ddad6827eeb5ff668507d3c4ff7ce0780fab16e0#ddad6827eeb5ff668507d3c4ff7ce0780fab16e0"
+source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb03874bc456b329f4c141f1a08e#73ba68ab5bd7bb03874bc456b329f4c141f1a08e"
 dependencies = [
  "anyhow",
  "atdf2svd",
@@ -59,7 +59,7 @@ dependencies = [
 [[package]]
 name = "avr-device-macros"
 version = "0.8.1"
-source = "git+https://github.com/stargrid-systems/avr-device?rev=ddad6827eeb5ff668507d3c4ff7ce0780fab16e0#ddad6827eeb5ff668507d3c4ff7ce0780fab16e0"
+source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb03874bc456b329f4c141f1a08e#73ba68ab5bd7bb03874bc456b329f4c141f1a08e"
 dependencies = [
  "proc-macro2",
  "quote",

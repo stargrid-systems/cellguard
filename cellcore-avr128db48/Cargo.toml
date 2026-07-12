@@ -14,7 +14,7 @@ bench = false
 avr-device = { version = "0.8", features = ["avr128db48", "rt"] }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "ddad6827eeb5ff668507d3c4ff7ce0780fab16e0" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
 
 [profile.dev]
 panic = "abort"
