@@ -13,6 +13,9 @@ bench = false
 [dependencies]
 avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
+cellboot = { path = "../libraries/cellboot", features = ["avr128"] }
+cellcore = { path = "../libraries/cellcore" }
+cellcore-runtime = { path = "../libraries/cellcore-runtime" }
 embedded-hal = { version = "1", default-features = false }
 
 [patch.crates-io]

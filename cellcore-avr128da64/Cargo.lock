@@ -92,12 +92,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellboot"
+version = "0.1.0"
+dependencies = [
+ "avrxt-hal",
+]
+
+[[package]]
+name = "cellcore"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-protocol",
+ "crc",
+ "hmac-sha256",
+]
+
+[[package]]
 name = "cellcore-avr128da64"
 version = "0.1.0"
 dependencies = [
  "avr-device",
  "avrxt-hal",
+ "cellboot",
+ "cellcore",
+ "cellcore-runtime",
  "embedded-hal",
+]
+
+[[package]]
+name = "cellcore-runtime"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellcore",
+ "embedded-io",
+]
+
+[[package]]
+name = "cellguard-protocol"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "zerocopy",
 ]
 
 [[package]]
@@ -120,6 +157,10 @@ checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "crc"
+version = "0.1.0"
 
 [[package]]
 name = "critical-section"
@@ -222,6 +263,12 @@ checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
 ]
+
+[[package]]
+name = "hmac-sha256"
+version = "1.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
 name = "icu_collections"
@@ -855,6 +902,26 @@ dependencies = [
  "quote",
  "syn 2.0.110",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.110",
 ]
 
 [[package]]

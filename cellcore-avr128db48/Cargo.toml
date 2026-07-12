@@ -12,6 +12,11 @@ bench = false
 
 [dependencies]
 avr-device = { version = "0.8", features = ["avr128db48", "rt"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128db48"] }
+cellboot = { path = "../libraries/cellboot", features = ["avr128"] }
+cellcore = { path = "../libraries/cellcore" }
+cellcore-runtime = { path = "../libraries/cellcore-runtime" }
+embedded-hal = { version = "1", default-features = false }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
