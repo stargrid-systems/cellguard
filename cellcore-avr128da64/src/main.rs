@@ -9,10 +9,15 @@
 //! update agent through `cellcore-runtime`. All update logic lives in those
 //! libraries. This crate only maps them onto this chip.
 //!
-//! The three staging EEPROMs share SPI1. Each has its own active-low
-//! chip-select GPIO: App on `PG6`, Boot on `PA7`, Factory on `PG7`. The agent
-//! stages App and Boot images, banded into one address space, so the Factory
-//! (golden) chip is left to the PROG programmer's recovery path.
+//! Pin map is from the board schematic (`hardware/boards/cellguard-eval`):
+//! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. Each of the three
+//!   staging EEPROMs has its own active-low chip-select GPIO: App `PG6` (U104),
+//!   Boot `PA7` (U105), Factory `PG7` (U106).
+//! - USART1 (PC4/PC5) is the RS485 field bus (LAST/upstream link).
+//! - USART3 (PB0/PB1) is the local link to the ATtiny406 PROG programmer.
+//!
+//! The agent stages App and Boot images, banded into one address space, so the
+//! Factory (golden) chip is left to the PROG programmer's recovery path.
 
 use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, HfFreq};
@@ -34,12 +39,14 @@ use embedded_hal_bus::spi::RefCellDevice;
 use core::cell::RefCell;
 use core::panic::PanicInfo;
 
-/// Core clock frequency.
+/// Core clock frequency. The board has an external 24 MHz oscillator on
+/// PA0/EXTCLK, but the HAL only drives the internal HF oscillator so far, so we
+/// run the internal one at the same rate. Switching to EXTCLK is a HAL follow-up.
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
-/// Field-bus baud (USART0, RS485 / debug UART).
+/// Field-bus baud (USART1, RS485 LAST link).
 const BUS_BAUD: u32 = 115_200;
-/// Baud on the local link to the PROG programmer (USART1).
+/// Baud on the local link to the PROG programmer (USART3).
 const PROG_BAUD: u32 = 115_200;
 
 /// This node's address on the field bus. Placeholder until provisioned.
@@ -92,17 +99,19 @@ fn main() -> ! {
     let mut state_store = EepromState::new(&nvm, &cpu, STATE_OFFSET, STATE_LEN);
     let boot_state = state::load(&mut state_store, AGENT_VERSION);
 
-    // SPI1 host bus (PC0 MOSI, PC1 MISO, PC2 SCK), shared by the staging
-    // EEPROMs. Pin directions are the application's job.
+    let porta = Port::new(dp.PORTA).split();
+    let portb = Port::new(dp.PORTB).split();
     let portc = Port::new(dp.PORTC).split();
-    let _mosi = portc.p0.into_output();
-    let _miso = portc.p1.into_input();
-    let _sck = portc.p2.into_output();
-    let spi = RefCell::new(Spi::new(dp.SPI1, MODE_0, Prescaler::Div16));
+    let portg = Port::new(dp.PORTG).split();
+
+    // SPI0 host bus (PA4 MOSI, PA5 MISO, PA6 SCK), the staging EEPROM bus. Pin
+    // directions are the application's job.
+    let _mosi = porta.p4.into_output();
+    let _miso = porta.p5.into_input();
+    let _sck = porta.p6.into_output();
+    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, Prescaler::Div16));
 
     // App and Boot chip-selects (active low, idle high).
-    let portg = Port::new(dp.PORTG).split();
-    let porta = Port::new(dp.PORTA).split();
     let cs_app = portg.p6.into_output_high();
     let cs_boot = porta.p7.into_output_high();
 
@@ -133,17 +142,17 @@ fn main() -> ! {
     );
     let dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
 
-    // USART0 = field bus (PA4 TxD, PA5 RxD). The RS485 harness is 4-wire full
-    // duplex, so no direction turnaround is needed.
-    let _bus_tx = porta.p4.into_output_high();
-    let _bus_rx = porta.p5.into_input();
-    let bus = build_usart(Usart::builder(dp.USART0, F_CPU.hz()).baud(BUS_BAUD));
-
-    // USART1 = link to the PROG programmer on PC4/PC5, which is PORTMUX ALT1.
+    // USART1 = RS485 field bus on PC4/PC5, which is PORTMUX ALT1. The transceiver
+    // handles direction (no MCU DE pin).
     dp.PORTMUX.usartroutea().modify(|_, w| w.usart1().alt1());
-    let _prog_tx = portc.p4.into_output_high();
-    let _prog_rx = portc.p5.into_input();
-    let prog = build_usart(Usart::builder(dp.USART1, F_CPU.hz()).baud(PROG_BAUD));
+    let _bus_tx = portc.p4.into_output_high();
+    let _bus_rx = portc.p5.into_input();
+    let bus = build_usart(Usart::builder(dp.USART1, F_CPU.hz()).baud(BUS_BAUD));
+
+    // USART3 = link to the PROG programmer on the default PB0/PB1 pins.
+    let _prog_tx = portb.p0.into_output_high();
+    let _prog_rx = portb.p1.into_input();
+    let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
     runtime.run();

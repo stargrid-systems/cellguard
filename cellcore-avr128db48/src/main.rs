@@ -99,17 +99,18 @@ fn main() -> ! {
     );
     let dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
 
-    // USART0 = field bus on the default PA0/PA1 pins.
-    let porta = Port::new(dp.PORTA).split();
-    let _bus_tx = porta.p0.into_output_high();
-    let _bus_rx = porta.p1.into_input();
-    let bus = build_usart(Usart::builder(dp.USART0, F_CPU.hz()).baud(BUS_BAUD));
-
-    // USART1 = stand-in PROG link on the default PC0/PC1 pins.
+    // USART1 = field bus on the default PC0/PC1 pins (mirrors the DA64 bus role
+    // on pins that exist on the 48-pin devkit).
+    let portb = Port::new(dp.PORTB).split();
     let portc = Port::new(dp.PORTC).split();
-    let _prog_tx = portc.p0.into_output_high();
-    let _prog_rx = portc.p1.into_input();
-    let prog = build_usart(Usart::builder(dp.USART1, F_CPU.hz()).baud(PROG_BAUD));
+    let _bus_tx = portc.p0.into_output_high();
+    let _bus_rx = portc.p1.into_input();
+    let bus = build_usart(Usart::builder(dp.USART1, F_CPU.hz()).baud(BUS_BAUD));
+
+    // USART3 = stand-in PROG link on the default PB0/PB1 pins.
+    let _prog_tx = portb.p0.into_output_high();
+    let _prog_rx = portb.p1.into_input();
+    let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
     runtime.run();
