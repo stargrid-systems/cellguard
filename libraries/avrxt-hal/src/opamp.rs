@@ -3,7 +3,7 @@
 //! [`Opamp`] is generic over an [`OpampInstance`]. The DB family has three
 //! op-amps (OP0/OP1/OP2). This module enables the OPAMP system and can set up
 //! an op-amp as a unity-gain voltage follower. The positive input comes from
-//! the `INP` pin and the negative input is tied to the output. The CellGuard
+//! the `INP` pin and the negative input is tied to the output. The `CellGuard`
 //! board uses one as a buffer on the analog path.
 
 /// Which op-amp to configure.

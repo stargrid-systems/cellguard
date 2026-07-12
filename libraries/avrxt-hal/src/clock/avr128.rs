@@ -58,7 +58,7 @@ pub trait OscControl {
 /// # Panics
 /// Panics if the oscillator does not report stable within the defensive
 /// spin budget, which means the peripheral is broken or misconfigured.
-#[inline(always)]
+#[inline]
 pub fn set_oschf<C: CcpUnlock, K: OscControl>(cpu: &C, clkctrl: &K, freq: HfFreq) {
     avr_device::interrupt::free(|_| {
         cpu.unlock_ioreg();

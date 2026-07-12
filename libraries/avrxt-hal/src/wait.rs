@@ -20,7 +20,7 @@ const DEFENSIVE_BUDGET: u32 = 1_000_000;
 /// Turns a timeout in milliseconds into a spin-iteration budget for the given
 /// `CLK_PER`. Returns at least 1. The result is a coarse upper bound on wall
 /// time, not precise timing.
-pub(crate) const fn budget_ms(f_cpu_hz: u32, timeout_ms: u32) -> u32 {
+pub const fn budget_ms(f_cpu_hz: u32, timeout_ms: u32) -> u32 {
     let iters = (f_cpu_hz / 1000).saturating_mul(timeout_ms) / CYCLES_PER_ITER;
     if iters == 0 { 1 } else { iters }
 }
@@ -28,7 +28,7 @@ pub(crate) const fn budget_ms(f_cpu_hz: u32, timeout_ms: u32) -> u32 {
 /// Spins until `ready` returns true. Panics if the defensive budget is
 /// exhausted, turning a silent hang into a loud abort.
 #[inline]
-pub(crate) fn spin_until(mut ready: impl FnMut() -> bool) {
+pub fn spin_until(mut ready: impl FnMut() -> bool) {
     for _ in 0..DEFENSIVE_BUDGET {
         if ready() {
             return;

@@ -21,7 +21,11 @@ mod encode;
 /// Use this to size the output buffer for [`encode_frame`] or [`Encoder`].
 #[must_use]
 pub const fn max_encoded_len(decoded_len: usize) -> usize {
-    let blocks = if decoded_len <= 254 { 1 } else { decoded_len.div_ceil(254) };
+    let blocks = if decoded_len <= 254 {
+        1
+    } else {
+        decoded_len.div_ceil(254)
+    };
     decoded_len + blocks + 1
 }
 
@@ -132,7 +136,8 @@ mod tests {
     #[test]
     fn max_encoded_len_never_underestimates() {
         for len in [0usize, 1, 2, 253, 254, 255, 256, 507, 508, 509, 1000] {
-            let input: [u8; 1024] = core::array::from_fn(|i| u8::try_from(i % 255 + 1).unwrap_or(1));
+            let input: [u8; 1024] =
+                core::array::from_fn(|i| u8::try_from(i % 255 + 1).unwrap_or(1));
             let bound = max_encoded_len(len);
             let mut wire = [0u8; 1024];
             let n = encode(&input[..len], &mut wire);
