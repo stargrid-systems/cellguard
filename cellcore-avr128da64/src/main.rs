@@ -39,9 +39,7 @@ use embedded_hal_bus::spi::RefCellDevice;
 use core::cell::RefCell;
 use core::panic::PanicInfo;
 
-/// Core clock frequency. The board has an external 24 MHz oscillator on
-/// PA0/EXTCLK, but the HAL only drives the internal HF oscillator so far, so we
-/// run the internal one at the same rate. Switching to EXTCLK is a HAL follow-up.
+/// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
 /// Field-bus baud (USART1, RS485 LAST link).
@@ -81,7 +79,8 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    clock::set_oschf(&cpu, &dp.CLKCTRL, F_CPU);
+    // Run from the external 24 MHz clock on PA0/EXTCLK.
+    clock::set_extclk(&cpu, &dp.CLKCTRL, F_CPU);
 
     // Mandatory: verify the crypto primitives on this silicon before trusting
     // any image. A miscompiled hash must never authenticate firmware.
