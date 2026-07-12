@@ -32,6 +32,74 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::handoff::{self, PROGRAM_WIRE};
 use embedded_io::{Read, Write};
 
+/// An in-RAM [`ImageStore`] for bring-up and testing.
+///
+/// The real board stages images into external SPI EEPROM. This backs the store
+/// with a fixed RAM buffer instead, so the receive, verify, and stage path can
+/// run on silicon before the board EEPROM wiring is in place. `N` bounds the
+/// largest image that can be staged.
+pub struct RamImageStore<const N: usize> {
+    buf: [u8; N],
+}
+
+impl<const N: usize> RamImageStore<N> {
+    /// Creates a zeroed store.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { buf: [0; N] }
+    }
+
+    fn range(offset: u32, len: usize) -> Result<(usize, usize), OutOfBounds> {
+        let start = usize::try_from(offset).map_err(|_| OutOfBounds)?;
+        let end = start.checked_add(len).ok_or(OutOfBounds)?;
+        if end > N {
+            return Err(OutOfBounds);
+        }
+        Ok((start, end))
+    }
+}
+
+impl<const N: usize> Default for RamImageStore<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> ImageStore for RamImageStore<N> {
+    type Error = OutOfBounds;
+
+    fn capacity(&self) -> u32 {
+        u32::try_from(N).unwrap_or(u32::MAX)
+    }
+
+    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), OutOfBounds> {
+        let (start, end) = Self::range(offset, buf.len())?;
+        buf.copy_from_slice(self.buf.get(start..end).ok_or(OutOfBounds)?);
+        Ok(())
+    }
+
+    fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), OutOfBounds> {
+        let (start, end) = Self::range(offset, data.len())?;
+        self.buf
+            .get_mut(start..end)
+            .ok_or(OutOfBounds)?
+            .copy_from_slice(data);
+        Ok(())
+    }
+}
+
+/// The error returned by [`RamImageStore`] when a range leaves the buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfBounds;
+
+impl core::fmt::Display for OutOfBounds {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("image store access out of bounds")
+    }
+}
+
+impl core::error::Error for OutOfBounds {}
+
 /// Hosts the update agent on a pair of byte links.
 ///
 /// `Bus` is the field bus the host talks on. `Prog` is the local link to the
