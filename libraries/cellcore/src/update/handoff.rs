@@ -1,9 +1,10 @@
 //! Handing a staged image off to the `cellprog` programmer.
 //!
-//! After the agent commits an image ([`session::UpdateAgent::pending_program`]),
-//! the core MCU tells the programmer to flash it over the local `UART_PROG`
-//! link. The programmer reads the image straight from the shared EEPROM, so only
-//! a one-byte [`ProgSource`] selector crosses the link, never the image bytes.
+//! After the agent commits an image
+//! ([`session::UpdateAgent::pending_program`]), the core MCU tells the
+//! programmer to flash it over the local `UART_PROG` link. The programmer reads
+//! the image straight from the shared EEPROM, so only a one-byte [`ProgSource`]
+//! selector crosses the link, never the image bytes.
 //!
 //! [`program_frame`] builds the outbound request; [`parse_result`] reads the
 //! programmer's reply. The transport (COBS decode, `Packet::parse`) is the
@@ -73,8 +74,14 @@ mod tests {
 
     #[test]
     fn maps_regions_to_sources() {
-        assert_eq!(source_for(Region::ApplicationCode), Some(ProgSource::AppStaged));
-        assert_eq!(source_for(Region::Bootloader), Some(ProgSource::BootloaderStaged));
+        assert_eq!(
+            source_for(Region::ApplicationCode),
+            Some(ProgSource::AppStaged)
+        );
+        assert_eq!(
+            source_for(Region::Bootloader),
+            Some(ProgSource::BootloaderStaged)
+        );
         assert_eq!(source_for(Region::Factory), None);
     }
 
@@ -106,7 +113,13 @@ mod tests {
     #[test]
     fn reads_a_result_packet() {
         let mut raw = [0u8; 64];
-        let n = Packet::write(PROG_ID, Kind::ProgResult, &[ProgStatus::Ok.to_code()], &mut raw).unwrap();
+        let n = Packet::write(
+            PROG_ID,
+            Kind::ProgResult,
+            &[ProgStatus::Ok.to_code()],
+            &mut raw,
+        )
+        .unwrap();
         let packet = Packet::parse(&raw[..n]).unwrap();
         assert_eq!(parse_result(&packet), Some(ProgStatus::Ok));
     }

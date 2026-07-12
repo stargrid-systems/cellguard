@@ -129,7 +129,9 @@ impl<M: Mac> Verifier<M> {
     pub fn feed(&mut self, chunk: &[u8]) {
         self.mac.update(chunk);
         self.crc.update(chunk);
-        self.fed = self.fed.saturating_add(chunk.len().try_into().unwrap_or(u32::MAX));
+        self.fed = self
+            .fed
+            .saturating_add(chunk.len().try_into().unwrap_or(u32::MAX));
     }
 
     /// Consumes the verifier and reports whether the image is valid.
@@ -160,7 +162,7 @@ mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use hmac_sha256::HMAC;
 
-    use super::{VerifyError, Verifier, sign};
+    use super::{Verifier, VerifyError, sign};
 
     const KEY: &[u8] = b"unit-test-shared-key";
 

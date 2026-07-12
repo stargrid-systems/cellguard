@@ -1,20 +1,20 @@
 //! The `cellprog` supervisor: the programmer's bus-facing driver.
 //!
-//! [`Supervisor`] owns the [`ImageStore`] and [`NvmWriter`] and answers the main
-//! MCU over the local `UART_PROG` link, which speaks the same
-//! [`cellguard_protocol`] as the field bus. On a [`Kind::ProgProgram`] request it
-//! runs [`crate::programmer::program`] for the selected source and replies with a
-//! [`Kind::ProgResult`].
+//! [`Supervisor`] owns the [`ImageStore`] and [`NvmWriter`] and answers the
+//! main MCU over the local `UART_PROG` link, which speaks the same
+//! [`cellguard_protocol`] as the field bus. On a [`Kind::ProgProgram`] request
+//! it runs [`crate::programmer::program`] for the selected source and replies
+//! with a [`Kind::ProgResult`].
 //!
 //! The `TINY_ALIVE` heartbeat is a hardware line, not a packet: the firmware
 //! polls it and calls [`Supervisor::recover`] when the main MCU goes silent,
 //! which reprograms it from the golden image.
 
+use cellboot::io::{ImageStore, NvmWriter};
 use cellguard_protocol::{
     Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
 };
 
-use cellboot::io::{ImageStore, NvmWriter};
 use crate::programmer::{ProgramError, program};
 
 /// Streaming scratch buffer size the programmer uses.
@@ -58,7 +58,8 @@ impl ProgLayout {
 
 /// The programmer's bus driver.
 ///
-/// `RX` sizes the receive buffer; program requests are tiny, so it can be small.
+/// `RX` sizes the receive buffer; program requests are tiny, so it can be
+/// small.
 pub struct Supervisor<S, W, const RX: usize> {
     store: S,
     writer: W,
@@ -131,7 +132,8 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
         let status = self.program(source);
 
         let mut raw = [0u8; RESULT_FRAME];
-        let raw_len = Packet::write(self.id, Kind::ProgResult, &[status.to_code()], &mut raw).ok()?;
+        let raw_len =
+            Packet::write(self.id, Kind::ProgResult, &[status.to_code()], &mut raw).ok()?;
         let wire_len = encode_frame(raw.get(..raw_len)?, &mut self.tx)?;
         self.tx.get(..wire_len)
     }
@@ -139,11 +141,11 @@ impl<S: ImageStore, W: NvmWriter, const RX: usize> Supervisor<S, W, RX> {
 
 #[cfg(test)]
 mod tests {
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::io::{ImageStore, NvmWriter};
     use cellguard_protocol::{Decoder, Kind, Packet, ProgStatus, encode_frame};
 
     use super::{ProgLayout, SourceSlot, Supervisor};
-    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use cellboot::io::{ImageStore, NvmWriter};
 
     const STORE_CAP: usize = 2048;
     const FLASH_CAP: usize = 1024;
@@ -223,15 +225,29 @@ mod tests {
 
     fn layout() -> ProgLayout {
         ProgLayout {
-            app: SourceSlot { image_offset: APP_OFFSET, target_base: 0 },
-            bootloader: SourceSlot { image_offset: 512, target_base: 0 },
-            golden: SourceSlot { image_offset: GOLDEN_OFFSET, target_base: 0 },
+            app: SourceSlot {
+                image_offset: APP_OFFSET,
+                target_base: 0,
+            },
+            bootloader: SourceSlot {
+                image_offset: 512,
+                target_base: 0,
+            },
+            golden: SourceSlot {
+                image_offset: GOLDEN_OFFSET,
+                target_base: 0,
+            },
         }
     }
 
     fn make() -> Supervisor<MockStore, MockWriter, 64> {
-        let store = MockStore { buf: [0; STORE_CAP] };
-        let writer = MockWriter { flash: [0; FLASH_CAP], finished: false };
+        let store = MockStore {
+            buf: [0; STORE_CAP],
+        };
+        let writer = MockWriter {
+            flash: [0; FLASH_CAP],
+            finished: false,
+        };
         Supervisor::new(store, writer, layout(), NODE)
     }
 

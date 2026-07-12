@@ -13,7 +13,7 @@ rust-version.workspace = true
 # Shared Cat25Store image-store adapter.
 drivers = ["dep:cat25", "dep:embedded-hal"]
 # AVR128 on-chip NVM adapters. Pulls in avrxt-hal, so avr-none only.
-avr128 = ["dep:avrxt-hal"]
+avr128 = ["dep:avrxt-hal", "avrxt-hal/avr128db64"]
 
 [dependencies]
 avrxt-hal = { workspace = true, optional = true }

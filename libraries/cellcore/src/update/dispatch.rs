@@ -2,8 +2,8 @@
 //!
 //! [`Dispatcher`] owns an [`UpdateAgent`] plus the COBS decode state and its
 //! receive buffer. Feed it wire bytes one at a time with [`Dispatcher::feed`];
-//! when a complete frame addressed to this node carries a bootloader command, it
-//! runs the agent and returns the COBS-encoded response to transmit.
+//! when a complete frame addressed to this node carries a bootloader command,
+//! it runs the agent and returns the COBS-encoded response to transmit.
 //!
 //! Frames that fail to decode, fail their CRCs, are addressed to another node,
 //! or are not bootloader commands are ignored (no response). Relaying frames
@@ -36,9 +36,7 @@ pub struct Dispatcher<'k, S, K, St, const RX: usize> {
     tx: [u8; MAX_RESPONSE_WIRE],
 }
 
-impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize>
-    Dispatcher<'k, S, K, St, RX>
-{
+impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher<'k, S, K, St, RX> {
     /// Creates a dispatcher for node `id` around `agent`.
     pub const fn new(agent: UpdateAgent<'k, S, K, St>, id: u8) -> Self {
         Self {
@@ -119,7 +117,10 @@ mod tests {
         fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
             let start = usize::try_from(offset).map_err(|_| ())?;
             let end = start.checked_add(data.len()).ok_or(())?;
-            self.buf.get_mut(start..end).ok_or(())?.copy_from_slice(data);
+            self.buf
+                .get_mut(start..end)
+                .ok_or(())?
+                .copy_from_slice(data);
             Ok(())
         }
     }
@@ -141,10 +142,24 @@ mod tests {
 
     fn make_dispatcher() -> Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512> {
         let layout = StagingLayout {
-            application: RegionSlot { offset: 0, capacity: 2048 },
-            bootloader: RegionSlot { offset: 2048, capacity: 2048 },
+            application: RegionSlot {
+                offset: 0,
+                capacity: 2048,
+            },
+            bootloader: RegionSlot {
+                offset: 2048,
+                capacity: 2048,
+            },
         };
-        let agent = UpdateAgent::new(MemStore { buf: [0; CAP] }, layout, TARGET, KEY, NoKeyStore, NullStateStore, PersistentState::new(1));
+        let agent = UpdateAgent::new(
+            MemStore { buf: [0; CAP] },
+            layout,
+            TARGET,
+            KEY,
+            NoKeyStore,
+            NullStateStore,
+            PersistentState::new(1),
+        );
         Dispatcher::new(agent, NODE)
     }
 
@@ -162,8 +177,13 @@ mod tests {
         (wire, pos)
     }
 
-    /// Feeds a wire command into the dispatcher and decodes the response packet.
-    fn exchange(dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512>, kind: Kind, payload: &[u8]) -> (Kind, [u8; 64], usize) {
+    /// Feeds a wire command into the dispatcher and decodes the response
+    /// packet.
+    fn exchange(
+        dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512>,
+        kind: Kind,
+        payload: &[u8],
+    ) -> (Kind, [u8; 64], usize) {
         let (wire, len) = wire_command(kind, payload);
         let mut response = None;
         for &byte in &wire[..len] {
@@ -244,14 +264,18 @@ mod tests {
             let mut data = [0u8; 64];
             data[..4].copy_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
             data[4..4 + chunk.len()].copy_from_slice(chunk);
-            let (kind, _p, _l) = exchange(&mut dispatcher, Kind::BootData, &data[..4 + chunk.len()]);
+            let (kind, _p, _l) =
+                exchange(&mut dispatcher, Kind::BootData, &data[..4 + chunk.len()]);
             assert_eq!(kind, Kind::BootAck);
             offset += chunk.len();
         }
 
         let (kind, _p, _l) = exchange(&mut dispatcher, Kind::BootCommit, &[]);
         assert_eq!(kind, Kind::BootAck);
-        assert_eq!(dispatcher.agent().pending_program(), Some(Region::ApplicationCode));
+        assert_eq!(
+            dispatcher.agent().pending_program(),
+            Some(Region::ApplicationCode)
+        );
         assert_eq!(dispatcher.agent().status().staged, StagedState::Ready);
     }
 }

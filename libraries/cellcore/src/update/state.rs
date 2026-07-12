@@ -1,23 +1,27 @@
 //! The persistent, probe-able updater state.
 //!
 //! [`PersistentState`] is the small record the updater keeps in a
-//! [`cellboot::io::StateStore`]. It survives a program-memory rewrite and is what a
-//! `Probe` command reports back, so an operator can ask a device what firmware
-//! it runs, whether that firmware is healthy, and how the last update went.
+//! [`cellboot::io::StateStore`]. It survives a program-memory rewrite and is
+//! what a `Probe` command reports back, so an operator can ask a device what
+//! firmware it runs, whether that firmware is healthy, and how the last update
+//! went.
+
+use core::fmt;
 
 use cellboot::io::StateStore;
-use core::fmt;
 
 /// Loads the persisted state, falling back to a fresh one on any problem.
 ///
 /// A read error, a wrong length, a bad CRC, or an unknown field all resolve to
-/// [`PersistentState::new`], so a blank or corrupt store never blocks boot. Call
-/// this once at boot and pass the result to
+/// [`PersistentState::new`], so a blank or corrupt store never blocks boot.
+/// Call this once at boot and pass the result to
 /// [`UpdateAgent::new`](crate::update::session::UpdateAgent::new).
 pub fn load<St: StateStore>(store: &mut St, agent_version: u32) -> PersistentState {
     let mut buf = [0u8; STATE_LEN];
     match store.load(&mut buf) {
-        Ok(()) => PersistentState::parse(&buf).unwrap_or_else(|_| PersistentState::new(agent_version)),
+        Ok(()) => {
+            PersistentState::parse(&buf).unwrap_or_else(|_| PersistentState::new(agent_version))
+        }
         Err(_) => PersistentState::new(agent_version),
     }
 }
@@ -180,7 +184,9 @@ impl PersistentState {
         out[1] = self.app_health.to_code();
         out[2] = self.staged.to_code();
         out[3] = self.last_outcome.to_code();
-        out[4] = self.staged_region.map_or(NO_REGION, cellboot::image::Region::to_code);
+        out[4] = self
+            .staged_region
+            .map_or(NO_REGION, cellboot::image::Region::to_code);
         out[6..8].copy_from_slice(&self.boot_count.to_le_bytes());
         out[8..12].copy_from_slice(&self.agent_version.to_le_bytes());
         out[12..16].copy_from_slice(&self.app_version.to_le_bytes());
@@ -258,8 +264,9 @@ impl core::error::Error for StateError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{AppHealth, PersistentState, STATE_LEN, StagedState, StateError, UpdateOutcome};
     use cellboot::image::Region;
+
+    use super::{AppHealth, PersistentState, STATE_LEN, StagedState, StateError, UpdateOutcome};
 
     fn sample() -> PersistentState {
         PersistentState {
@@ -302,7 +309,10 @@ mod tests {
         // Recompute the CRC so the format check is what trips, not the CRC.
         let crc = crc::checksum32(&bytes[0..24]);
         bytes[24..28].copy_from_slice(&crc.to_le_bytes());
-        assert_eq!(PersistentState::parse(&bytes), Err(StateError::UnsupportedFormat(9)));
+        assert_eq!(
+            PersistentState::parse(&bytes),
+            Err(StateError::UnsupportedFormat(9))
+        );
     }
 
     #[test]

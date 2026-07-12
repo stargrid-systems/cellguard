@@ -14,7 +14,7 @@
 //! interrupt that does so mid-write corrupts the buffer.
 //!
 //! The register command sequences here follow the AVR Dx model and match the
-//! DxCore reference flows.
+//! `DxCore` reference flows.
 
 use core::mem::MaybeUninit;
 
@@ -117,8 +117,8 @@ impl<T: NvmInstance> Nvm<T> {
     /// Writes `data` to the on-chip EEPROM at `offset`.
     ///
     /// Uses the erase-write command per byte, so callers do not pre-erase. This
-    /// follows the DxCore EEPROM flow: store the byte to load the page buffer,
-    /// then issue `EEERWR` to commit it.
+    /// follows the `DxCore` EEPROM flow: store the byte to load the page
+    /// buffer, then issue `EEERWR` to commit it.
     ///
     /// # Errors
     ///
@@ -227,7 +227,7 @@ const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError
 /// Views an initialized byte slice as uninitialized, so an initialized read can
 /// reuse the uninitialized read path. Sound because a `u8` is always a valid
 /// `MaybeUninit<u8>`.
-fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
+const fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
     let len = buf.len();
     // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`.
     unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), len) }

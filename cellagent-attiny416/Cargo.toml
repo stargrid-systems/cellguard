@@ -12,11 +12,11 @@ bench = false
 
 [dependencies]
 avr-device = { version = "0.8", features = ["attiny416", "rt"] }
-avrxt-hal = { path = "../avrxt-hal", features = ["attiny416"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny416"] }
 embedded-hal = { version = "1", default-features = false }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
 
 [profile.dev]
 panic = "abort"

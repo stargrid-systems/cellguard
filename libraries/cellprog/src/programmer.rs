@@ -13,10 +13,9 @@
 //! against the written flash before letting the target run (so a bad write is
 //! caught).
 
-use crc::Crc32;
-
 use cellboot::image::{HEADER_LEN, ImageHeader, ParseError};
 use cellboot::io::{ImageStore, NvmWriter};
+use crc::Crc32;
 
 const HEADER_LEN_U32: u32 = 64;
 const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
@@ -57,8 +56,8 @@ where
     let payload_len = header.payload_len;
 
     // Pass 1: verify the staged copy before touching the target.
-    let staged_crc = crc_from_store(store, payload_offset, payload_len, scratch)
-        .map_err(ProgramError::Store)?;
+    let staged_crc =
+        crc_from_store(store, payload_offset, payload_len, scratch).map_err(ProgramError::Store)?;
     if staged_crc != header.payload_crc32 {
         return Err(ProgramError::CorruptSource);
     }
@@ -79,8 +78,8 @@ where
     }
 
     // Pass 3: verify the written flash before releasing the target.
-    let flash_crc = crc_from_flash(writer, target_base, payload_len, scratch)
-        .map_err(ProgramError::Nvm)?;
+    let flash_crc =
+        crc_from_flash(writer, target_base, payload_len, scratch).map_err(ProgramError::Nvm)?;
     if flash_crc != header.payload_crc32 {
         return Err(ProgramError::VerifyFailed);
     }
@@ -150,9 +149,10 @@ pub enum ProgramError<S, N> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProgramError, program};
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::{ImageStore, NvmWriter};
+
+    use super::{ProgramError, program};
 
     const STORE_CAP: usize = 1024;
     const FLASH_CAP: usize = 1024;
@@ -185,7 +185,8 @@ mod tests {
         flash: [u8; FLASH_CAP],
         began: bool,
         finished: bool,
-        /// If set, corrupt the byte written at this offset (simulate a bad write).
+        /// If set, corrupt the byte written at this offset (simulate a bad
+        /// write).
         corrupt_at: Option<usize>,
     }
 
@@ -258,7 +259,9 @@ mod tests {
     #[test]
     fn programs_and_verifies() {
         let payload = ramp(300);
-        let mut store = MockStore { buf: [0; STORE_CAP] };
+        let mut store = MockStore {
+            buf: [0; STORE_CAP],
+        };
         stage(&mut store, &payload);
         let mut writer = MockWriter::new();
         let mut scratch = [0u8; 64];
@@ -273,7 +276,9 @@ mod tests {
     #[test]
     fn rejects_corrupt_source_before_touching_target() {
         let payload = ramp(128);
-        let mut store = MockStore { buf: [0; STORE_CAP] };
+        let mut store = MockStore {
+            buf: [0; STORE_CAP],
+        };
         stage(&mut store, &payload);
         // Corrupt a staged payload byte after the header CRC was fixed.
         store.buf[HEADER_LEN + 10] ^= 0x01;
@@ -292,7 +297,9 @@ mod tests {
     #[test]
     fn detects_bad_write_and_does_not_release() {
         let payload = ramp(128);
-        let mut store = MockStore { buf: [0; STORE_CAP] };
+        let mut store = MockStore {
+            buf: [0; STORE_CAP],
+        };
         stage(&mut store, &payload);
         let mut writer = MockWriter::new();
         writer.corrupt_at = Some(50);

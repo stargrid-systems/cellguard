@@ -44,7 +44,7 @@ impl<S: SpiDevice, D: DelayNs> ImageStore for Cat25Store<S, D> {
 
 #[cfg(test)]
 mod tests {
-    use cat25::{CAT25128, CAT25M01, Cat25};
+    use cat25::{CAT25M01, CAT25128, Cat25};
     use embedded_hal_mock::eh1::delay::NoopDelay;
     use embedded_hal_mock::eh1::spi::Mock as SpiMock;
 

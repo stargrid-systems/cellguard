@@ -3,12 +3,12 @@
 //!
 //! It defines the signed image format ([`image`]) and the I/O traits ([`io`])
 //! through which a concrete target performs all of its input and output. Both
-//! roles build on it: the `cellcore` update agent (runs on the core MCU) and the
-//! `cellprog` programmer (runs on the PROG MCU).
+//! roles build on it: the `cellcore` update agent (runs on the core MCU) and
+//! the `cellprog` programmer (runs on the PROG MCU).
 //!
 //! This crate holds no crypto. Signing, streaming verification, and the update
-//! session machinery live in `cellcore`, so the `cellprog` programmer links none
-//! of it.
+//! session machinery live in `cellcore`, so the `cellprog` programmer links
+//! none of it.
 //!
 //! # Features
 //!

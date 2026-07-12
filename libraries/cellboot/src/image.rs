@@ -6,8 +6,8 @@
 //! HMAC-SHA256 tag over the header and payload for authenticity.
 //!
 //! This module defines only the format and its parsing. Signing and streaming
-//! verification live in the `cellcore` crate, so the `cellprog` programmer links
-//! no crypto.
+//! verification live in the `cellcore` crate, so the `cellprog` programmer
+//! links no crypto.
 
 use core::fmt;
 

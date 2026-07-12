@@ -4,9 +4,9 @@
 //! and from [`cellguard_protocol`] packets using the bootloader [`Kind`]s, so
 //! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
 
+use cellboot::image::HEADER_LEN;
 use cellguard_protocol::{Error as PacketError, Kind, Packet};
 
-use cellboot::image::HEADER_LEN;
 use crate::update::state::PersistentState;
 
 /// Length of the shared authentication key in bytes.
@@ -61,7 +61,10 @@ impl<'a> Command<'a> {
             Kind::BootCommit => Ok(Self::Commit),
             Kind::BootAbort => Ok(Self::Abort),
             Kind::BootBegin => {
-                let header = packet.payload.try_into().map_err(|_| MapError::BadPayload)?;
+                let header = packet
+                    .payload
+                    .try_into()
+                    .map_err(|_| MapError::BadPayload)?;
                 Ok(Self::Begin { header })
             }
             Kind::BootData => {
@@ -204,10 +207,10 @@ impl core::error::Error for MapError {}
 
 #[cfg(test)]
 mod tests {
+    use cellboot::image::HEADER_LEN;
     use cellguard_protocol::{Kind, Packet};
 
     use super::{Command, KEY_LEN, MapError, NackReason, Response, TAG_LEN};
-    use cellboot::image::HEADER_LEN;
     use crate::update::state::PersistentState;
 
     fn command_from_bytes<'a>(kind: Kind, payload: &[u8], buf: &'a mut [u8]) -> Command<'a> {
@@ -219,9 +222,18 @@ mod tests {
     #[test]
     fn maps_simple_commands() {
         let mut buf = [0u8; 128];
-        assert_eq!(command_from_bytes(Kind::BootProbe, &[], &mut buf), Command::Probe);
-        assert_eq!(command_from_bytes(Kind::BootCommit, &[], &mut buf), Command::Commit);
-        assert_eq!(command_from_bytes(Kind::BootAbort, &[], &mut buf), Command::Abort);
+        assert_eq!(
+            command_from_bytes(Kind::BootProbe, &[], &mut buf),
+            Command::Probe
+        );
+        assert_eq!(
+            command_from_bytes(Kind::BootCommit, &[], &mut buf),
+            Command::Commit
+        );
+        assert_eq!(
+            command_from_bytes(Kind::BootAbort, &[], &mut buf),
+            Command::Abort
+        );
     }
 
     #[test]
@@ -232,7 +244,10 @@ mod tests {
         let mut buf = [0u8; 128];
         assert_eq!(
             command_from_bytes(Kind::BootReplaceKey, &payload, &mut buf),
-            Command::ReplaceKey { new_key: [0xC5; KEY_LEN], tag: [0x3A; TAG_LEN] }
+            Command::ReplaceKey {
+                new_key: [0xC5; KEY_LEN],
+                tag: [0x3A; TAG_LEN]
+            }
         );
     }
 
@@ -285,20 +300,30 @@ mod tests {
         let packet = Packet::parse(&buf[..n]).unwrap();
         assert_eq!(packet.id, 9);
         assert_eq!(packet.kind, Kind::BootStatus);
-        assert_eq!(PersistentState::parse(&packet.payload.try_into().unwrap()).unwrap(), state);
+        assert_eq!(
+            PersistentState::parse(&packet.payload.try_into().unwrap()).unwrap(),
+            state
+        );
     }
 
     #[test]
     fn response_ack_and_nack_roundtrip() {
         let mut buf = [0u8; 64];
-        let n = Response::Ack { next_offset: 4096 }.to_packet(2, &mut buf).unwrap();
+        let n = Response::Ack { next_offset: 4096 }
+            .to_packet(2, &mut buf)
+            .unwrap();
         let packet = Packet::parse(&buf[..n]).unwrap();
         assert_eq!(packet.kind, Kind::BootAck);
         assert_eq!(u32::from_le_bytes(packet.payload.try_into().unwrap()), 4096);
 
-        let n = Response::Nack(NackReason::VerifyFailed).to_packet(2, &mut buf).unwrap();
+        let n = Response::Nack(NackReason::VerifyFailed)
+            .to_packet(2, &mut buf)
+            .unwrap();
         let packet = Packet::parse(&buf[..n]).unwrap();
         assert_eq!(packet.kind, Kind::BootNack);
-        assert_eq!(NackReason::from_code(packet.payload[0]), Some(NackReason::VerifyFailed));
+        assert_eq!(
+            NackReason::from_code(packet.payload[0]),
+            Some(NackReason::VerifyFailed)
+        );
     }
 }

@@ -26,7 +26,12 @@ impl<'a, T: NvmInstance, C: CcpUnlock> EepromState<'a, T, C> {
     /// Binds a state store to the EEPROM slot `[offset, offset + len)`.
     #[must_use]
     pub const fn new(nvm: &'a Nvm<T>, cpu: &'a C, offset: u16, len: u16) -> Self {
-        Self { nvm, cpu, offset, len }
+        Self {
+            nvm,
+            cpu,
+            offset,
+            len,
+        }
     }
 
     const fn fits(&self, wanted: usize) -> Result<(), NvmError> {

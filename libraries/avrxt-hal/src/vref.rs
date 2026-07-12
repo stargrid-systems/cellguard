@@ -52,7 +52,7 @@ pub struct Vref<T: VrefInstance> {
 impl<T: VrefInstance> Vref<T> {
     /// Takes ownership of the VREF peripheral.
     #[must_use]
-    pub fn new(instance: T) -> Self {
+    pub const fn new(instance: T) -> Self {
         Self { instance }
     }
 

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "ads131m08",
+    "avrxt-hal",
     "cat25",
     "cellboot",
     "cellcore",
@@ -42,11 +43,9 @@ unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 unwrap_used = "warn"
 
-[patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "616e7f4b9427f06d2090b24951d2bc0a0b8bdcd5" }
-
 [workspace.dependencies]
-avrxt-hal = { path = "../avrxt-hal" }
+avr-device = { version = "0.8", default-features = false }
+avrxt-hal = { path = "avrxt-hal" }
 cat25 = { path = "cat25" }
 cellboot = { path = "cellboot" }
 cellcore = { path = "cellcore" }
@@ -57,5 +56,10 @@ updi = { path = "updi" }
 
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
 hmac-sha256 = { version = "1", default-features = false }
+ufmt = { version = "0.2", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }

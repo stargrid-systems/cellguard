@@ -35,8 +35,8 @@ pub trait ImageStore {
 
 /// A streaming writer for a target's non-volatile program memory.
 ///
-/// On `CellGuard` this is implemented by the `ATtiny406` programmer over UPDI, so
-/// the AVR128 never programs its own flash. It streams so the 256-byte
+/// On `CellGuard` this is implemented by the `ATtiny406` programmer over UPDI,
+/// so the AVR128 never programs its own flash. It streams so the 256-byte
 /// programmer can push a 512-byte-page target: [`NvmWriter::write`] is called
 /// with sequential, sub-page chunks and the implementation handles the target's
 /// page mechanics.
@@ -65,16 +65,16 @@ pub trait NvmWriter {
 
     /// Reads `buf.len()` bytes back from `address` for verification.
     ///
-    /// Any page still buffered from [`NvmWriter::write`] is committed first, so a
-    /// read always reflects what will be in flash.
+    /// Any page still buffered from [`NvmWriter::write`] is committed first, so
+    /// a read always reflects what will be in flash.
     ///
     /// # Errors
     ///
     /// Returns an error if the read fails.
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error>;
 
-    /// Ends the session: commits any buffered page, leaves programming mode, and
-    /// lets the target run.
+    /// Ends the session: commits any buffered page, leaves programming mode,
+    /// and lets the target run.
     ///
     /// # Errors
     ///

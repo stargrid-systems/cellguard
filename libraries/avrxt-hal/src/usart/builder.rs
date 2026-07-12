@@ -13,9 +13,11 @@ use super::{
 /// either the baud or the frame still has this type.
 pub struct Unset;
 
-/// Builds a [`Usart`]. The `B` and `F` type parameters track whether the baud
-/// and frame have been set. They start as [`Unset`] and become `u32` and
-/// [`Frame`] once set, which is when [`Builder::build`] becomes callable.
+/// Builds a [`Usart`].
+///
+/// The `B` and `F` type parameters track whether the baud and frame have been
+/// set. They start as [`Unset`] and become `u32` and [`Frame`] once set, which
+/// is when [`Builder::build`] becomes callable.
 pub struct Builder<T, B, F> {
     instance: T,
     f_cpu_hz: u32,
@@ -25,7 +27,7 @@ pub struct Builder<T, B, F> {
 }
 
 impl<T: UsartInstance> Builder<T, Unset, Unset> {
-    pub(super) fn new(instance: T, f_cpu_hz: u32) -> Self {
+    pub(super) const fn new(instance: T, f_cpu_hz: u32) -> Self {
         Self {
             instance,
             f_cpu_hz,
@@ -64,7 +66,7 @@ impl<T, B, F> Builder<T, B, F> {
     /// Overrides the receive timeout in milliseconds (approximate, derived from
     /// `f_cpu_hz`). Defaults to one second.
     #[must_use]
-    pub fn rx_timeout_ms(mut self, rx_timeout_ms: u32) -> Self {
+    pub const fn rx_timeout_ms(mut self, rx_timeout_ms: u32) -> Self {
         self.rx_timeout_ms = rx_timeout_ms;
         self
     }
