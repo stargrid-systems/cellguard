@@ -44,7 +44,6 @@ unnecessary_safety_doc = "warn"
 unwrap_used = "warn"
 
 [workspace.dependencies]
-avr-device = { version = "0.8", default-features = false }
 avrxt-hal = { path = "avrxt-hal" }
 cat25 = { path = "cat25" }
 cellboot = { path = "cellboot" }
@@ -54,6 +53,7 @@ cellprog = { path = "cellprog" }
 crc = { path = "crc" }
 updi = { path = "updi" }
 
+avr-device = { version = "0.8", default-features = false }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
