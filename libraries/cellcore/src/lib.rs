@@ -8,6 +8,8 @@
 //!
 //! # Subsystems
 //!
+//! - [`kat`]: the power-on crypto known-answer self-test, run at boot before
+//!   any image or key is trusted.
 //! - [`update`]: the field firmware-update agent. Receives a signed image over
 //!   the bus, verifies it, and stages it for the `cellprog` programmer.
 //!
@@ -15,4 +17,5 @@
 #![no_std]
 #![warn(missing_docs)]
 
+pub mod kat;
 pub mod update;
