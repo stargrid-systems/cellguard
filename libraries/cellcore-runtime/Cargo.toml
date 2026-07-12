@@ -1,0 +1,21 @@
+[package]
+name = "cellcore-runtime"
+version = "0.1.0"
+description = "Drives the CellGuard core update agent over a concrete byte transport."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cellboot = { workspace = true }
+cellcore = { workspace = true }
+embedded-io = { workspace = true }
+
+[dev-dependencies]
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
+
+[lints]
+workspace = true

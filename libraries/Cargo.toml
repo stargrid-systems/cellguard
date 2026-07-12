@@ -6,6 +6,7 @@ members = [
     "cat25",
     "cellboot",
     "cellcore",
+    "cellcore-runtime",
     "cellguard-protocol",
     "cellprog",
     "crc",

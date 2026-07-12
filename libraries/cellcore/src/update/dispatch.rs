@@ -10,6 +10,7 @@
 //! for other nodes down the daisy chain is a separate concern and not handled
 //! here.
 
+use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
 
@@ -53,6 +54,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
     #[must_use]
     pub const fn agent(&self) -> &UpdateAgent<'k, S, K, St> {
         &self.agent
+    }
+
+    /// Consumes a staged image as it is handed off to the programmer.
+    ///
+    /// See [`UpdateAgent::take_pending_program`].
+    #[must_use]
+    pub fn take_pending_program(&mut self) -> Option<Region> {
+        self.agent.take_pending_program()
     }
 
     /// Feeds one received wire byte.
@@ -277,5 +286,15 @@ mod tests {
             Some(Region::ApplicationCode)
         );
         assert_eq!(dispatcher.agent().status().staged, StagedState::Ready);
+
+        // Handing off consumes the staged image so a reboot cannot re-trigger
+        // the same flash.
+        assert_eq!(
+            dispatcher.take_pending_program(),
+            Some(Region::ApplicationCode)
+        );
+        assert_eq!(dispatcher.agent().pending_program(), None);
+        assert_eq!(dispatcher.agent().status().staged, StagedState::Empty);
+        assert_eq!(dispatcher.agent().status().app_version, 5);
     }
 }

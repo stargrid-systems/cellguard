@@ -117,6 +117,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellcore-runtime"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellcore",
+ "cellguard-protocol",
+ "embedded-io",
+]
+
+[[package]]
 name = "cellguard-protocol"
 version = "0.1.0"
 dependencies = [

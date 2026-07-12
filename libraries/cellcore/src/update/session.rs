@@ -12,7 +12,7 @@ use cellboot::io::{ImageStore, KeyStore, StateStore};
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, NackReason, Response};
-use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
+use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
@@ -131,6 +131,36 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             StagedState::Ready => self.state.staged_region,
             _ => None,
         }
+    }
+
+    /// Consumes the staged image as it is handed off to the programmer.
+    ///
+    /// Returns the region to program, or `None` when nothing is staged and
+    /// ready. Programming resets the core: the programmer halts it over UPDI, so
+    /// the core never sees the result and must treat the handoff as final. This
+    /// commits to it. The staged image is cleared, an application image advances
+    /// the recorded `app_version` to the staged version (health back to
+    /// `Unknown` until the new app confirms itself), and the outcome is recorded
+    /// as a success. The new state is persisted before this returns, so a reset
+    /// during programming cannot make the core re-trigger the same handoff on
+    /// reboot.
+    ///
+    /// There is no rollback enforcement, so if programming never happens (for
+    /// example power is lost first) the still-working old image keeps running
+    /// and the golden image covers a genuinely broken app. Dropping an update is
+    /// safe.
+    #[must_use]
+    pub fn take_pending_program(&mut self) -> Option<Region> {
+        let region = self.pending_program()?;
+        self.state.staged = StagedState::Empty;
+        self.state.staged_region = None;
+        self.state.last_outcome = UpdateOutcome::Success;
+        if region == Region::ApplicationCode {
+            self.state.app_version = self.state.staged_version;
+            self.state.app_health = AppHealth::Unknown;
+        }
+        let _ = self.state_store.store(&self.state.serialize());
+        Some(region)
     }
 
     /// Handles one command and returns the response.
