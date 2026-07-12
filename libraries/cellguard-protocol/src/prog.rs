@@ -3,9 +3,9 @@
 //! A [`Kind::ProgProgram`](crate::Kind::ProgProgram) request carries a single
 //! [`ProgSource`] byte selecting which staged image to flash. The programmer
 //! reads that image straight from the shared EEPROM, so the image bytes never
-//! cross the link. A [`Kind::ProgResult`](crate::Kind::ProgResult) reply carries
-//! a single [`ProgStatus`] byte. Both roles share these definitions: the update
-//! agent sends the request, the `cellprog` programmer answers it.
+//! cross the link. A [`Kind::ProgResult`](crate::Kind::ProgResult) reply
+//! carries a single [`ProgStatus`] byte. Both roles share these definitions:
+//! the update agent sends the request, the `cellprog` programmer answers it.
 
 /// Which staged image the programmer should flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +85,11 @@ mod tests {
 
     #[test]
     fn source_roundtrips() {
-        for source in [ProgSource::AppStaged, ProgSource::BootloaderStaged, ProgSource::Golden] {
+        for source in [
+            ProgSource::AppStaged,
+            ProgSource::BootloaderStaged,
+            ProgSource::Golden,
+        ] {
             assert_eq!(ProgSource::from_code(source.to_code()), Some(source));
         }
         assert_eq!(ProgSource::from_code(3), None);
@@ -93,7 +97,12 @@ mod tests {
 
     #[test]
     fn status_roundtrips() {
-        for status in [ProgStatus::Ok, ProgStatus::CorruptSource, ProgStatus::VerifyFailed, ProgStatus::Failed] {
+        for status in [
+            ProgStatus::Ok,
+            ProgStatus::CorruptSource,
+            ProgStatus::VerifyFailed,
+            ProgStatus::Failed,
+        ] {
             assert_eq!(ProgStatus::from_code(status.to_code()), Some(status));
         }
         assert_eq!(ProgStatus::from_code(4), None);

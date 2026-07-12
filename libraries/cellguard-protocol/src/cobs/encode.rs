@@ -46,16 +46,32 @@ impl State<'_> {
             }
             // This block is drained and there is no more data: emit the
             // terminator.
-            Self::Block(Block { data: [], zero: false, rest: [] }) => (Some(0x00), Self::End),
+            Self::Block(Block {
+                data: [],
+                zero: false,
+                rest: [],
+            }) => (Some(0x00), Self::End),
             // This block is drained: emit the code byte for the next block.
-            Self::Block(Block { data: [], zero: _, rest }) => {
+            Self::Block(Block {
+                data: [],
+                zero: _,
+                rest,
+            }) => {
                 let block = split_first_block(rest);
                 (Some((block.data.len() + 1) as u8), Self::Block(block))
             }
             // Emit the next data byte of this block.
-            Self::Block(Block { data: [first, tail @ ..], zero, rest }) => (
+            Self::Block(Block {
+                data: [first, tail @ ..],
+                zero,
+                rest,
+            }) => (
                 Some(*first),
-                Self::Block(Block { data: tail, zero: *zero, rest }),
+                Self::Block(Block {
+                    data: tail,
+                    zero: *zero,
+                    rest,
+                }),
             ),
             Self::End => (None, Self::End),
         };
@@ -80,12 +96,20 @@ fn split_first_block(buf: &[u8]) -> Block<'_> {
         // the zero itself is consumed (it is what the code byte stands in for).
         let data = buf.get(..idx).unwrap_or(&[]);
         let rest = buf.get(idx + 1..).unwrap_or(&[]);
-        Block { data, zero: true, rest }
+        Block {
+            data,
+            zero: true,
+            rest,
+        }
     } else {
         // No zero in range: take a full (or final short) block with no implied
         // trailing zero.
         let len = buf.len().min(MAX_DATA_PER_BLOCK);
         let (data, rest) = buf.split_at(len);
-        Block { data, zero: false, rest }
+        Block {
+            data,
+            zero: false,
+            rest,
+        }
     }
 }

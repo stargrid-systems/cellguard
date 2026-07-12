@@ -31,9 +31,6 @@ unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 unwrap_used = "warn"
 
-[patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
-
 [workspace.dependencies]
 avrxt-hal = { path = "avrxt-hal" }
 crc = { path = "crc" }
@@ -44,3 +41,6 @@ embedded-hal-mock = { version = "0.11", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
 ufmt = { version = "0.2", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
