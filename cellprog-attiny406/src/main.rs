@@ -6,34 +6,45 @@
 //! `cellprog` MCU.
 //!
 //! This MCU reflashes the cellcore (AVR128) over UPDI, reading staged images
-//! from the shared SPI EEPROM. It never acts on its own: the cellcore is the
-//! sole orchestrator. It stages images, then sends a `ProgProgram` packet over
-//! the cellcore's USART3, which reaches this MCU's USART0 through the U1004
-//! analog mux (channel 0).
+//! from the shared SPI EEPROM. The cellcore is the sole orchestrator for field
+//! updates: it stages images, then sends a `ProgProgram` packet over its USART3,
+//! which reaches this MCU's USART0 through the U1004 analog mux (channel 0).
 //!
-//! USART0 is shared between that UART command link (mux channel 0, 8N1) and the
+//! The programmer also watches the cellcore heartbeat (`AVR64_TO_PROG` on PB4,
+//! toggled by the cellcore via the U103 GPIO expander). If the heartbeat goes
+//! silent the programmer recovers the cellcore autonomously: first a reset
+//! (PB0 / `RESET_AVR64`), then, if that fails, a reflash of the staged
+//! application over UPDI. After a few failed attempts it gives up and keeps
+//! listening. There is no automatic recovery for the cellagent.
+//!
+//! USART0 is shared between the UART command link (mux channel 0, 8N1) and the
 //! UPDI link (mux channel 1, 8E2). The firmware listens on channel 0, and on a
-//! `ProgProgram` it switches USART0 to 8E2 and the mux to channel 1, flashes the
-//! staged image, then switches back to channel 0 and emits the `ProgResult`.
+//! `ProgProgram` (or a recovery reflash) it switches USART0 to 8E2 and the mux
+//! to channel 1, flashes the staged image, then switches back.
 //!
 //! Pin map (verified, see `scratch/hardware/cellprog-mcu.md`):
 //! - USART0 PB2/PB3 -> U1004 mux.
 //! - PA3/PA4 = U1004 select A1/A0.
+//! - PB4 = `AVR64_TO_PROG` heartbeat input (from U103 P12).
+//! - PB0 = `RESET_AVR64` (active-low, via U107 NAND + Q100 to cellcore reset).
 //! - SPI0_ALT (PC0 SCK, PC1 MISO, PC2 MOSI). App EEPROM U104 CS = PA2, Boot
-//!   EEPROM U105 CS = PC3. Factory EEPROM U106 is not reachable here.
+//!   EEPROM U105 CS = PC3.
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::{Output, Port};
-use avrxt_hal::spi::{Prescaler, Spi};
+use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
+use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
 use avrxt_hal::usart::{Frame, Usart};
 use cat25::{CAT25128, CAT25M01, Cat25};
 use cellboot::drivers::Cat25Store;
 use cellboot::io::BandedStore;
+use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
 use cellprog::writer::UpdiNvmWriter;
-use embedded_hal::digital::OutputPin;
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use embedded_io::Write;
@@ -66,6 +77,22 @@ const APP_CAP: u32 = 128 * 1024;
 const BOOT_TARGET_BASE: u32 = 0;
 const APP_TARGET_BASE: u32 = 0;
 
+/// USART receive timeout. Short enough that the heartbeat is sampled often.
+const RX_TIMEOUT_MS: u32 = 50;
+
+/// Heartbeat-loss threshold in RTC ticks. The RTC runs at ~1.024 kHz
+/// (Internal1k, prescaler /1), so 2048 ticks is roughly 2 s.
+const HEARTBEAT_TIMEOUT_TICKS: u16 = 2048;
+
+/// Reset attempts before escalating to a reflash.
+const MAX_RESETS: u8 = 2;
+
+/// Reflash attempts before giving up.
+const MAX_REFLASHES: u8 = 2;
+
+/// Reset pulse width (PB0 held low), in microseconds.
+const RESET_PULSE_US: u32 = 1000;
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     avr_device::interrupt::disable();
@@ -91,7 +118,7 @@ fn main() -> ! {
     let _sck = portc.p0.into_output();
     let _miso = portc.p1.into_input();
     let _mosi = portc.p2.into_output();
-    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, Prescaler::Div16));
+    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, SpiPrescaler::Div16));
 
     // App and Boot chip-selects (active low, idle high). PC3 also doubles as
     // the SPI hardware SS; CTRLB.SSD keeps it usable as a GPIO CS.
@@ -124,6 +151,7 @@ fn main() -> ! {
     let mut usart = Usart::builder(dp.USART0, f_cpu)
         .baud(BAUD)
         .frame(Frame::EIGHT_N_1)
+        .rx_timeout_ms(RX_TIMEOUT_MS)
         .build()
         .unwrap_or_else(|_| halt());
 
@@ -134,28 +162,77 @@ fn main() -> ! {
     };
     mux.cellcore_uart();
 
+    // PB4: AVR64_TO_PROG heartbeat (cellcore toggles U103 P12 over I2C).
+    // Pull-up gives a defined idle level before the cellcore configures U103.
+    let mut heartbeat = portb.p4.into_input_pullup();
+
+    // PB0: RESET_AVR64, active-low. Drives U107 (NAND) -> Q100 (BSS138 N-FET)
+    // -> cellcore PF6 reset. Idle high (not resetting).
+    let mut reset_n = portb.p0.into_output_high();
+
+    // RTC as a free-running time base (~1.024 kHz, ~64 s before wrap).
+    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, Prescaler::Div1, u16::MAX);
+
+    let mut delay = Delay::new(f_cpu);
+
+    let mut last_level = heartbeat.is_high().unwrap_or(true);
+    let mut last_edge = rtc.count();
+    let mut resets = 0u8;
+    let mut reflashes = 0u8;
+
     loop {
-        let Ok(byte) = usart.read_byte() else {
-            continue;
-        };
-        let Some(source) = supervisor.decode(byte) else {
-            continue;
-        };
+        // --- UART command link (returns within ~RX_TIMEOUT_MS) ---
+        if let Ok(byte) = usart.read_byte() {
+            if let Some(source) = supervisor.decode(byte) {
+                usart.set_frame(Frame::EIGHT_E_2);
+                mux.cellcore_updi();
+                let status = {
+                    let link = UsartUpdiLink::new(&mut usart);
+                    let mut writer = UpdiNvmWriter::new(link);
+                    supervisor.program(source, &mut writer)
+                };
+                usart.set_frame(Frame::EIGHT_N_1);
+                mux.cellcore_uart();
+                if let Some(reply) = supervisor.reply(status) {
+                    let _ = usart.write_all(reply);
+                }
+            }
+        }
 
-        // Switch the shared USART to UPDI: 8E2, mux channel 1.
-        usart.set_frame(Frame::EIGHT_E_2);
-        mux.cellcore_updi();
-        let status = {
-            let link = UsartUpdiLink::new(&mut usart);
-            let mut writer = UpdiNvmWriter::new(link);
-            supervisor.program(source, &mut writer)
-        };
+        // --- Heartbeat edge detection ---
+        let level = heartbeat.is_high().unwrap_or(last_level);
+        if level != last_level {
+            last_level = level;
+            last_edge = rtc.count();
+            resets = 0;
+            reflashes = 0;
+        }
 
-        // Switch back to the 8N1 UART command link and reply.
-        usart.set_frame(Frame::EIGHT_N_1);
-        mux.cellcore_uart();
-        if let Some(reply) = supervisor.reply(status) {
-            let _ = usart.write_all(reply);
+        // --- Heartbeat lost: tiered recovery ---
+        if rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS {
+            if resets < MAX_RESETS {
+                // Tier 1: pulse RESET_AVR64 low.
+                let _ = reset_n.set_low();
+                delay.delay_us(RESET_PULSE_US);
+                let _ = reset_n.set_high();
+                resets += 1;
+                last_edge = rtc.count();
+            } else if reflashes < MAX_REFLASHES {
+                // Tier 2: reflash the staged application.
+                usart.set_frame(Frame::EIGHT_E_2);
+                mux.cellcore_updi();
+                let _ = {
+                    let link = UsartUpdiLink::new(&mut usart);
+                    let mut writer = UpdiNvmWriter::new(link);
+                    supervisor.program(ProgSource::AppStaged, &mut writer)
+                };
+                usart.set_frame(Frame::EIGHT_N_1);
+                mux.cellcore_uart();
+                reflashes += 1;
+                last_edge = rtc.count();
+                resets = 0;
+            }
+            // Exhausted: keep listening, stop recovering.
         }
     }
 }

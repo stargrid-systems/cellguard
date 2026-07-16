@@ -9,8 +9,9 @@
 //! no crypto here.
 //!
 //! - [`programmer`] streams a staged image into the target and verifies it.
-//! - [`supervisor`] answers program requests over the local link and recovers
-//!   the target from the golden image when its heartbeat is lost.
+//! - [`supervisor`] answers program requests over the local link. The firmware
+//!   also uses it to recover the cellcore when its heartbeat is lost (reset,
+//!   then reflash the staged application).
 //! - [`writer`] is the UPDI-backed [`NvmWriter`](cellboot::io::NvmWriter) the
 //!   programmer writes through, built on the `updi` crate.
 //!
