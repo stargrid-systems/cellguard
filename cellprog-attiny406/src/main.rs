@@ -71,16 +71,22 @@ const APP_CAP: u32 = 128 * 1024;
 /// Cellagent app staging capacity (carved from the end of U104).
 const CELLAGENT_CAP: u32 = 4 * 1024;
 
-/// Cellcore flash offsets (relative to flash base) for each staged region.
+/// Boot section size on the AVR128DA64 (FUSE.BOOTSIZE = 8, units of 512 bytes).
 ///
-/// These are pending the cellcore app/boot partition decision (BOOTSZ fuse and
-/// application firmware layout). The bootloader lives at flash 0; the
-/// application base will be fixed once the application firmware exists.
-const BOOT_TARGET_BASE: u32 = 0;
-const APP_TARGET_BASE: u32 = 0;
+/// The bootloader self-programs the application from EEPROM at boot. Cellprog
+/// flashes the bootloader itself over UPDI (rare) and serves as fallback for
+/// catastrophic recovery via the heartbeat watchdog.
+const BOOT_SIZE: u32 = 8 * 512;
 
-/// tinyAVR flash base (data-space address of flash in the cellagent).
-const CELLAGENT_TARGET_BASE: u32 = 0x8000;
+/// Boot section starts at flash address 0 on AVR Dx.
+const BOOT_TARGET_BASE: u32 = 0x0000;
+
+/// Application starts right after the boot section.
+const APP_TARGET_BASE: u32 = BOOT_SIZE;
+
+/// tinyAVR flash offset 0. The data-space base (0x8000) is added internally
+/// by TinyProgrammer.
+const CELLAGENT_TARGET_BASE: u32 = 0x0000;
 
 /// USART receive timeout. Short enough that the heartbeat is sampled often.
 const RX_TIMEOUT_MS: u32 = 50;
@@ -191,28 +197,28 @@ fn main() -> ! {
 
     loop {
         // --- UART command link (returns within ~RX_TIMEOUT_MS) ---
-        if let Ok(byte) = usart.read_byte() {
-            if let Some(source) = supervisor.decode(byte) {
-                usart.set_frame(Frame::EIGHT_E_2);
-                let status = match source {
-                    ProgSource::CellagentAppStaged => {
-                        mux.cellagent_updi();
-                        let link = UsartUpdiLink::new(&mut usart);
-                        let mut writer = TinyNvmWriter::new(link);
-                        supervisor.program(source, &mut writer)
-                    }
-                    _ => {
-                        mux.cellcore_updi();
-                        let link = UsartUpdiLink::new(&mut usart);
-                        let mut writer = UpdiNvmWriter::new(link);
-                        supervisor.program(source, &mut writer)
-                    }
-                };
-                usart.set_frame(Frame::EIGHT_N_1);
-                mux.cellcore_uart();
-                if let Some(reply) = supervisor.reply(status) {
-                    let _ = usart.write_all(reply);
+        if let Ok(byte) = usart.read_byte()
+            && let Some(source) = supervisor.decode(byte)
+        {
+            usart.set_frame(Frame::EIGHT_E_2);
+            let status = match source {
+                ProgSource::CellagentAppStaged => {
+                    mux.cellagent_updi();
+                    let link = UsartUpdiLink::new(&mut usart);
+                    let mut writer = TinyNvmWriter::new(link);
+                    supervisor.program(source, &mut writer)
                 }
+                _ => {
+                    mux.cellcore_updi();
+                    let link = UsartUpdiLink::new(&mut usart);
+                    let mut writer = UpdiNvmWriter::new(link);
+                    supervisor.program(source, &mut writer)
+                }
+            };
+            usart.set_frame(Frame::EIGHT_N_1);
+            mux.cellcore_uart();
+            if let Some(reply) = supervisor.reply(status) {
+                let _ = usart.write_all(reply);
             }
         }
 
@@ -281,5 +287,6 @@ impl MuxSelect {
 /// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
+    #[expect(clippy::empty_loop)]
     loop {}
 }
