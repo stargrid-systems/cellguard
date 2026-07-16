@@ -13,7 +13,13 @@ bench = false
 [dependencies]
 avr-device = { version = "0.8", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
+cellboot = { path = "../libraries/cellboot", features = ["drivers"] }
+cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader"] }
+cellprog = { path = "../libraries/cellprog" }
+cat25 = { path = "../libraries/cat25" }
 embedded-hal = { version = "1", default-features = false }
+embedded-hal-bus = { version = "0.3", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
 updi = { path = "../libraries/updi" }
 
 [patch.crates-io]

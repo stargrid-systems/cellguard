@@ -92,12 +92,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "cat25"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+]
+
+[[package]]
+name = "cellboot"
+version = "0.1.0"
+dependencies = [
+ "cat25",
+ "embedded-hal",
+]
+
+[[package]]
+name = "cellguard-protocol"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "zerocopy",
+]
+
+[[package]]
+name = "cellprog"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-protocol",
+ "crc",
+ "updi",
+]
+
+[[package]]
 name = "cellprog-attiny406"
 version = "0.1.0"
 dependencies = [
  "avr-device",
  "avrxt-hal",
+ "cat25",
+ "cellboot",
+ "cellguard-protocol",
+ "cellprog",
  "embedded-hal",
+ "embedded-hal-bus",
+ "embedded-io",
  "updi",
 ]
 
@@ -121,6 +160,10 @@ checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "crc"
+version = "0.1.0"
 
 [[package]]
 name = "critical-section"
@@ -150,6 +193,16 @@ name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
+
+[[package]]
+name = "embedded-hal-bus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513e0b3a8fb7d3013a8ae17a834283f170deaf7d0eeab0a7c1a36ad4dd356d22"
+dependencies = [
+ "critical-section",
+ "embedded-hal",
+]
 
 [[package]]
 name = "embedded-io"
@@ -860,6 +913,26 @@ dependencies = [
  "quote",
  "syn 2.0.110",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.110",
 ]
 
 [[package]]
