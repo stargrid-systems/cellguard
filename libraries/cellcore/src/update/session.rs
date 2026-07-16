@@ -146,9 +146,8 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// reboot.
     ///
     /// There is no rollback enforcement, so if programming never happens (for
-    /// example power is lost first) the still-working old image keeps running
-    /// and the golden image covers a genuinely broken app. Dropping an update is
-    /// safe.
+    /// example power is lost first) the still-working old image keeps running.
+    /// Dropping an update is safe.
     #[must_use]
     pub fn take_pending_program(&mut self) -> Option<Region> {
         let region = self.pending_program()?;
