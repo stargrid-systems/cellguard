@@ -129,6 +129,7 @@ dependencies = [
  "cellcore-runtime",
  "embedded-hal",
  "embedded-hal-bus",
+ "tca9535",
 ]
 
 [[package]]
@@ -756,6 +757,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.110",
+]
+
+[[package]]
+name = "tca9535"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
 ]
 
 [[package]]
