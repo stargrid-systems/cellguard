@@ -68,6 +68,8 @@ const NODE_ID: u8 = 2;
 
 /// App staging EEPROM capacity (U104, CAT25M01, 128 KB).
 const APP_CAP: u32 = 128 * 1024;
+/// Cellagent app staging capacity (carved from the end of U104).
+const CELLAGENT_CAP: u32 = 4 * 1024;
 
 /// Cellcore flash offsets (relative to flash base) for each staged region.
 ///
@@ -76,6 +78,9 @@ const APP_CAP: u32 = 128 * 1024;
 /// application base will be fixed once the application firmware exists.
 const BOOT_TARGET_BASE: u32 = 0;
 const APP_TARGET_BASE: u32 = 0;
+
+/// tinyAVR flash base (data-space address of flash in the cellagent).
+const CELLAGENT_TARGET_BASE: u32 = 0x8000;
 
 /// USART receive timeout. Short enough that the heartbeat is sampled often.
 const RX_TIMEOUT_MS: u32 = 50;
@@ -140,6 +145,10 @@ fn main() -> ! {
         bootloader: SourceSlot {
             image_offset: APP_CAP,
             target_base: BOOT_TARGET_BASE,
+        },
+        cellagent: SourceSlot {
+            image_offset: APP_CAP - CELLAGENT_CAP,
+            target_base: CELLAGENT_TARGET_BASE,
         },
     };
     let mut supervisor = Supervisor::<_, 128>::new(store, layout, NODE_ID);

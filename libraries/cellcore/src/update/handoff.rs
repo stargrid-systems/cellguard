@@ -34,6 +34,7 @@ pub const fn source_for(region: Region) -> Option<ProgSource> {
     match region {
         Region::ApplicationCode => Some(ProgSource::AppStaged),
         Region::Bootloader => Some(ProgSource::BootloaderStaged),
+        Region::CellagentApp => Some(ProgSource::CellagentAppStaged),
         _ => None,
     }
 }
@@ -81,6 +82,10 @@ mod tests {
         assert_eq!(
             source_for(Region::Bootloader),
             Some(ProgSource::BootloaderStaged)
+        );
+        assert_eq!(
+            source_for(Region::CellagentApp),
+            Some(ProgSource::CellagentAppStaged)
         );
         assert_eq!(source_for(Region::Factory), None);
     }

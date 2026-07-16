@@ -14,6 +14,8 @@ pub enum ProgSource {
     AppStaged,
     /// The bootloader image staged in the Bootloader region.
     BootloaderStaged,
+    /// The cellagent application image.
+    CellagentAppStaged,
 }
 
 impl ProgSource {
@@ -23,6 +25,7 @@ impl ProgSource {
         match self {
             Self::AppStaged => 0,
             Self::BootloaderStaged => 1,
+            Self::CellagentAppStaged => 2,
         }
     }
 
@@ -32,6 +35,7 @@ impl ProgSource {
         match code {
             0 => Some(Self::AppStaged),
             1 => Some(Self::BootloaderStaged),
+            2 => Some(Self::CellagentAppStaged),
             _ => None,
         }
     }
@@ -84,10 +88,11 @@ mod tests {
         for source in [
             ProgSource::AppStaged,
             ProgSource::BootloaderStaged,
+            ProgSource::CellagentAppStaged,
         ] {
             assert_eq!(ProgSource::from_code(source.to_code()), Some(source));
         }
-        assert_eq!(ProgSource::from_code(2), None);
+        assert_eq!(ProgSource::from_code(3), None);
     }
 
     #[test]

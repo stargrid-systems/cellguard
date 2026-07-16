@@ -102,6 +102,7 @@ mod tests {
 
     const KEY: &[u8] = b"dispatch-test-key";
     const TARGET: u16 = 0x33;
+    const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
     const CAP: usize = 4096;
 
@@ -159,11 +160,16 @@ mod tests {
                 offset: 2048,
                 capacity: 2048,
             },
+            cellagent: RegionSlot {
+                offset: 3072,
+                capacity: 1024,
+            },
         };
         let agent = UpdateAgent::new(
             MemStore { buf: [0; CAP] },
             layout,
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,

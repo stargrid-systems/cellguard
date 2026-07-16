@@ -38,6 +38,8 @@ const NODE_ID: u8 = 1;
 const PROG_ID: u8 = 2;
 /// The image `target_id` this device accepts. Placeholder.
 const TARGET_ID: u16 = 1;
+/// The cellagent's image target_id. Placeholder until provisioned.
+const CELLAGENT_TARGET_ID: u16 = 2;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -87,11 +89,16 @@ fn main() -> ! {
             offset: 2048,
             capacity: 2048,
         },
+        cellagent: RegionSlot {
+            offset: 3072,
+            capacity: 1024,
+        },
     };
     let agent = UpdateAgent::new(
         RamImageStore::<STAGE_CAP>::new(),
         layout,
         TARGET_ID,
+        CELLAGENT_TARGET_ID,
         &key,
         NoKeyStore,
         state_store,

@@ -60,6 +60,8 @@ const NODE_ID: u8 = 1;
 const PROG_ID: u8 = 2;
 /// The image `target_id` this device accepts. Placeholder until provisioned.
 const TARGET_ID: u16 = 1;
+/// The cellagent's image target_id. Placeholder until provisioned.
+const CELLAGENT_TARGET_ID: u16 = 2;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -73,6 +75,8 @@ const STATE_LEN: u16 = 64;
 const APP_CAP: u32 = 128 * 1024;
 /// Boot staging EEPROM capacity (U105, CAT25128, 16 KB).
 const BOOT_CAP: u32 = 16 * 1024;
+/// Cellagent app staging capacity (carved from the end of U104).
+const CELLAGENT_CAP: u32 = 4 * 1024;
 
 /// Heartbeat toggle interval in RTC ticks (~1.024 kHz). 256 ticks = 250 ms.
 const HEARTBEAT_TICKS: u16 = 256;
@@ -136,7 +140,11 @@ fn main() -> ! {
     let layout = StagingLayout {
         application: RegionSlot {
             offset: 0,
-            capacity: APP_CAP,
+            capacity: APP_CAP - CELLAGENT_CAP,
+        },
+        cellagent: RegionSlot {
+            offset: APP_CAP - CELLAGENT_CAP,
+            capacity: CELLAGENT_CAP,
         },
         bootloader: RegionSlot {
             offset: APP_CAP,
@@ -147,6 +155,7 @@ fn main() -> ! {
         store,
         layout,
         TARGET_ID,
+        CELLAGENT_TARGET_ID,
         &key,
         NoKeyStore,
         state_store,

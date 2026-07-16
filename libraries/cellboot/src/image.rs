@@ -66,6 +66,8 @@ pub enum Region {
     Bootloader,
     /// The factory settings region.
     Factory,
+    /// The cellagent application region.
+    CellagentApp,
 }
 
 impl Region {
@@ -76,6 +78,7 @@ impl Region {
             Self::ApplicationCode => 0,
             Self::Bootloader => 1,
             Self::Factory => 2,
+            Self::CellagentApp => 3,
         }
     }
 
@@ -86,6 +89,7 @@ impl Region {
             0 => Some(Self::ApplicationCode),
             1 => Some(Self::Bootloader),
             2 => Some(Self::Factory),
+            3 => Some(Self::CellagentApp),
             _ => None,
         }
     }

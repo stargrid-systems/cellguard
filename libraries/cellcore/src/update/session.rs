@@ -37,6 +37,8 @@ pub struct StagingLayout {
     pub application: RegionSlot,
     /// Slot for [`Region::Bootloader`].
     pub bootloader: RegionSlot,
+    /// Slot for [`Region::CellagentApp`].
+    pub cellagent: RegionSlot,
 }
 
 impl StagingLayout {
@@ -44,6 +46,7 @@ impl StagingLayout {
         match region {
             Region::ApplicationCode => Some(self.application),
             Region::Bootloader => Some(self.bootloader),
+            Region::CellagentApp => Some(self.cellagent),
             // The factory region, and any region added later, is not a
             // firmware-update target.
             _ => None,
@@ -73,6 +76,7 @@ pub struct UpdateAgent<'k, S, K, St> {
     store: S,
     layout: StagingLayout,
     target_id: u16,
+    cellagent_target_id: u16,
     key: &'k [u8],
     key_store: K,
     state_store: St,
@@ -84,15 +88,22 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Creates an agent.
     ///
     /// `target_id` is this device's identity, used to reject images built for a
-    /// different device. `key` is the shared HMAC key, normally a slice over
-    /// the USERROW. `key_store` writes a replacement key (use
+    /// different device. `cellagent_target_id` is the cellagent's identity,
+    /// used to verify cellagent images relayed through the cellcore. `key` is
+    /// the shared HMAC key, normally a slice over the USERROW. `key_store`
+    /// writes a replacement key (use
     /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production). `state_store`
     /// persists the probe-able state, and `state` is the state already loaded
     /// from it at boot (see [`crate::update::state::load`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct, required piece of hardware state"
+    )]
     pub const fn new(
         store: S,
         layout: StagingLayout,
         target_id: u16,
+        cellagent_target_id: u16,
         key: &'k [u8],
         key_store: K,
         state_store: St,
@@ -102,6 +113,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             store,
             layout,
             target_id,
+            cellagent_target_id,
             key,
             key_store,
             state_store,
@@ -200,7 +212,11 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let Ok((header, verifier)) = Verifier::new(HMAC::new(self.key), header_bytes) else {
             return Response::Nack(NackReason::Malformed);
         };
-        if header.target_id != self.target_id {
+        let expected_id = match header.region {
+            Region::CellagentApp => self.cellagent_target_id,
+            _ => self.target_id,
+        };
+        if header.target_id != expected_id {
             return Response::Nack(NackReason::WrongTarget);
         }
         let Some(slot) = self.layout.slot(header.region) else {
@@ -318,6 +334,7 @@ mod tests {
 
     const KEY: &[u8] = b"session-test-key";
     const TARGET: u16 = 0x2A2A;
+    const CELLAGENT_TARGET: u16 = 0x2B2B;
     const CAP: usize = 4096;
 
     struct MemStore {
@@ -403,7 +420,11 @@ mod tests {
             },
             bootloader: RegionSlot {
                 offset: 2048,
-                capacity: 2048,
+                capacity: 1024,
+            },
+            cellagent: RegionSlot {
+                offset: 3072,
+                capacity: 1024,
             },
         }
     }
@@ -459,6 +480,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -494,6 +516,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -516,6 +539,7 @@ mod tests {
             MemStore::new(),
             layout(),
             0x9999,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -535,6 +559,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -556,6 +581,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -578,6 +604,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -624,6 +651,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             store,
             NullStateStore,
@@ -647,6 +675,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             store,
             NullStateStore,
@@ -667,6 +696,7 @@ mod tests {
             MemStore::new(),
             layout(),
             TARGET,
+            CELLAGENT_TARGET,
             KEY,
             NoKeyStore,
             NullStateStore,
@@ -692,6 +722,7 @@ mod tests {
                 MemStore::new(),
                 layout(),
                 TARGET,
+                CELLAGENT_TARGET,
                 KEY,
                 NoKeyStore,
                 SharedStore(&backing),
@@ -721,6 +752,7 @@ mod tests {
                 MemStore::new(),
                 layout(),
                 TARGET,
+                CELLAGENT_TARGET,
                 KEY,
                 NoKeyStore,
                 SharedStore(&backing),

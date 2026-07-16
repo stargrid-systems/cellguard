@@ -58,6 +58,8 @@ pub struct ProgLayout {
     pub app: SourceSlot,
     /// Slot for [`ProgSource::BootloaderStaged`].
     pub bootloader: SourceSlot,
+    /// Slot for [`ProgSource::CellagentAppStaged`].
+    pub cellagent: SourceSlot,
 }
 
 impl ProgLayout {
@@ -65,6 +67,7 @@ impl ProgLayout {
         match source {
             ProgSource::AppStaged => self.app,
             ProgSource::BootloaderStaged => self.bootloader,
+            ProgSource::CellagentAppStaged => self.cellagent,
         }
     }
 }
@@ -255,6 +258,10 @@ mod tests {
             bootloader: SourceSlot {
                 image_offset: 512,
                 target_base: 0,
+            },
+            cellagent: SourceSlot {
+                image_offset: 1024,
+                target_base: 0x8000,
             },
         }
     }
