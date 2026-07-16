@@ -16,15 +16,21 @@
 //! - USART1 (PC4/PC5) is the RS485 field bus (LAST/upstream link).
 //! - USART3 (PB0/PB1) is the local link to the ATtiny406 PROG programmer.
 //!
-//! The agent stages App and Boot images, banded into one address space, so the
-//! Factory (golden) chip is left to the PROG programmer's recovery path.
+//! The agent stages App and Boot images, banded into one address space, then
+//! hands them to the PROG programmer.
+//!
+//! The main loop also drives the cellcore heartbeat: U103 P12
+//! (`AVR64_TO_PROG`) is toggled over I2C1 roughly every 250 ms using the RTC
+//! as a time base, so the cellprog's watchdog knows the cellcore is alive.
 
 use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::spi::{Prescaler, Spi};
+use avrxt_hal::twi::Twi;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{CAT25128, CAT25M01, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
@@ -35,6 +41,7 @@ use cellcore::update::state;
 use cellcore_runtime::{BandedStore, CoreRuntime};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
+use tca9535::{Address, PinIndex, Tca9535};
 
 use core::cell::RefCell;
 use core::panic::PanicInfo;
@@ -66,6 +73,12 @@ const STATE_LEN: u16 = 64;
 const APP_CAP: u32 = 128 * 1024;
 /// Boot staging EEPROM capacity (U105, CAT25128, 16 KB).
 const BOOT_CAP: u32 = 16 * 1024;
+
+/// Heartbeat toggle interval in RTC ticks (~1.024 kHz). 256 ticks = 250 ms.
+const HEARTBEAT_TICKS: u16 = 256;
+
+/// USART1 receive timeout in ms. Short enough that the heartbeat is serviced.
+const BUS_RX_TIMEOUT_MS: u32 = 10;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -146,15 +159,51 @@ fn main() -> ! {
     dp.PORTMUX.usartroutea().modify(|_, w| w.usart1().alt1());
     let _bus_tx = portc.p4.into_output_high();
     let _bus_rx = portc.p5.into_input();
-    let bus = build_usart(Usart::builder(dp.USART1, F_CPU.hz()).baud(BUS_BAUD));
+    let bus = build_usart(
+        Usart::builder(dp.USART1, F_CPU.hz())
+            .baud(BUS_BAUD)
+            .rx_timeout_ms(BUS_RX_TIMEOUT_MS),
+    );
 
     // USART3 = link to the PROG programmer on the default PB0/PB1 pins.
     let _prog_tx = portb.p0.into_output_high();
     let _prog_rx = portb.p1.into_input();
     let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
 
+    // I2C1 (TWI1) internal bus. PB2 SDA, PB3 SCL (default pins, no PORTMUX).
+    // Reaches U103 (TCA9535 @0x20). External pull-ups on the board.
+    let mut expander = Tca9535::new(Twi::new(dp.TWI1, F_CPU.hz(), 100_000), Address::Lll);
+
+    // Configure U103 P12 (AVR64_TO_PROG) as output. Cache the output register
+    // so the loop toggles with a single I2C write (no read-modify-write).
+    let mut heartbeat_out: u16 = {
+        let cfg = expander
+            .read_configuration()
+            .map(|c| c.with_output(PinIndex::P12))
+            .unwrap_or_else(|_| tca9535::Configuration(0xFFFF).with_output(PinIndex::P12));
+        let _ = expander.write_configuration(cfg);
+        let out = expander.read_output().map(|o| o.0).unwrap_or(0xFFFF);
+        let out = out | PinIndex::P12.mask();
+        let _ = expander.write_output(tca9535::Output(out));
+        out
+    };
+
+    // RTC as a free-running time base (~1.024 kHz, ~64 s before wrap).
+    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
+
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
-    runtime.run();
+
+    let mut last_toggle = rtc.count();
+    loop {
+        runtime.try_service();
+
+        let now = rtc.count();
+        if now.wrapping_sub(last_toggle) >= HEARTBEAT_TICKS {
+            heartbeat_out ^= PinIndex::P12.mask();
+            let _ = expander.write_output(tca9535::Output(heartbeat_out));
+            last_toggle = now;
+        }
+    }
 }
 
 /// Finishes a USART builder as 8N1, halting the core if the baud is unattainable.

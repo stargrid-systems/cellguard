@@ -19,6 +19,7 @@ cellcore-runtime = { path = "../libraries/cellcore-runtime" }
 cat25 = { path = "../libraries/cat25" }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-bus = { version = "0.3", default-features = false }
+tca9535 = { path = "../libraries/tca9535" }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
