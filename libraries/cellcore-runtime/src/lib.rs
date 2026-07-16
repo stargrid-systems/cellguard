@@ -145,15 +145,24 @@ where
     ///
     /// Blocks on the bus for one byte at a time and services it. This is the
     /// simple dedicated driver; an application with other duties can call
-    /// [`CoreRuntime::service`] from its own event loop instead.
+    /// [`CoreRuntime::try_service`] from its own event loop instead.
     pub fn run(&mut self) -> ! {
         loop {
-            let mut buf = [0u8; 1];
-            if self.bus.read_exact(&mut buf).is_ok()
-                && let Some(&byte) = buf.first()
-            {
-                self.service(byte);
-            }
+            self.try_service();
+        }
+    }
+
+    /// Attempts to read and service one bus byte.
+    ///
+    /// If no byte arrives within the bus receive timeout, returns immediately.
+    /// Call this from a custom event loop that has other periodic duties, like
+    /// a heartbeat toggle.
+    pub fn try_service(&mut self) {
+        let mut buf = [0u8; 1];
+        if self.bus.read_exact(&mut buf).is_ok()
+            && let Some(&byte) = buf.first()
+        {
+            self.service(byte);
         }
     }
 
