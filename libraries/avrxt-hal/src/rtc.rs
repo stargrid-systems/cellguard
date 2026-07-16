@@ -119,3 +119,5 @@ impl_rtc_instance!(avr_device::avr128db48::RTC);
 impl_rtc_instance!(avr_device::avr128db64::RTC);
 #[cfg(feature = "avr128da64")]
 impl_rtc_instance!(avr_device::avr128da64::RTC);
+#[cfg(feature = "attiny406")]
+impl_rtc_instance!(avr_device::attiny406::RTC);
