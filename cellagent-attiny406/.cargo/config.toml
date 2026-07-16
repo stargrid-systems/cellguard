@@ -1,6 +1,6 @@
 [build]
 target = "avr-none"
-rustflags = ["-C", "target-cpu=attiny416"]
+rustflags = ["-C", "target-cpu=attiny406"]
 
 [unstable]
 build-std = ["core"]

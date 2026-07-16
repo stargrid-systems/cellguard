@@ -13,6 +13,7 @@ use embedded_hal::spi::{self, Mode, SpiBus};
     feature = "avr128db64",
     feature = "avr128da64",
     feature = "attiny406",
+    feature = "attiny416",
 ))]
 use embedded_hal::spi::{Phase, Polarity};
 
@@ -159,7 +160,7 @@ macro_rules! impl_spis {
 // accessors. With `CLK2X` left at its reset value of 0 the dividers match
 // `Prescaler` one-for-one.
 macro_rules! impl_spi_instance_tiny {
-    ($SPI:ty) => {
+    ($SPI:ty, $flag:ident) => {
         impl SpiInstance for $SPI {
             fn configure(&self, mode: Mode, prescaler: Prescaler) {
                 self.ctrlb().write(|w| {
@@ -183,7 +184,7 @@ macro_rules! impl_spi_instance_tiny {
             }
             fn transfer_byte(&self, byte: u8) -> u8 {
                 self.data().write(|w| w.set(byte));
-                crate::wait::spin_until(|| self.intflags().read().if_().bit_is_set());
+                crate::wait::spin_until(|| self.intflags().read().$flag().bit_is_set());
                 self.data().read().bits()
             }
         }
@@ -198,4 +199,6 @@ impl_spis!(avr_device::avr128db64::SPI0, avr_device::avr128db64::SPI1);
 impl_spis!(avr_device::avr128da64::SPI0, avr_device::avr128da64::SPI1);
 // tinyAVR has a single SPI0 with the enum-typed `PRESC` field.
 #[cfg(feature = "attiny406")]
-impl_spi_instance_tiny!(avr_device::attiny406::SPI0);
+impl_spi_instance_tiny!(avr_device::attiny406::SPI0, if_);
+#[cfg(feature = "attiny416")]
+impl_spi_instance_tiny!(avr_device::attiny416::SPI0, default_if);

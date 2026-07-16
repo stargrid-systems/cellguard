@@ -9,12 +9,13 @@
 //! - [`Cat25Store`] (feature `drivers`): [`ImageStore`](crate::io::ImageStore)
 //!   over a CAT25 SPI EEPROM, shared by both the main MCU (which writes the
 //!   staged image) and the PROG MCU (which reads it back).
-//! - [`EepromState`], [`UserRowKeyStore`] (feature `avr128`): the AVR128
-//!   on-chip [`StateStore`](crate::io::StateStore) and
-//!   [`KeyStore`](crate::io::KeyStore).
+//! - [`EepromState`], [`UserRowKeyStore`], [`FlashNvmWriter`] (feature
+//!   `avr128`): the AVR128 on-chip [`StateStore`](crate::io::StateStore),
+//!   [`KeyStore`](crate::io::KeyStore), and
+//!   [`NvmWriter`](crate::io::NvmWriter).
 
 #[cfg(feature = "avr128")]
-pub use self::avr128::{EepromState, UserRowKeyStore};
+pub use self::avr128::{EepromState, FlashNvmWriter, UserRowKeyStore};
 #[cfg(feature = "drivers")]
 pub use self::cat25::Cat25Store;
 

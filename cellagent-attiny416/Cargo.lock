@@ -92,12 +92,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellagent"
+version = "0.1.0"
+dependencies = [
+ "cellguard-protocol",
+ "embedded-io",
+]
+
+[[package]]
 name = "cellagent-attiny416"
 version = "0.1.0"
 dependencies = [
  "avr-device",
  "avrxt-hal",
+ "cellagent",
+ "cellguard-protocol",
  "embedded-hal",
+ "embedded-io",
+]
+
+[[package]]
+name = "cellguard-protocol"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "zerocopy",
 ]
 
 [[package]]
@@ -120,6 +139,10 @@ checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
 dependencies = [
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "crc"
+version = "0.1.0"
 
 [[package]]
 name = "critical-section"
@@ -855,6 +878,26 @@ dependencies = [
  "quote",
  "syn 2.0.110",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.110",
 ]
 
 [[package]]

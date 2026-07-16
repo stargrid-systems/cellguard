@@ -3,14 +3,6 @@
 version = 4
 
 [[package]]
-name = "ads131m08"
-version = "0.1.0"
-dependencies = [
- "embedded-hal",
- "embedded-hal-mock",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -51,8 +43,10 @@ source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb0
 dependencies = [
  "anyhow",
  "atdf2svd",
+ "avr-device-macros",
  "bare-metal",
  "cfg-if",
+ "critical-section",
  "prettyplease",
  "svd-rs",
  "svd2rust",
@@ -63,13 +57,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "avr-device-macros"
+version = "0.8.1"
+source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb03874bc456b329f4c141f1a08e#73ba68ab5bd7bb03874bc456b329f4c141f1a08e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "avrxt-hal"
 version = "0.1.0"
 dependencies = [
  "avr-device",
  "embedded-hal",
  "embedded-io",
- "ufmt",
 ]
 
 [[package]]
@@ -80,20 +83,12 @@ checksum = "f8fe8f5a8a398345e52358e18ff07cc17a568fbca5c6f73873d3a62056309603"
 
 [[package]]
 name = "bstr"
-version = "1.12.3"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cee35f73844aa3014bb606320a6c1f010249dbdf43342fe54b5a4f6a8ed4b79"
+checksum = "1f7dc094d718f2e1c1559ad110e27eeaae14a5465d3d56dd6dbd793079fbd530"
 dependencies = [
  "memchr",
  "serde_core",
-]
-
-[[package]]
-name = "cat25"
-version = "0.1.0"
-dependencies = [
- "embedded-hal",
- "embedded-hal-mock",
 ]
 
 [[package]]
@@ -105,32 +100,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "cellboot"
+name = "cellagent-attiny406"
 version = "0.1.0"
 dependencies = [
+ "avr-device",
  "avrxt-hal",
- "cat25",
+ "cellagent",
+ "cellguard-protocol",
  "embedded-hal",
- "embedded-hal-mock",
-]
-
-[[package]]
-name = "cellcore"
-version = "0.1.0"
-dependencies = [
- "cellboot",
- "cellguard-protocol",
- "crc",
- "hmac-sha256",
-]
-
-[[package]]
-name = "cellcore-runtime"
-version = "0.1.0"
-dependencies = [
- "cellboot",
- "cellcore",
- "cellguard-protocol",
  "embedded-io",
 ]
 
@@ -140,16 +117,6 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "zerocopy",
-]
-
-[[package]]
-name = "cellprog"
-version = "0.1.0"
-dependencies = [
- "cellboot",
- "cellguard-protocol",
- "crc",
- "updi",
 ]
 
 [[package]]
@@ -178,6 +145,12 @@ name = "crc"
 version = "0.1.0"
 
 [[package]]
+name = "critical-section"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -199,26 +172,6 @@ name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
-
-[[package]]
-name = "embedded-hal-mock"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a0f04f8886106faf281c47b6a0e4054a369baedaf63591fdb8da9761f3f379"
-dependencies = [
- "embedded-hal",
- "embedded-hal-nb",
-]
-
-[[package]]
-name = "embedded-hal-nb"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fba4268c14288c828995299e59b12babdbe170f6c6d73731af1b4648142e8605"
-dependencies = [
- "embedded-hal",
- "nb",
-]
 
 [[package]]
 name = "embedded-io"
@@ -258,9 +211,9 @@ dependencies = [
 
 [[package]]
 name = "globset"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
+checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
 dependencies = [
  "aho-corasick",
  "bstr",
@@ -292,12 +245,6 @@ checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
 ]
-
-[[package]]
-name = "hmac-sha256"
-version = "1.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
 name = "icu_collections"
@@ -446,12 +393,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "nb"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
-
-[[package]]
 name = "normpath"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,14 +406,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "p3t1755"
-version = "0.1.0"
-dependencies = [
- "embedded-hal",
- "embedded-hal-mock",
-]
 
 [[package]]
 name = "percent-encoding"
@@ -586,9 +519,9 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
 name = "regex"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -598,9 +531,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f388202e4b80542a0921078cc23b6333bcf1409c1e3f86404cae4766a6131db"
+checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -781,14 +714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tca9535"
-version = "0.1.0"
-dependencies = [
- "embedded-hal",
- "embedded-hal-mock",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -839,33 +764,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ufmt"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a64846ec02b57e9108d6469d98d1648782ad6bb150a95a9baac26900bbeab9d"
-dependencies = [
- "ufmt-macros",
- "ufmt-write",
-]
-
-[[package]]
-name = "ufmt-macros"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d337d3be617449165cb4633c8dece429afd83f84051024079f97ad32a9663716"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "ufmt-write"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e87a2ed6b42ec5e28cc3b94c09982969e9227600b2e3dcbc1db927a84c06bd69"
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -876,10 +774,6 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
-
-[[package]]
-name = "updi"
-version = "0.1.0"
 
 [[package]]
 name = "url"

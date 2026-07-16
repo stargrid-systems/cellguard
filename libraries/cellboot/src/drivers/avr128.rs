@@ -1,14 +1,15 @@
 //! On-chip NVM adapters for AVR128, backed by `avrxt-hal`.
 //!
 //! Both adapters borrow a single shared [`Nvm`] and a [`CcpUnlock`] handle
-//! (the device `CPU`), because there is one `NVMCTRL` peripheral but two
-//! logical stores: the state store in EEPROM and the key store in USERROW. The
-//! firmware owns the `Nvm` and hands each adapter a reference.
+//! (the device `CPU`), because there is one `NVMCTRL` peripheral but several
+//! logical stores: the state store in EEPROM, the key store in USERROW, and the
+//! flash writer for self-programming. The firmware owns the `Nvm` and hands
+//! each adapter a reference.
 
 use avrxt_hal::clock::CcpUnlock;
 use avrxt_hal::nvmctrl::{Nvm, NvmError, NvmInstance};
 
-use crate::io::{KeyStore, StateStore};
+use crate::io::{KeyStore, NvmWriter, StateStore};
 
 /// A [`StateStore`] backed by a slot in the on-chip EEPROM.
 ///
@@ -81,5 +82,69 @@ impl<T: NvmInstance, C: CcpUnlock> KeyStore for UserRowKeyStore<'_, T, C> {
 
     fn write_key(&mut self, key: &[u8]) -> Result<(), Self::Error> {
         self.nvm.write_userrow(key, self.cpu)
+    }
+}
+
+/// An [`NvmWriter`] backed by `Nvm` flash self-programming.
+///
+/// This adapts [`Nvm::write_flash`] to the streaming [`NvmWriter`] contract.
+/// Each flash page is erased the first time a write touches it, then the bytes
+/// stream straight to flash, so a sub-page or page-straddling chunk is handled
+/// without buffering a whole page. The page-erase bookkeeping mirrors the UPDI
+/// programmer: a single `erased_page` tracker assumes writes arrive in
+/// ascending, contiguous order.
+pub struct FlashNvmWriter<'a, T: NvmInstance, C: CcpUnlock> {
+    nvm: &'a Nvm<T>,
+    cpu: &'a C,
+    erased_page: Option<u32>,
+}
+
+impl<'a, T: NvmInstance, C: CcpUnlock> FlashNvmWriter<'a, T, C> {
+    /// Binds a flash writer to a shared `Nvm` and `CPU` handle.
+    #[must_use]
+    pub const fn new(nvm: &'a Nvm<T>, cpu: &'a C) -> Self {
+        Self {
+            nvm,
+            cpu,
+            erased_page: None,
+        }
+    }
+}
+
+impl<T: NvmInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
+    type Error = NvmError;
+
+    fn begin(&mut self) -> Result<(), Self::Error> {
+        self.erased_page = None;
+        Ok(())
+    }
+
+    fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
+        let mut addr = address;
+        let mut rest = data;
+        while !rest.is_empty() {
+            let page = addr / T::FLASH_PAGE_SIZE;
+            if self.erased_page != Some(page) {
+                self.nvm
+                    .erase_flash_page(self.cpu, page.saturating_mul(T::FLASH_PAGE_SIZE))?;
+                self.erased_page = Some(page);
+            }
+            let page_end = page.saturating_add(1).saturating_mul(T::FLASH_PAGE_SIZE);
+            let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
+            let n = rest.len().min(room);
+            let (chunk, tail) = rest.split_at(n);
+            self.nvm.write_flash(self.cpu, addr, chunk)?;
+            addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+            rest = tail;
+        }
+        Ok(())
+    }
+
+    fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
+        self.nvm.read_flash(self.cpu, address, buf)
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        Ok(())
     }
 }

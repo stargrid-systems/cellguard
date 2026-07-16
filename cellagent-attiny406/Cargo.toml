@@ -1,7 +1,7 @@
 [package]
-name = "cellagent-attiny416"
+name = "cellagent-attiny406"
 version = "0.1.0"
-description = "Cellagent firmware for the ATtiny416 Xplained Nano devkit."
+description = "Cellagent firmware for the production CellGuard board (ATTINY406)."
 authors = ["Simon Berger <simon@siku2.io>"]
 edition = "2024"
 license = "AGPL-3.0-or-later"
@@ -9,13 +9,13 @@ publish = false
 rust-version = "1.93"
 
 [[bin]]
-name = "cellagent-attiny416"
+name = "cellagent-attiny406"
 test = false
 bench = false
 
 [dependencies]
-avr-device = { version = "0.8", features = ["attiny416", "rt"] }
-avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny416"] }
+avr-device = { version = "0.8", features = ["attiny406", "rt"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellagent = { path = "../libraries/cellagent" }
 cellguard-protocol = { path = "../libraries/cellguard-protocol" }
 embedded-hal = { version = "1", default-features = false }

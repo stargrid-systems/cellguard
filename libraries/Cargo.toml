@@ -4,6 +4,7 @@ members = [
     "ads131m08",
     "avrxt-hal",
     "cat25",
+    "cellagent",
     "cellboot",
     "cellcore",
     "cellcore-runtime",
@@ -47,6 +48,7 @@ unwrap_used = "warn"
 [workspace.dependencies]
 avrxt-hal = { path = "avrxt-hal" }
 cat25 = { path = "cat25" }
+cellagent = { path = "cellagent" }
 cellboot = { path = "cellboot" }
 cellcore = { path = "cellcore" }
 cellguard-protocol = { path = "cellguard-protocol" }

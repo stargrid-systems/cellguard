@@ -2,18 +2,47 @@
 #![no_main]
 #![feature(abi_avr_interrupt)]
 
-use core::panic::PanicInfo;
+//! Cellagent devkit firmware for the ATtiny416 Xplained Nano.
+//!
+//! Mirrors `cellagent-attiny406` but targets the ATtiny416 on the Xplained Nano
+//! dev board. The production balancer gates, the LM61, and OUT_TINY_ALL_OFF do
+//! not exist on the devkit, so this firmware uses mock hardware: gate state is
+//! stored but drives no pins, and the temperature is a fixed value. PB5 (the
+//! on-board LED) stands in for the ALIVE heartbeat. USART0 (PB2/PB3) carries the
+//! `cellguard-protocol` link as on the production board.
 
 use avr_device::attiny416 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
-use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
-use embedded_hal::delay::DelayNs;
+use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
+use avrxt_hal::usart::{Frame, Usart};
+use cellagent::{CellagentRuntime, GateControl, TempSensor};
 use embedded_hal::digital::StatefulOutputPin;
+
+use core::panic::PanicInfo;
+
+/// Main clock: 20 MHz internal, prescaler off.
+const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
+const PRESCALER: Option<ClkPrescaler> = None;
+
+/// Baud on the cellcore UART link.
+const BAUD: u32 = 115_200;
+
+/// This node's address on the cellcore link. Placeholder until provisioned.
+const NODE_ID: u8 = 3;
+
+/// USART receive timeout in ms. Short enough that the heartbeat is serviced
+/// even when the link is idle.
+const RX_TIMEOUT_MS: u32 = 50;
+
+/// Heartbeat toggle interval in RTC ticks (~1.024 kHz). 256 ticks ~= 250 ms.
+const HEARTBEAT_TICKS: u16 = 256;
+
+/// Fixed temperature returned by the mock sensor (25.00 C).
+const MOCK_TEMP_CENTI: i16 = 2500;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    // Firmware has panicked, so stop all interrupts and halt.
     avr_device::interrupt::disable();
     loop {}
 }
@@ -22,20 +51,70 @@ fn panic(_info: &PanicInfo) -> ! {
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
 
-    // Run the main clock at full speed (prescaler off). The ATtiny416 Xplained
-    // Nano ships with the OSCCFG fuse at 20 MHz. Derive the delay clock from the
-    // same base and prescaler so they cannot drift apart.
-    const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
-    const PRESCALER: Option<ClkPrescaler> = None;
+    // Run the main clock at full speed (20 MHz).
     clock::set_main_clock_prescaler(&dp.CPU, &dp.CLKCTRL, PRESCALER);
-    let mut delay = Delay::new(BASE_FREQ.clk_per_hz(PRESCALER));
+    let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
 
-    // PB5 drives the on-board LED (active low). Start high, i.e. off.
-    let pins = Port::new(dp.PORTB).split();
-    let mut led = pins.p5.into_output_high();
+    let portb = Port::new(dp.PORTB).split();
 
+    // PB5 is the on-board LED (active low) on the Xplained Nano. Used as the
+    // ALIVE heartbeat.
+    let mut alive = portb.p5.into_output_high();
+
+    // USART0 on PB2 (TxD) / PB3 (RxD), 8N1.
+    let _tx = portb.p2.into_output_high();
+    let _rx = portb.p3.into_input();
+    let mut usart = Usart::builder(dp.USART0, f_cpu)
+        .baud(BAUD)
+        .frame(Frame::EIGHT_N_1)
+        .rx_timeout_ms(RX_TIMEOUT_MS)
+        .build()
+        .unwrap_or_else(|_| halt());
+
+    // RTC as a free-running time base (~1.024 kHz).
+    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
+
+    let mut runtime = CellagentRuntime::new(NODE_ID);
+    let mut gates = MockGates { mask: 0 };
+    let mut temp = MockTemp;
+
+    let mut last_toggle = rtc.count();
     loop {
-        led.toggle().ok();
-        delay.delay_ms(250);
+        if let Ok(byte) = usart.read_byte() {
+            let _ = runtime.service(byte, &mut gates, &mut temp, &mut usart);
+        }
+
+        let now = rtc.count();
+        if now.wrapping_sub(last_toggle) >= HEARTBEAT_TICKS {
+            let _ = alive.toggle();
+            last_toggle = now;
+        }
     }
+}
+
+/// Mock balancer gates. Stores the last mask but drives no real pins.
+struct MockGates {
+    mask: u8,
+}
+
+impl GateControl for MockGates {
+    fn set_gates(&mut self, mask: u8) {
+        self.mask = mask;
+    }
+}
+
+/// Mock temperature sensor. Always returns a fixed value.
+struct MockTemp;
+
+impl TempSensor for MockTemp {
+    fn read_centi_celsius(&mut self) -> i16 {
+        MOCK_TEMP_CENTI
+    }
+}
+
+/// Halts with interrupts disabled.
+fn halt() -> ! {
+    avr_device::interrupt::disable();
+    #[expect(clippy::empty_loop, reason = "nothing left to do after a fatal init error")]
+    loop {}
 }

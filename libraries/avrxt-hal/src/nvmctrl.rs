@@ -1,17 +1,20 @@
 //! Non-volatile memory controller (NVMCTRL) for AVR128 DA/DB.
 //!
-//! [`Nvm`] programs the on-chip EEPROM and the USERROW. It is generic over an
-//! [`NvmInstance`] (implemented for each AVR128 `NVMCTRL`). Program flash is
-//! not written here: on `CellGuard` a separate programmer drives the target
-//! over UPDI, so a running application never rewrites its own code.
+//! [`Nvm`] programs the on-chip EEPROM, the USERROW, and the program flash. It
+//! is generic over an [`NvmInstance`] (implemented for each AVR128 `NVMCTRL`).
+//! Flash self-programming remaps a 32 KiB data-space window over the 128 KiB
+//! flash in four `CTRLB.FLMAP` sections, so the bootloader can rewrite
+//! application code in place.
 //!
 //! `NVMCTRL.CTRLA` is configuration-change protected with the SPM signature, so
 //! every command goes through [`CcpUnlock::unlock_spm`] inside
 //! `avr_device::interrupt::free`: an interrupt cannot land in the unlock
-//! window. Do not run an NVM operation from an interrupt handler. This includes
-//! a plain store to the mapped EEPROM, USERROW, or flash region: such a store
-//! loads the page buffer that a foreground write is about to commit, so an
-//! interrupt that does so mid-write corrupts the buffer.
+//! window. `CTRLB.FLMAP` is protected with the IOREG signature instead, so it
+//! goes through [`CcpUnlock::unlock_ioreg`]. Do not run an NVM operation from
+//! an interrupt handler. This includes a plain store to the mapped EEPROM,
+//! USERROW, or flash region: such a store loads the page buffer that a
+//! foreground write is about to commit, so an interrupt that does so mid-write
+//! corrupts the buffer.
 //!
 //! The register command sequences here follow the AVR Dx model and match the
 //! `DxCore` reference flows.
@@ -44,6 +47,10 @@ pub trait NvmInstance {
     const USERROW_START: *mut u8;
     /// USERROW size in bytes.
     const USERROW_SIZE: u16;
+    /// Program flash page size in bytes (AVR Dx: 512).
+    const FLASH_PAGE_SIZE: u32 = 512;
+    /// Total program flash in bytes (AVR128: 128 KiB).
+    const FLASH_SIZE: u32 = 128 * 1024;
 
     /// Spins until the flash/USERROW controller is idle (`!STATUS.FBUSY`).
     fn wait_flash_ready(&self);
@@ -60,6 +67,12 @@ pub trait NvmInstance {
     fn command_flash_page_erase(&self);
     /// Writes `CMD = FLWR` (flash write). SPM window first.
     fn command_flash_write(&self);
+
+    /// Writes `CTRLB.FLMAP` to select the 32 KiB flash section visible in data
+    /// space. The caller must open the IOREG configuration-change window first.
+    /// Section 0 covers flash `0x0000-0x7FFF`, 1 covers `0x8000-0xFFFF`, 2
+    /// covers `0x10000-0x17FFF`, and 3 covers `0x18000-0x1FFFF`.
+    fn set_flmap(&self, section: u8);
 }
 
 /// The non-volatile memory controller.
@@ -88,6 +101,21 @@ impl<T: NvmInstance> Nvm<T> {
             cmd(&self.instance);
         });
     }
+
+    /// Runs `cmd` inside the IOREG configuration-change window with interrupts
+    /// masked, so the unlock and the protected write stay adjacent. Used for
+    /// `CTRLB.FLMAP`, which is IOREG-protected rather than SPM-protected.
+    fn protected_ioreg<C: CcpUnlock>(&self, cpu: &C, cmd: impl FnOnce(&T)) {
+        avr_device::interrupt::free(|_| {
+            cpu.unlock_ioreg();
+            cmd(&self.instance);
+        });
+    }
+
+    /// Data-space base of the mapped flash window.
+    const FLASH_WINDOW_BASE: usize = 0x8000;
+    /// Flash bytes mapped per `CTRLB.FLMAP` section (32 KiB).
+    const FLASH_WINDOW_SIZE: u32 = 0x8000;
 
     /// Reads `buf.len()` bytes from the on-chip EEPROM at `offset`.
     ///
@@ -214,6 +242,169 @@ impl<T: NvmInstance> Nvm<T> {
         }
         Ok(())
     }
+
+    /// Checks that `[offset, offset + len)` fits within the program flash.
+    fn check_flash_bounds(offset: u32, len: usize) -> Result<(), NvmError> {
+        let len = u32::try_from(len).map_err(|_| NvmError::OutOfBounds)?;
+        let end = offset.checked_add(len).ok_or(NvmError::OutOfBounds)?;
+        if end > T::FLASH_SIZE {
+            Err(NvmError::OutOfBounds)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Erases the flash page containing `flash_offset`.
+    ///
+    /// `flash_offset` must be page-aligned (`T::FLASH_PAGE_SIZE`) and within
+    /// flash. Sets the `CTRLB.FLMAP` section for the offset, arms `FLPER`, then
+    /// triggers the erase with a store into the mapped page.
+    ///
+    /// # Errors
+    ///
+    /// [`NvmError::OutOfBounds`] if `flash_offset` is not page-aligned or leaves
+    /// flash, or [`NvmError::WriteFailed`] if the controller flags a write
+    /// error.
+    pub fn erase_flash_page<C: CcpUnlock>(
+        &self,
+        cpu: &C,
+        flash_offset: u32,
+    ) -> Result<(), NvmError> {
+        if !flash_offset.is_multiple_of(T::FLASH_PAGE_SIZE) {
+            return Err(NvmError::OutOfBounds);
+        }
+        let page_end = flash_offset
+            .checked_add(T::FLASH_PAGE_SIZE)
+            .ok_or(NvmError::OutOfBounds)?;
+        if page_end > T::FLASH_SIZE {
+            return Err(NvmError::OutOfBounds);
+        }
+
+        let section = u8::try_from(flash_offset / Self::FLASH_WINDOW_SIZE).unwrap_or(0);
+        self.protected_ioreg(cpu, |inst| inst.set_flmap(section));
+
+        self.instance.wait_flash_ready();
+        self.protected(cpu, T::command_flash_page_erase);
+        let addr = (Self::FLASH_WINDOW_BASE
+            + usize::try_from(flash_offset % Self::FLASH_WINDOW_SIZE).unwrap_or(0))
+            as *mut u8;
+        // SAFETY: `addr` lands in the mapped flash window selected by `section`,
+        // and the bounds check above kept the page inside flash.
+        unsafe { addr.write_volatile(0xFF) };
+        self.instance.wait_flash_ready();
+        self.protected(cpu, T::command_none);
+        if self.instance.write_error() {
+            return Err(NvmError::WriteFailed);
+        }
+        Ok(())
+    }
+
+    /// Writes `data` to flash at `flash_offset`.
+    ///
+    /// The caller must erase every touched page first
+    /// ([`Self::erase_flash_page`]): flash writes can only clear bits set by an
+    /// erase. Data that spans a `CTRLB.FLMAP` section boundary is split, with
+    /// each section programmed under its own `FLWR`.
+    ///
+    /// # Errors
+    ///
+    /// [`NvmError::OutOfBounds`] if the range leaves flash, or
+    /// [`NvmError::WriteFailed`] if the controller flags a write error.
+    pub fn write_flash<C: CcpUnlock>(
+        &self,
+        cpu: &C,
+        flash_offset: u32,
+        data: &[u8],
+    ) -> Result<(), NvmError> {
+        Self::check_flash_bounds(flash_offset, data.len())?;
+
+        let mut offset = flash_offset;
+        let mut rest = data;
+        while !rest.is_empty() {
+            let section_end =
+                (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
+            let room = usize::try_from(section_end - offset).unwrap_or(usize::MAX);
+            let n = rest.len().min(room);
+            let (chunk, tail) = rest.split_at(n);
+            self.write_flash_section(cpu, offset, chunk)?;
+            offset = offset.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+            rest = tail;
+        }
+        Ok(())
+    }
+
+    /// Writes `chunk` to a single `CTRLB.FLMAP` section starting at
+    /// `flash_offset`. The caller splits at section boundaries so `chunk` never
+    /// crosses one.
+    fn write_flash_section<C: CcpUnlock>(
+        &self,
+        cpu: &C,
+        flash_offset: u32,
+        chunk: &[u8],
+    ) -> Result<(), NvmError> {
+        let section = u8::try_from(flash_offset / Self::FLASH_WINDOW_SIZE).unwrap_or(0);
+        self.protected_ioreg(cpu, |inst| inst.set_flmap(section));
+
+        let mut addr = (Self::FLASH_WINDOW_BASE
+            + usize::try_from(flash_offset % Self::FLASH_WINDOW_SIZE).unwrap_or(0))
+            as *mut u8;
+
+        self.instance.wait_flash_ready();
+        self.protected(cpu, T::command_flash_write);
+        for &b in chunk {
+            // SAFETY: `addr` stays within the mapped flash window for `section`,
+            // because `chunk` was split at the section boundary.
+            unsafe { addr.write_volatile(b) };
+            addr = addr.wrapping_add(1);
+        }
+        self.instance.wait_flash_ready();
+        self.protected(cpu, T::command_none);
+        if self.instance.write_error() {
+            return Err(NvmError::WriteFailed);
+        }
+        Ok(())
+    }
+
+    /// Reads `buf.len()` bytes from flash at `flash_offset`.
+    ///
+    /// Data that spans a `CTRLB.FLMAP` section boundary is split, with each
+    /// section read under its own mapping.
+    ///
+    /// # Errors
+    ///
+    /// [`NvmError::OutOfBounds`] if the range leaves flash.
+    pub fn read_flash<C: CcpUnlock>(
+        &self,
+        cpu: &C,
+        flash_offset: u32,
+        buf: &mut [u8],
+    ) -> Result<(), NvmError> {
+        Self::check_flash_bounds(flash_offset, buf.len())?;
+
+        let mut offset = flash_offset;
+        let mut rest = buf;
+        while !rest.is_empty() {
+            let section = u8::try_from(offset / Self::FLASH_WINDOW_SIZE).unwrap_or(0);
+            let section_end =
+                (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
+            let room = usize::try_from(section_end - offset).unwrap_or(usize::MAX);
+            let n = rest.len().min(room);
+            let (chunk, tail) = rest.split_at_mut(n);
+            self.protected_ioreg(cpu, |inst| inst.set_flmap(section));
+            let mut addr = (Self::FLASH_WINDOW_BASE
+                + usize::try_from(offset % Self::FLASH_WINDOW_SIZE).unwrap_or(0))
+                as *mut u8;
+            for slot in chunk.iter_mut() {
+                // SAFETY: `addr` stays within the mapped flash window for
+                // `section`, because `chunk` was split at the section boundary.
+                *slot = unsafe { addr.read_volatile() };
+                addr = addr.wrapping_add(1);
+            }
+            offset = offset.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+            rest = tail;
+        }
+        Ok(())
+    }
 }
 
 /// Checks that `[offset, offset + len)` fits within a region of `size` bytes.
@@ -273,6 +464,8 @@ macro_rules! impl_nvm_instance {
             const EEPROM_SIZE: u16 = 512;
             const USERROW_START: *mut u8 = 0x1080 as *mut u8;
             const USERROW_SIZE: u16 = 32;
+            const FLASH_PAGE_SIZE: u32 = 512;
+            const FLASH_SIZE: u32 = 128 * 1024;
 
             #[inline(always)]
             fn wait_flash_ready(&self) {
@@ -301,6 +494,15 @@ macro_rules! impl_nvm_instance {
             #[inline(always)]
             fn command_flash_write(&self) {
                 self.ctrla().write(|w| w.cmd().flwr());
+            }
+            #[inline(always)]
+            fn set_flmap(&self, section: u8) {
+                self.ctrlb().modify(|_, w| match section & 0x3 {
+                    0 => w.flmap().section0(),
+                    1 => w.flmap().section1(),
+                    2 => w.flmap().section2(),
+                    _ => w.flmap().section3(),
+                });
             }
         }
     };

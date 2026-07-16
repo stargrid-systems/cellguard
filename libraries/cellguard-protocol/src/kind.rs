@@ -73,6 +73,9 @@ pub enum Kind {
     /// [`Kind::ProgProgram`] request.
     #[cfg(feature = "bootloader")]
     ProgResult = 19,
+    /// Request: set the cellagent balancer gate state.
+    /// Payload: 1 byte bitmask (bit 0 = `GATE_A`, bit 1 = `GATE_B`, bit 2 = `ALL_OFF`).
+    SetBalancer = 20,
 }
 
 impl Kind {
