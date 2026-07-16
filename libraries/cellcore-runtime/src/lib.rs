@@ -100,94 +100,9 @@ impl core::fmt::Display for OutOfBounds {
 
 impl core::error::Error for OutOfBounds {}
 
-/// An [`ImageStore`] that bands two stores into one address space.
-///
-/// The `CellGuard` board stages each firmware region on its own SPI EEPROM
-/// chip. `cellcore`'s `StagingLayout` addresses those regions as offset bands
-/// in a single store, so this maps the low band (offsets below `low`'s
-/// capacity) to `low` and the high band to `high` with a rebased offset. An
-/// access that would straddle the boundary is rejected.
-pub struct BandedStore<A, B> {
-    low: A,
-    high: B,
-    split: u32,
-}
-
-impl<A: ImageStore, B: ImageStore> BandedStore<A, B> {
-    /// Bands `high` after `low`. The boundary is `low`'s capacity.
-    pub fn new(low: A, high: B) -> Self {
-        let split = low.capacity();
-        Self { low, high, split }
-    }
-
-    /// Resolves an access to a band and a rebased offset within it.
-    fn locate(&self, offset: u32, len: usize) -> Result<Band, BandedError<A::Error, B::Error>> {
-        let len = u32::try_from(len).map_err(|_| BandedError::OutOfBounds)?;
-        let end = offset.checked_add(len).ok_or(BandedError::OutOfBounds)?;
-        if end <= self.split {
-            Ok(Band::Low(offset))
-        } else if offset >= self.split {
-            Ok(Band::High(offset - self.split))
-        } else {
-            Err(BandedError::OutOfBounds)
-        }
-    }
-}
-
-enum Band {
-    Low(u32),
-    High(u32),
-}
-
-impl<A: ImageStore, B: ImageStore> ImageStore for BandedStore<A, B> {
-    type Error = BandedError<A::Error, B::Error>;
-
-    fn capacity(&self) -> u32 {
-        self.split.saturating_add(self.high.capacity())
-    }
-
-    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
-        match self.locate(offset, buf.len())? {
-            Band::Low(at) => self.low.read(at, buf).map_err(BandedError::Low),
-            Band::High(at) => self.high.read(at, buf).map_err(BandedError::High),
-        }
-    }
-
-    fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), Self::Error> {
-        match self.locate(offset, data.len())? {
-            Band::Low(at) => self.low.write(at, data).map_err(BandedError::Low),
-            Band::High(at) => self.high.write(at, data).map_err(BandedError::High),
-        }
-    }
-}
-
-/// The error returned by [`BandedStore`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BandedError<L, H> {
-    /// The low band's store failed.
-    Low(L),
-    /// The high band's store failed.
-    High(H),
-    /// The access was out of range or straddled the band boundary.
-    OutOfBounds,
-}
-
-impl<L: core::fmt::Display, H: core::fmt::Display> core::fmt::Display for BandedError<L, H> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Low(e) => write!(f, "low band: {e}"),
-            Self::High(e) => write!(f, "high band: {e}"),
-            Self::OutOfBounds => f.write_str("banded store access out of bounds"),
-        }
-    }
-}
-
-impl<L, H> core::error::Error for BandedError<L, H>
-where
-    L: core::error::Error,
-    H: core::error::Error,
-{
-}
+/// Re-exported from `cellboot::io`: an [`ImageStore`] that bands two stores
+/// into one address space. See [`cellboot::io::BandedStore`].
+pub use cellboot::io::{BandedError, BandedStore};
 
 /// Hosts the update agent on a pair of byte links.
 ///
