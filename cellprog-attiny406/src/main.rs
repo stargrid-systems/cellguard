@@ -42,7 +42,7 @@ use cellboot::drivers::Cat25Store;
 use cellboot::io::BandedStore;
 use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
-use cellprog::writer::UpdiNvmWriter;
+use cellprog::writer::{TinyNvmWriter, UpdiNvmWriter};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
@@ -194,11 +194,19 @@ fn main() -> ! {
         if let Ok(byte) = usart.read_byte() {
             if let Some(source) = supervisor.decode(byte) {
                 usart.set_frame(Frame::EIGHT_E_2);
-                mux.cellcore_updi();
-                let status = {
-                    let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(link);
-                    supervisor.program(source, &mut writer)
+                let status = match source {
+                    ProgSource::CellagentAppStaged => {
+                        mux.cellagent_updi();
+                        let link = UsartUpdiLink::new(&mut usart);
+                        let mut writer = TinyNvmWriter::new(link);
+                        supervisor.program(source, &mut writer)
+                    }
+                    _ => {
+                        mux.cellcore_updi();
+                        let link = UsartUpdiLink::new(&mut usart);
+                        let mut writer = UpdiNvmWriter::new(link);
+                        supervisor.program(source, &mut writer)
+                    }
                 };
                 usart.set_frame(Frame::EIGHT_N_1);
                 mux.cellcore_uart();
@@ -261,6 +269,11 @@ impl MuxSelect {
     /// Channel 1: cellcore UPDI (8E2).
     fn cellcore_updi(&mut self) {
         let _ = self.a1.set_low();
+        let _ = self.a0.set_high();
+    }
+    /// Channel 3: cellagent UPDI (8E2).
+    fn cellagent_updi(&mut self) {
+        let _ = self.a1.set_high();
         let _ = self.a0.set_high();
     }
 }

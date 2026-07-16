@@ -8,7 +8,8 @@
 //! handled without buffering a whole page.
 
 use cellboot::io::NvmWriter;
-use updi::{PAGE_SIZE, ProgError, Programmer, UpdiLink};
+use updi::{PAGE_SIZE, ProgError, Programmer, TinyProgrammer, UpdiLink};
+use updi::tiny::PAGE_SIZE as TINY_PAGE_SIZE;
 
 /// An [`NvmWriter`] that programs an AVR Dx target over UPDI.
 pub struct UpdiNvmWriter<L> {
@@ -49,6 +50,71 @@ impl<L: UpdiLink> NvmWriter for UpdiNvmWriter<L> {
                 self.erased_page = Some(page);
             }
             let page_end = page.saturating_add(1).saturating_mul(PAGE_SIZE);
+            let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
+            let n = rest.len().min(room);
+            let (chunk, tail) = rest.split_at(n);
+            self.prog.write_flash(addr, chunk)?;
+            addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+            rest = tail;
+        }
+        Ok(())
+    }
+
+    fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
+        self.prog.read_flash(address, buf)
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        self.prog.leave()
+    }
+}
+
+/// An [`NvmWriter`] that programs a tinyAVR 0/1-series target over UPDI.
+///
+/// Like [`UpdiNvmWriter`] but for tinyAVR (NVMCTRL v0/v1). The tinyAVR has a
+/// page buffer, so [`TinyProgrammer::write_flash`] pads partial pages
+/// internally.
+pub struct TinyNvmWriter<L> {
+    prog: TinyProgrammer<L>,
+    erased_page: Option<u32>,
+}
+
+impl<L: UpdiLink> TinyNvmWriter<L> {
+    /// Wraps a UPDI transport.
+    pub const fn new(link: L) -> Self {
+        Self {
+            prog: TinyProgrammer::new(link),
+            erased_page: None,
+        }
+    }
+
+    /// Releases the transport.
+    pub fn free(self) -> L {
+        self.prog.free()
+    }
+}
+
+impl<L: UpdiLink> NvmWriter for TinyNvmWriter<L> {
+    type Error = ProgError<L::Error>;
+
+    fn begin(&mut self) -> Result<(), Self::Error> {
+        self.erased_page = None;
+        self.prog.enter()
+    }
+
+    fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
+        let mut addr = address;
+        let mut rest = data;
+        while !rest.is_empty() {
+            let page = addr / TINY_PAGE_SIZE;
+            if self.erased_page != Some(page) {
+                self.prog
+                    .erase_flash_page(page.saturating_mul(TINY_PAGE_SIZE))?;
+                self.erased_page = Some(page);
+            }
+            let page_end = page
+                .saturating_add(1)
+                .saturating_mul(TINY_PAGE_SIZE);
             let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
             let n = rest.len().min(room);
             let (chunk, tail) = rest.split_at(n);

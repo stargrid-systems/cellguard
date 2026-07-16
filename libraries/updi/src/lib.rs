@@ -17,6 +17,7 @@
 //!   `driver`.
 //! - [`Programmer`]: the programming layer for AVR Dx (NVMCTRL v2). Unlock,
 //!   reset into programming mode, erase, write, and read back flash.
+//! - [`TinyProgrammer`]: the same for tinyAVR 0/1-series (NVMCTRL v0/v1).
 //!
 //! # Features
 //!
@@ -29,9 +30,11 @@
 pub use self::driver::{Updi, UpdiError};
 pub use self::link::UpdiLink;
 pub use self::programmer::{PAGE_SIZE, ProgError, Programmer};
+pub use self::tiny::TinyProgrammer;
 
 mod driver;
 mod link;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod programmer;
+pub mod tiny;

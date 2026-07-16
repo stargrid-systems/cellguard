@@ -24,11 +24,13 @@ pub const OP_KEY: u8 = 0xE0;
 
 // LDS/STS address-size field (bits 3:2). Data size is one byte (0) throughout.
 pub const ADDR_24: u8 = 2 << 2;
+pub const ADDR_16: u8 = 1 << 2;
 // LD/ST pointer control (bits 3:2).
 pub const PTR_INC: u8 = 1 << 2;
 pub const PTR_SET: u8 = 2 << 2;
-// Pointer-set size field (bits 1:0): a 24-bit address.
+// Pointer-set size field (bits 1:0).
 pub const SIZE_24: u8 = 2;
+pub const SIZE_16: u8 = 1;
 /// Largest block one `REPEAT` can cover (count is a single byte, so 256).
 const REPEAT_MAX: usize = 256;
 
@@ -151,6 +153,46 @@ impl<L: UpdiLink> Updi<L> {
         let [a0, a1, a2, _] = addr.to_le_bytes();
         self.link
             .send(&[SYNCH, OP_ST | PTR_SET | SIZE_24, a0, a1, a2])?;
+        self.expect_ack()
+    }
+
+    /// Loads one byte from a 16-bit data-space address.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdiError::Link`] if the transport fails.
+    pub fn lds8_16(&mut self, addr: u16) -> Result<u8, UpdiError<L::Error>> {
+        let [a0, a1] = addr.to_le_bytes();
+        self.link.send(&[SYNCH, OP_LDS | ADDR_16, a0, a1])?;
+        let mut b = [0u8];
+        self.link.recv(&mut b)?;
+        Ok(b[0])
+    }
+
+    /// Stores one byte to a 16-bit data-space address.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
+    /// [`UpdiError::Link`] if the transport fails.
+    pub fn sts8_16(&mut self, addr: u16, val: u8) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1] = addr.to_le_bytes();
+        self.link.send(&[SYNCH, OP_STS | ADDR_16, a0, a1])?;
+        self.expect_ack()?;
+        self.link.send(&[val])?;
+        self.expect_ack()
+    }
+
+    /// Sets the pointer register to a 16-bit address for `ld_inc`/`st_inc`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
+    /// [`UpdiError::Link`] if the transport fails.
+    pub fn set_pointer_16(&mut self, addr: u16) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1] = addr.to_le_bytes();
+        self.link
+            .send(&[SYNCH, OP_ST | PTR_SET | SIZE_16, a0, a1])?;
         self.expect_ack()
     }
 
