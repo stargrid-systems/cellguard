@@ -22,7 +22,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{CoreRuntime, RamImageStore};
-use panic_log::{Decision, store_and_decide};
+use panic_log::{Decision, clear, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -135,6 +135,8 @@ fn main() -> ! {
     let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
+    // Init completed: this boot is healthy, so any prior panic was transient.
+    clear(&nvm, &cpu, PANIC_OFFSET);
     runtime.run();
 }
 

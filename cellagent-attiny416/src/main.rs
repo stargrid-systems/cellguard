@@ -20,7 +20,7 @@ use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
 use embedded_hal::digital::StatefulOutputPin;
-use panic_log::{Decision, store_and_decide};
+use panic_log::{Decision, clear, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -69,10 +69,13 @@ fn panic(info: &PanicInfo) -> ! {
 #[avr_device::entry]
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
+    let cpu = dp.CPU;
 
     // Run the main clock at full speed (20 MHz).
-    clock::set_main_clock_prescaler(&dp.CPU, &dp.CLKCTRL, PRESCALER);
+    clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
     let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
+
+    let nvm = Nvm::new(dp.NVMCTRL);
 
     let portb = Port::new(dp.PORTB).split();
 
@@ -96,6 +99,9 @@ fn main() -> ! {
     let mut runtime = CellagentRuntime::new(NODE_ID);
     let mut gates = MockGates { mask: 0 };
     let mut temp = MockTemp;
+
+    // Init completed: this boot is healthy, so any prior panic was transient.
+    clear(&nvm, &cpu, PANIC_OFFSET);
 
     let mut last_toggle = rtc.count();
     loop {

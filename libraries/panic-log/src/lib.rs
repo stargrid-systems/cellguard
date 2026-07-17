@@ -24,7 +24,7 @@ pub mod record;
 #[cfg(feature = "hal")]
 pub mod store;
 #[cfg(feature = "hal")]
-pub use self::store::{Decision, store_and_decide};
+pub use self::store::{Decision, clear, store_and_decide};
 
 /// An error returned when a [`PanicRecord`] cannot be parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

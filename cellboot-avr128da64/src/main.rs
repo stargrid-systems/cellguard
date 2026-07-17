@@ -29,7 +29,7 @@ use cellboot::io::{BandedStore, StateStore};
 use cellcore::update::state::{self, StagedState, UpdateOutcome};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
-use panic_log::{Decision, store_and_decide};
+use panic_log::{Decision, clear, store_and_decide};
 
 use core::cell::RefCell;
 use core::panic::PanicInfo;
@@ -132,6 +132,8 @@ fn main() -> ! {
                     state.last_outcome = UpdateOutcome::Success;
                     state.program_attempts = 0;
                     let _ = state_store.store(&state.serialize());
+                    // Fresh application code gets a fresh crash-loop counter.
+                    clear(&nvm, &cpu, PANIC_OFFSET);
                     software_reset(&cpu);
                 }
                 Err(_) => {

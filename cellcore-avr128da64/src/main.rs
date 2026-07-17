@@ -42,7 +42,7 @@ use cellcore::update::state;
 use cellcore_runtime::{BandedStore, CoreRuntime};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
-use panic_log::{Decision, store_and_decide};
+use panic_log::{Decision, clear, store_and_decide};
 use tca9535::{Address, PinIndex, Tca9535};
 
 use core::cell::RefCell;
@@ -216,6 +216,10 @@ fn main() -> ! {
     let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
+
+    // Init completed: this boot is healthy, so any prior panic was transient.
+    // Clear the crash-loop counter so unrelated panics do not accumulate.
+    clear(&nvm, &cpu, PANIC_OFFSET);
 
     let mut last_toggle = rtc.count();
     loop {

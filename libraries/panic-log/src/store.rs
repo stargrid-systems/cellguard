@@ -21,6 +21,23 @@ pub enum Decision {
     Halt,
 }
 
+/// Erases the panic record at `offset`, so the next panic starts a fresh
+/// crash-loop.
+///
+/// Call this once a boot has proven itself healthy (past all initialization
+/// that could panic), or after programming fresh application code. A blank
+/// slot reads back as "no record", so [`store_and_decide`] treats the next panic
+/// as the first. Storage is best-effort: a write error is ignored, since a
+/// failed erase never blocks the boot.
+pub fn clear<T, C>(nvm: &Nvm<T>, cpu: &C, offset: u16)
+where
+    T: NvmInstance,
+    C: CcpUnlock,
+{
+    let blank = [0xFFu8; RECORD_LEN];
+    let _ = nvm.write_eeprom(offset, &blank, cpu);
+}
+
 /// Reads the stored crash-loop counter, writes a record for this panic, and
 /// returns whether the caller should reset or halt.
 ///

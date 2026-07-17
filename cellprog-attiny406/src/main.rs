@@ -50,7 +50,7 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use embedded_io::Write;
-use panic_log::{Decision, store_and_decide};
+use panic_log::{Decision, clear, store_and_decide};
 
 use core::cell::RefCell;
 use core::panic::PanicInfo;
@@ -132,10 +132,13 @@ fn panic(info: &PanicInfo) -> ! {
 #[avr_device::entry]
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
+    let cpu = dp.CPU;
 
     // Run the main clock at full speed (20 MHz).
-    clock::set_main_clock_prescaler(&dp.CPU, &dp.CLKCTRL, PRESCALER);
+    clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
     let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
+
+    let nvm = Nvm::new(dp.NVMCTRL);
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
@@ -213,6 +216,9 @@ fn main() -> ! {
     let mut last_edge = rtc.count();
     let mut resets = 0u8;
     let mut reflashes = 0u8;
+
+    // Init completed: this boot is healthy, so any prior panic was transient.
+    clear(&nvm, &cpu, PANIC_OFFSET);
 
     loop {
         // --- UART command link (returns within ~RX_TIMEOUT_MS) ---
