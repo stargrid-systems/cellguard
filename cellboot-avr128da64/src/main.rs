@@ -20,6 +20,7 @@ use avrxt_hal::clock::{self, CcpUnlock, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
 use cat25::{CAT25128, CAT25M01, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
@@ -28,6 +29,7 @@ use cellboot::io::{BandedStore, StateStore};
 use cellcore::update::state::{self, StagedState, UpdateOutcome};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
+use panic_log::{Decision, store_and_decide};
 
 use core::cell::RefCell;
 use core::panic::PanicInfo;
@@ -48,6 +50,10 @@ const CELLAGENT_CAP: u32 = 4 * 1024;
 /// On-chip EEPROM slot holding the probe-able agent state.
 const STATE_OFFSET: u16 = 0;
 const STATE_LEN: u16 = 64;
+/// On-chip EEPROM offset of the panic record (after the state slot).
+const PANIC_OFFSET: u16 = STATE_LEN;
+/// Consecutive panic-resets before the handler halts instead of resetting.
+const PANIC_THRESHOLD: u8 = 3;
 
 /// Flash address where the application begins (right after the 4 KB boot
 /// section).
@@ -61,10 +67,19 @@ const MAX_PROGRAM_ATTEMPTS: u8 = 3;
 const AGENT_VERSION: u32 = 1;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
+    // (to recover) or halt (once the crash-loop limit is reached).
     avr_device::interrupt::disable();
-    #[expect(clippy::empty_loop)]
-    loop {}
+    let dp = unsafe { pac::Peripherals::steal() };
+    let nvm = Nvm::new(dp.NVMCTRL);
+    let flags = dp.RSTCTRL.flags().bits();
+    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
+        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
+        Decision::Halt => loop {
+            core::hint::spin_loop();
+        },
+    }
 }
 
 #[avr_device::entry]

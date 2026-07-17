@@ -21,10 +21,13 @@ use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::gpio::{Output, Port};
+use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
+use panic_log::{Decision, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -61,10 +64,26 @@ const GATE_A_BIT: u8 = 0x01;
 const GATE_B_BIT: u8 = 0x02;
 const ALL_OFF_BIT: u8 = 0x04;
 
+/// On-chip EEPROM offset of the panic record. The ATtiny406 EEPROM is unused
+/// otherwise, so the record starts at 0.
+const PANIC_OFFSET: u16 = 0;
+/// Consecutive panic-resets before the handler halts instead of resetting.
+const PANIC_THRESHOLD: u8 = 3;
+
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
+    // (to recover) or halt (once the crash-loop limit is reached).
     avr_device::interrupt::disable();
-    loop {}
+    let dp = unsafe { pac::Peripherals::steal() };
+    let nvm = Nvm::new(dp.NVMCTRL);
+    let flags = dp.RSTCTRL.flags().bits();
+    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
+        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
+        Decision::Halt => loop {
+            core::hint::spin_loop();
+        },
+    }
 }
 
 #[avr_device::entry]

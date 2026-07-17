@@ -14,6 +14,7 @@ use avr_device::avr128db48 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cellboot::drivers::EepromState;
 use cellboot::io::NoKeyStore;
@@ -21,6 +22,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{CoreRuntime, RamImageStore};
+use panic_log::{Decision, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -48,15 +50,28 @@ const KEY_LEN: usize = 16;
 /// On-chip EEPROM slot holding the probe-able agent state.
 const STATE_OFFSET: u16 = 0;
 const STATE_LEN: u16 = 64;
+/// On-chip EEPROM offset of the panic record (after the state slot).
+const PANIC_OFFSET: u16 = STATE_LEN;
+/// Consecutive panic-resets before the handler halts instead of resetting.
+const PANIC_THRESHOLD: u8 = 3;
 
 /// In-RAM staging capacity.
 const STAGE_CAP: usize = 4096;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // Firmware has panicked, so stop all interrupts and halt.
+fn panic(info: &PanicInfo) -> ! {
+    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
+    // (to recover) or halt (once the crash-loop limit is reached).
     avr_device::interrupt::disable();
-    loop {}
+    let dp = unsafe { pac::Peripherals::steal() };
+    let nvm = Nvm::new(dp.NVMCTRL);
+    let flags = dp.RSTCTRL.flags().bits();
+    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
+        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
+        Decision::Halt => loop {
+            core::hint::spin_loop();
+        },
+    }
 }
 
 #[avr_device::entry]
@@ -134,5 +149,7 @@ fn build_usart<T: UsartInstance>(builder: Builder<T, u32, Unset>) -> Usart<T> {
 /// Halts with interrupts disabled. A future revision can blink a fault code.
 fn halt() -> ! {
     avr_device::interrupt::disable();
-    loop {}
+    loop {
+        core::hint::spin_loop();
+    }
 }

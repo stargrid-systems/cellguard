@@ -19,6 +19,7 @@ cellcore-runtime = { path = "../libraries/cellcore-runtime" }
 cat25 = { path = "../libraries/cat25" }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-bus = { version = "0.3", default-features = false }
+panic-log = { path = "../libraries/panic-log", features = ["hal"] }
 tca9535 = { path = "../libraries/tca9535" }
 
 [patch.crates-io]
