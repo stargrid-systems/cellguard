@@ -13,7 +13,7 @@ use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, NackReason, Response, KEY_LEN};
-use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
+use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
@@ -139,6 +139,26 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     #[must_use]
     pub const fn status(&self) -> PersistentState {
         self.state
+    }
+
+    /// Marks the running application as healthy and clears the boot counter.
+    ///
+    /// The bootloader bumps `boot_count` on every boot and flips
+    /// `app_health` to [`Bad`](crate::update::state::AppHealth::Bad) once it
+    /// reaches
+    /// [`BOOT_HEALTH_THRESHOLD`](crate::update::state::BOOT_HEALTH_THRESHOLD).
+    /// A boot only counts against the app while it stays unconfirmed, so the
+    /// runtime calls this once the app has proven itself alive (typically
+    /// after the first successful field-bus exchange). This persists the new
+    /// state.
+    ///
+    /// Calling this repeatedly is harmless but does re-persist each time, so
+    /// the runtime caches a "confirmed this boot" flag and calls it at most
+    /// once per boot.
+    pub fn confirm_app_healthy(&mut self) {
+        self.state.app_health = AppHealth::Good;
+        self.state.boot_count = 0;
+        let _ = self.state_store.store(&self.state.serialize());
     }
 
     /// Returns a shared reference to the staging store.

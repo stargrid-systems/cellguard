@@ -29,7 +29,7 @@ use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
-use cellcore::update::state::{self, StagedState};
+use cellcore::update::state::{self, AppHealth, BOOT_HEALTH_THRESHOLD, StagedState};
 use cellguard_panic::{Decision, clear, store_and_decide};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -148,6 +148,18 @@ fn main() -> ! {
         state.mark_program_failed();
         let _ = state_store.store(&state.serialize());
     }
+
+    // Every boot that hands control to the app counts toward the health
+    // check. The bootloader bumps boot_count on each such boot, and flips
+    // app_health to Bad once it reaches BOOT_HEALTH_THRESHOLD without the app
+    // having confirmed itself. The app clears the counter via the runtime's
+    // first successful field-bus exchange, so a normally-running device stays
+    // at boot_count == 0.
+    state.boot_count = state.boot_count.saturating_add(1);
+    if state.boot_count >= u16::from(BOOT_HEALTH_THRESHOLD) && state.app_health != AppHealth::Bad {
+        state.app_health = AppHealth::Bad;
+    }
+    let _ = state_store.store(&state.serialize());
 
     // No pending update: jump to the installed application.
     unsafe { jump_to_app() }

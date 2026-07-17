@@ -120,6 +120,11 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, const RX: usize> {
     bus: Bus,
     prog: Prog,
     prog_id: u8,
+    /// Whether the running app has confirmed itself healthy this boot. The
+    /// runtime calls [`UpdateAgent::confirm_app_healthy`] on the first
+    /// successful field-bus exchange, then latches this so it does not
+    /// re-persist on every subsequent byte.
+    app_confirmed: bool,
 }
 
 impl<'k, S, K, St, Bus, Prog, const RX: usize> CoreRuntime<'k, S, K, St, Bus, Prog, RX>
@@ -145,6 +150,7 @@ where
             bus,
             prog,
             prog_id,
+            app_confirmed: false,
         }
     }
 
@@ -176,15 +182,27 @@ where
     /// Services one received bus byte.
     ///
     /// Feeds the byte to the dispatcher, writes any response back to the bus,
-    /// and hands a newly committed image off to the programmer. Link errors
-    /// are swallowed. A dropped bus response is retried on the next byte
-    /// because the dispatcher re-derives it from the decoded command. A
-    /// dropped handoff is not retried: the staged image is consumed before
-    /// signaling (see `hand_off`) to avoid races with the
+    /// and hands a newly committed image off to the programmer. The first
+    /// successful exchange in a boot also marks the running application
+    /// healthy (resetting the boot counter the bootloader increments), so a
+    /// device that answers the field bus cannot be flagged as a crash loop.
+    ///
+    /// Link errors are swallowed. A dropped bus response is retried on the
+    /// next byte because the dispatcher re-derives it from the decoded
+    /// command. A dropped handoff is not retried: the staged image is
+    /// consumed before signaling (see `hand_off`) to avoid races with the
     /// bootloader self-program path.
     pub fn service(&mut self, byte: u8) {
         if let Some(response) = self.dispatcher.feed(byte) {
-            let _ = self.bus.write_all(response);
+            let delivered = self.bus.write_all(response).is_ok();
+            // The first delivered response this boot proves the app is alive
+            // and answering the field bus, so clear the boot counter the
+            // bootloader increments. Latch the flag so we persist at most
+            // once per boot rather than on every subsequent byte.
+            if delivered && !self.app_confirmed {
+                self.dispatcher.agent_mut().confirm_app_healthy();
+                self.app_confirmed = true;
+            }
         }
         if let Some(region) = self.dispatcher.agent().pending_program() {
             self.hand_off(region);
@@ -318,7 +336,7 @@ mod tests {
     }
 
     fn runtime_with(
-        key: &mut [u8],
+        key: &mut [u8; 16],
         state: PersistentState,
     ) -> CoreRuntime<'_, MemStore, NoKeyStore, NullStateStore, MockLink, MockLink, 512> {
         let agent = UpdateAgent::new(
@@ -407,6 +425,29 @@ mod tests {
             runtime.prog.written.is_empty(),
             "a probe must not signal the programmer"
         );
+    }
+
+    #[test]
+    fn first_successful_exchange_marks_app_healthy() {
+        // Boot the app with the bootloader's post-boot counters: boot_count
+        // bumped, health still Unknown. The first delivered field-bus
+        // response must clear boot_count and flip health to Good.
+        let mut state = PersistentState::new(1);
+        state.boot_count = 3;
+        state.app_health = AppHealth::Unknown;
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, state);
+
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Unknown
+        );
+        feed_command(&mut runtime, Kind::BootProbe, &[]);
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Good
+        );
+        assert_eq!(runtime.dispatcher.agent().status().boot_count, 0);
     }
 
     #[test]

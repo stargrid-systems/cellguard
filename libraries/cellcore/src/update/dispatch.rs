@@ -65,6 +65,13 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         &self.agent
     }
 
+    /// Returns a mutable reference to the wrapped agent, e.g. to call
+    /// [`UpdateAgent::confirm_app_healthy`] after a successful exchange.
+    #[must_use]
+    pub const fn agent_mut(&mut self) -> &mut UpdateAgent<'k, S, K, St> {
+        &mut self.agent
+    }
+
     /// Consumes a staged image as it is handed off to the programmer.
     ///
     /// See [`UpdateAgent::take_pending_program`].

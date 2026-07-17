@@ -32,6 +32,16 @@ pub const STATE_LEN: usize = 28;
 /// State record format version understood by this crate.
 pub const STATE_FORMAT_VERSION: u8 = 1;
 
+/// Default ceiling on `boot_count` before the bootloader declares the
+/// application unhealthy.
+///
+/// The bootloader increments [`PersistentState::boot_count`] on every boot
+/// that hands control to the app. If the counter reaches this value without
+/// the app calling [`UpdateAgent::confirm_app_healthy`][crate::update::session::UpdateAgent::confirm_app_healthy],
+/// the bootloader sets [`AppHealth::Bad`]. A device that reboots in a loop
+/// (the app panics before it can confirm) is flagged within this many boots.
+pub const BOOT_HEALTH_THRESHOLD: u8 = 5;
+
 /// Sentinel region code meaning "no staged image".
 const NO_REGION: u8 = 0xFF;
 
