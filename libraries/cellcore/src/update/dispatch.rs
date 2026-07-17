@@ -115,7 +115,7 @@ mod tests {
     use crate::update::session::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::update::state::{PersistentState, StagedState};
 
-    const KEY: [u8; 17] = *b"dispatch-test-key";
+    const KEY: [u8; 16] = *b"dispatch-tst-key";
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
@@ -166,7 +166,7 @@ mod tests {
     }
 
     fn make_dispatcher(
-        key: &mut [u8],
+        key: &mut [u8; 16],
     ) -> Dispatcher<'_, MemStore, NoKeyStore, NullStateStore, 512> {
         let layout = StagingLayout {
             application: RegionSlot {

@@ -12,7 +12,7 @@ use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
-use crate::update::command::{Command, NackReason, Response};
+use crate::update::command::{Command, NackReason, Response, KEY_LEN};
 use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 
@@ -110,7 +110,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         layout: StagingLayout,
         target_id: u16,
         cellagent_target_id: u16,
-        key: &'k mut [u8],
+        key: &'k mut [u8; KEY_LEN],
         key_store: K,
         state_store: St,
         state: PersistentState,
@@ -166,9 +166,10 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// final. This commits to it. The staged image is cleared, an
     /// application image advances the recorded `app_version` to the staged
     /// version (health back to `Unknown` until the new app confirms
-    /// itself), and the outcome is recorded as a success. The new state is
-    /// persisted before this returns, so a reset during programming cannot
-    /// make the core re-trigger the same handoff on reboot.
+    /// itself), and the outcome is recorded as a success. Persistence is
+    /// best-effort: a state-store write failure is not surfaced here, since
+    /// the in-RAM state still drives the current boot and the host can
+    /// observe a stale persisted record only across a reset.
     ///
     /// There is no rollback enforcement, so if programming never happens (for
     /// example power is lost first) the still-working old image keeps running.
@@ -242,7 +243,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             return Response::Nack(NackReason::TooLarge);
         }
         if self.store.write(slot.offset, header_bytes).is_err() {
-            self.state.last_outcome = UpdateOutcome::StorageFailed;
+            self.abort_session(UpdateOutcome::StorageFailed);
             return Response::Nack(NackReason::StorageError);
         }
 
@@ -295,11 +296,11 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             return Response::Nack(NackReason::BadState);
         };
         if rx.written != rx.header.payload_len {
-            self.mark_failed();
+            self.abort_session(UpdateOutcome::VerifyFailed);
             return Response::Nack(NackReason::VerifyFailed);
         }
         if rx.verifier.finish().is_err() {
-            self.mark_failed();
+            self.abort_session(UpdateOutcome::VerifyFailed);
             return Response::Nack(NackReason::VerifyFailed);
         }
 
@@ -324,13 +325,6 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         self.state.staged = StagedState::Empty;
         self.state.staged_region = None;
         self.state.last_outcome = outcome;
-    }
-
-    const fn mark_failed(&mut self) {
-        self.session = Session::Idle;
-        self.state.staged = StagedState::Empty;
-        self.state.staged_region = None;
-        self.state.last_outcome = UpdateOutcome::VerifyFailed;
     }
 }
 
@@ -825,5 +819,84 @@ mod tests {
         let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::Aborted);
+    }
+
+    /// An image store whose writes always fail. Used to exercise the
+    /// storage-failure paths.
+    struct FailingStore;
+
+    impl ImageStore for FailingStore {
+        type Error = ();
+
+        fn capacity(&self) -> u32 {
+            4096
+        }
+
+        fn read(&mut self, _offset: u32, _buf: &mut [u8]) -> Result<(), ()> {
+            Err(())
+        }
+
+        fn write(&mut self, _offset: u32, _data: &[u8]) -> Result<(), ()> {
+            Err(())
+        }
+    }
+
+    /// A `Begin` whose store write fails must clear any previously staged
+    /// image, so a stale `Ready` from a prior commit cannot survive the failed
+    /// begin and trigger an unintended handoff. See `on_begin`.
+    #[test]
+    fn begin_storage_failure_clears_stale_ready() {
+        let backing = RefCell::new(None);
+        let payload = ramp300();
+        let header = signed_image(&payload);
+
+        // First agent: commit an app image so the persisted state is `Ready`.
+        {
+            let mut key = KEY;
+            let mut agent = UpdateAgent::new(
+                MemStore::new(),
+                layout(),
+                TARGET,
+                CELLAGENT_TARGET,
+                &mut key,
+                NoKeyStore,
+                SharedStore(&backing),
+                PersistentState::new(1),
+            );
+            assert!(matches!(
+                run_update(&mut agent, &header, &payload),
+                Response::Ack { .. }
+            ));
+            assert_eq!(agent.pending_program(), Some(Region::ApplicationCode));
+        }
+
+        // Second agent: load the `Ready` state, then fail a `Begin`. The stale
+        // Ready must be cleared so `pending_program` reports nothing.
+        {
+            let mut key = KEY;
+            let state = crate::update::state::load(&mut SharedStore(&backing), 1);
+            let mut agent = UpdateAgent::new(
+                FailingStore,
+                layout(),
+                TARGET,
+                CELLAGENT_TARGET,
+                &mut key,
+                NoKeyStore,
+                SharedStore(&backing),
+                state,
+            );
+            assert_eq!(
+                agent.handle(Command::Begin { header }),
+                Response::Nack(NackReason::StorageError)
+            );
+            assert_eq!(agent.pending_program(), None);
+            assert_eq!(agent.status().staged, StagedState::Empty);
+            assert_eq!(agent.status().last_outcome, UpdateOutcome::StorageFailed);
+        }
+
+        // The cleared state survives a reset.
+        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        assert_eq!(restored.staged, StagedState::Empty);
+        assert_eq!(restored.last_outcome, UpdateOutcome::StorageFailed);
     }
 }

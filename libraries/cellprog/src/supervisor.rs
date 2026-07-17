@@ -141,6 +141,7 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
             Ok(_) => ProgStatus::Ok,
             Err(ProgramError::CorruptSource) => ProgStatus::CorruptSource,
             Err(ProgramError::VerifyFailed) => ProgStatus::VerifyFailed,
+            Err(ProgramError::ReleaseFailed(_)) => ProgStatus::OkReleaseFailed,
             // Store, Nvm, Header, and any future variant.
             Err(_) => ProgStatus::Failed,
         }

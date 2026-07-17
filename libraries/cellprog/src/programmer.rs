@@ -35,6 +35,11 @@ const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 /// Returns a [`ProgramError`] if the store or writer fails, the header does not
 /// parse, the staged copy does not match its CRC, or the written flash does not
 /// match its CRC.
+///
+/// # Panics
+///
+/// Panics if `scratch` is empty. The streaming loops use `scratch` to chunk the
+/// transfer, so an empty buffer would never advance and hang the device.
 pub fn program<S, W>(
     store: &mut S,
     writer: &mut W,
@@ -46,6 +51,12 @@ where
     S: ImageStore,
     W: NvmWriter,
 {
+    // An empty scratch would make `chunk_len` return 0 and the loops below
+    // would never advance. The supervisor always supplies a 64-byte buffer;
+    // this guard makes misuse of the public API loud rather than hanging the
+    // device.
+    assert!(!scratch.is_empty());
+
     let mut header_bytes = [0u8; HEADER_LEN];
     store
         .read(image_offset, &mut header_bytes)
@@ -74,7 +85,7 @@ where
         writer
             .write(target_base.saturating_add(offset), buf)
             .map_err(ProgramError::Nvm)?;
-        offset = offset.saturating_add(u32::try_from(n).unwrap_or(0));
+        offset = offset.saturating_add(advance(n));
     }
 
     // Pass 3: verify the written flash before releasing the target.
@@ -84,7 +95,7 @@ where
         return Err(ProgramError::VerifyFailed);
     }
 
-    writer.finish().map_err(ProgramError::Nvm)?;
+    writer.finish().map_err(ProgramError::ReleaseFailed)?;
     Ok(header)
 }
 
@@ -93,6 +104,14 @@ where
 fn chunk_len(capacity: usize, remaining: u32) -> usize {
     let cap = u32::try_from(capacity).unwrap_or(u32::MAX);
     usize::try_from(remaining.min(cap)).unwrap_or(capacity)
+}
+
+/// Advances a u32 offset by `n` bytes. `chunk_len` bounds `n` by the payload
+/// length (a u32), so the conversion always succeeds on any realistic target;
+/// the saturating fallback only triggers for the impossible case of a
+/// `usize`-wide chunk on a 64-bit host and simply terminates the loop.
+fn advance(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 fn crc_from_store<S: ImageStore>(
@@ -108,7 +127,7 @@ fn crc_from_store<S: ImageStore>(
         let (buf, _) = scratch.split_at_mut(n);
         store.read(offset.saturating_add(done), buf)?;
         crc.update(buf);
-        done = done.saturating_add(u32::try_from(n).unwrap_or(0));
+        done = done.saturating_add(advance(n));
     }
     Ok(crc.finalize())
 }
@@ -126,7 +145,7 @@ fn crc_from_flash<W: NvmWriter>(
         let (buf, _) = scratch.split_at_mut(n);
         writer.read(base.saturating_add(done), buf)?;
         crc.update(buf);
-        done = done.saturating_add(u32::try_from(n).unwrap_or(0));
+        done = done.saturating_add(advance(n));
     }
     Ok(crc.finalize())
 }
@@ -145,6 +164,9 @@ pub enum ProgramError<S, N> {
     CorruptSource,
     /// The written flash did not match its CRC (bad write).
     VerifyFailed,
+    /// Releasing the target after a successful write and verify failed. The
+    /// target's flash holds a valid image but was not released to run.
+    ReleaseFailed(N),
 }
 
 #[cfg(test)]

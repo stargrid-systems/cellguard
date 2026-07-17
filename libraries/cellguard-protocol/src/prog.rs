@@ -52,6 +52,9 @@ pub enum ProgStatus {
     VerifyFailed,
     /// The store or writer failed, or the header did not parse.
     Failed,
+    /// The target was programmed and verified, but releasing it failed. Its
+    /// flash holds a valid image; only the release step did not complete.
+    OkReleaseFailed,
 }
 
 impl ProgStatus {
@@ -63,6 +66,7 @@ impl ProgStatus {
             Self::CorruptSource => 1,
             Self::VerifyFailed => 2,
             Self::Failed => 3,
+            Self::OkReleaseFailed => 4,
         }
     }
 
@@ -74,6 +78,7 @@ impl ProgStatus {
             1 => Some(Self::CorruptSource),
             2 => Some(Self::VerifyFailed),
             3 => Some(Self::Failed),
+            4 => Some(Self::OkReleaseFailed),
             _ => None,
         }
     }
@@ -102,9 +107,10 @@ mod tests {
             ProgStatus::CorruptSource,
             ProgStatus::VerifyFailed,
             ProgStatus::Failed,
+            ProgStatus::OkReleaseFailed,
         ] {
             assert_eq!(ProgStatus::from_code(status.to_code()), Some(status));
         }
-        assert_eq!(ProgStatus::from_code(4), None);
+        assert_eq!(ProgStatus::from_code(5), None);
     }
 }
