@@ -185,6 +185,39 @@ impl PersistentState {
         }
     }
 
+    /// Marks the staged image as successfully programmed and hands it off.
+    ///
+    /// Clears the staged slot, records `Success`, and resets the
+    /// `program_attempts` counter. For an application image it also advances
+    /// `app_version` to the staged version and resets `app_health` and
+    /// `boot_count`, so the new app starts from a clean health slate.
+    ///
+    /// This is the single transition used by both
+    /// [`UpdateAgent::take_pending_program`](crate::update::session::UpdateAgent::take_pending_program)
+    /// and the bootloader's self-program path, so the two cannot drift.
+    pub fn mark_programmed(&mut self, region: cellboot::image::Region) {
+        if region == cellboot::image::Region::ApplicationCode {
+            self.app_version = self.staged_version;
+            self.app_health = AppHealth::Unknown;
+            self.boot_count = 0;
+        }
+        self.staged = StagedState::Empty;
+        self.staged_region = None;
+        self.last_outcome = UpdateOutcome::Success;
+        self.program_attempts = 0;
+    }
+    /// Marks the staged image as permanently failed: attempts exhausted or the
+    /// error is not recoverable by retrying.
+    ///
+    /// Clears the staged slot, records `ProgramFailed`, and resets
+    /// `program_attempts`. The installed app (if any) keeps running.
+    pub const fn mark_program_failed(&mut self) {
+        self.staged = StagedState::Empty;
+        self.staged_region = None;
+        self.last_outcome = UpdateOutcome::ProgramFailed;
+        self.program_attempts = 0;
+    }
+
     /// Serializes the state into its canonical, CRC-protected byte form.
     #[must_use]
     pub fn serialize(&self) -> [u8; STATE_LEN] {
@@ -341,5 +374,62 @@ mod tests {
     #[test]
     fn len_is_stable() {
         assert_eq!(PersistentState::new(0).serialize().len(), STATE_LEN);
+    }
+
+    #[test]
+    fn mark_programmed_advances_app_version_and_resets_health() {
+        let mut state = PersistentState {
+            staged: StagedState::Ready,
+            staged_region: Some(Region::ApplicationCode),
+            staged_version: 42,
+            app_version: 7,
+            app_health: AppHealth::Good,
+            program_attempts: 2,
+            boot_count: 5,
+            ..sample()
+        };
+        state.mark_programmed(Region::ApplicationCode);
+        assert_eq!(state.staged, StagedState::Empty);
+        assert_eq!(state.staged_region, None);
+        assert_eq!(state.last_outcome, UpdateOutcome::Success);
+        assert_eq!(state.program_attempts, 0);
+        assert_eq!(state.app_version, 42);
+        assert_eq!(state.app_health, AppHealth::Unknown);
+        assert_eq!(state.boot_count, 0);
+    }
+
+    #[test]
+    fn mark_programmed_non_app_keeps_app_version_and_health() {
+        let mut state = PersistentState {
+            staged: StagedState::Ready,
+            staged_region: Some(Region::Bootloader),
+            staged_version: 42,
+            app_version: 7,
+            app_health: AppHealth::Good,
+            program_attempts: 1,
+            boot_count: 3,
+            ..sample()
+        };
+        state.mark_programmed(Region::Bootloader);
+        assert_eq!(state.last_outcome, UpdateOutcome::Success);
+        // A bootloader flash does not touch the recorded app version/health.
+        assert_eq!(state.app_version, 7);
+        assert_eq!(state.app_health, AppHealth::Good);
+        assert_eq!(state.boot_count, 3);
+    }
+
+    #[test]
+    fn mark_program_failed_clears_slot_and_records_failure() {
+        let mut state = PersistentState {
+            staged: StagedState::Ready,
+            staged_region: Some(Region::ApplicationCode),
+            program_attempts: 3,
+            ..sample()
+        };
+        state.mark_program_failed();
+        assert_eq!(state.staged, StagedState::Empty);
+        assert_eq!(state.staged_region, None);
+        assert_eq!(state.last_outcome, UpdateOutcome::ProgramFailed);
+        assert_eq!(state.program_attempts, 0);
     }
 }

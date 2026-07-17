@@ -13,7 +13,7 @@ use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, NackReason, Response, KEY_LEN};
-use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
+use crate::update::state::{PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
@@ -177,13 +177,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     #[must_use]
     pub fn take_pending_program(&mut self) -> Option<Region> {
         let region = self.pending_program()?;
-        self.state.staged = StagedState::Empty;
-        self.state.staged_region = None;
-        self.state.last_outcome = UpdateOutcome::Success;
-        if region == Region::ApplicationCode {
-            self.state.app_version = self.state.staged_version;
-            self.state.app_health = AppHealth::Unknown;
-        }
+        self.state.mark_programmed(region);
         let _ = self.state_store.store(&self.state.serialize());
         Some(region)
     }

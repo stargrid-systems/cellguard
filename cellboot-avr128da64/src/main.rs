@@ -29,7 +29,7 @@ use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
-use cellcore::update::state::{self, StagedState, UpdateOutcome};
+use cellcore::update::state::{self, StagedState};
 use cellguard_panic::{Decision, clear, store_and_decide};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -127,10 +127,7 @@ fn main() -> ! {
                 &mut scratch,
             ) {
                 Ok(_header) => {
-                    state.staged = StagedState::Empty;
-                    state.staged_region = None;
-                    state.last_outcome = UpdateOutcome::Success;
-                    state.program_attempts = 0;
+                    state.mark_programmed(Region::ApplicationCode);
                     let _ = state_store.store(&state.serialize());
                     // Fresh application code gets a fresh crash-loop counter.
                     clear(&nvm, &cpu, PANIC_OFFSET);
@@ -148,10 +145,7 @@ fn main() -> ! {
         // (corrupt source, bad header) the installed app is intact and runs
         // normally. If it was destructive, the cellprog watchdog detects
         // heartbeat loss and attempts recovery.
-        state.staged = StagedState::Empty;
-        state.staged_region = None;
-        state.last_outcome = UpdateOutcome::ProgramFailed;
-        state.program_attempts = 0;
+        state.mark_program_failed();
         let _ = state_store.store(&state.serialize());
     }
 
