@@ -156,7 +156,7 @@ fn main() -> ! {
         layout,
         TARGET_ID,
         CELLAGENT_TARGET_ID,
-        &key,
+        &mut key,
         NoKeyStore,
         state_store,
         boot_state,

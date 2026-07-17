@@ -100,7 +100,7 @@ mod tests {
     use crate::update::session::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::update::state::{PersistentState, StagedState};
 
-    const KEY: &[u8] = b"dispatch-test-key";
+    const KEY: [u8; 17] = *b"dispatch-test-key";
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
@@ -150,7 +150,9 @@ mod tests {
         }
     }
 
-    fn make_dispatcher() -> Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512> {
+    fn make_dispatcher(
+        key: &mut [u8],
+    ) -> Dispatcher<'_, MemStore, NoKeyStore, NullStateStore, 512> {
         let layout = StagingLayout {
             application: RegionSlot {
                 offset: 0,
@@ -170,7 +172,7 @@ mod tests {
             layout,
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -195,7 +197,7 @@ mod tests {
     /// Feeds a wire command into the dispatcher and decodes the response
     /// packet.
     fn exchange(
-        dispatcher: &mut Dispatcher<'static, MemStore, NoKeyStore, NullStateStore, 512>,
+        dispatcher: &mut Dispatcher<'_, MemStore, NoKeyStore, NullStateStore, 512>,
         kind: Kind,
         payload: &[u8],
     ) -> (Kind, [u8; 64], usize) {
@@ -243,14 +245,16 @@ mod tests {
 
     #[test]
     fn probe_returns_status() {
-        let mut dispatcher = make_dispatcher();
+        let mut key = KEY;
+        let mut dispatcher = make_dispatcher(&mut key);
         let (kind, _payload, _len) = exchange(&mut dispatcher, Kind::BootProbe, &[]);
         assert_eq!(kind, Kind::BootStatus);
     }
 
     #[test]
     fn ignores_frame_for_other_node() {
-        let mut dispatcher = make_dispatcher();
+        let mut key = KEY;
+        let mut dispatcher = make_dispatcher(&mut key);
         // A well-formed probe addressed to a different node id.
         let mut raw = [0u8; 32];
         let raw_len = Packet::write(NODE + 1, Kind::BootProbe, &[], &mut raw).unwrap();
@@ -267,7 +271,8 @@ mod tests {
     #[test]
     #[expect(clippy::cast_possible_truncation, reason = "index < 200 fits in a u8")]
     fn full_update_flow() {
-        let mut dispatcher = make_dispatcher();
+        let mut key = KEY;
+        let mut dispatcher = make_dispatcher(&mut key);
         let payload: [u8; 200] = core::array::from_fn(|i| i as u8);
         let header = signed_image(&payload);
 

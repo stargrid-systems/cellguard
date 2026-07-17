@@ -53,6 +53,10 @@ const STATE_LEN: u16 = 64;
 /// section).
 const APP_TARGET_BASE: u32 = 0x1000;
 
+/// Maximum self-program attempts before the bootloader gives up, clears the
+/// staged image, and falls through to the installed app.
+const MAX_PROGRAM_ATTEMPTS: u8 = 3;
+
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -97,27 +101,41 @@ fn main() -> ! {
 
     // If a verified application image is staged, self-program it into flash.
     if state.staged == StagedState::Ready && state.staged_region == Some(Region::ApplicationCode) {
-        let mut writer = FlashNvmWriter::new(&nvm, &cpu);
-        let mut scratch = [0u8; 256];
-        match cellprog::programmer::program(
-            &mut store,
-            &mut writer,
-            0,
-            APP_TARGET_BASE,
-            &mut scratch,
-        ) {
-            Ok(_header) => {
-                state.staged = StagedState::Empty;
-                state.staged_region = None;
-                state.last_outcome = UpdateOutcome::Success;
-                let _ = state_store.store(&state.serialize());
-            }
-            Err(_) => {
-                // Leave state as-is. The cellprog watchdog recovers the core
-                // via the heartbeat path if the installed app is broken.
+        if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
+            let mut writer = FlashNvmWriter::new(&nvm, &cpu);
+            let mut scratch = [0u8; 256];
+            match cellprog::programmer::program(
+                &mut store,
+                &mut writer,
+                0,
+                APP_TARGET_BASE,
+                &mut scratch,
+            ) {
+                Ok(_header) => {
+                    state.staged = StagedState::Empty;
+                    state.staged_region = None;
+                    state.last_outcome = UpdateOutcome::Success;
+                    state.program_attempts = 0;
+                    let _ = state_store.store(&state.serialize());
+                    software_reset(&cpu);
+                }
+                Err(_) => {
+                    state.program_attempts += 1;
+                    let _ = state_store.store(&state.serialize());
+                    software_reset(&cpu);
+                }
             }
         }
-        software_reset(&cpu);
+        // Attempts exhausted. Clear staged so the device does not loop, and
+        // fall through to the installed app. If the error was non-destructive
+        // (corrupt source, bad header) the installed app is intact and runs
+        // normally. If it was destructive, the cellprog watchdog detects
+        // heartbeat loss and attempts recovery.
+        state.staged = StagedState::Empty;
+        state.staged_region = None;
+        state.last_outcome = UpdateOutcome::ProgramFailed;
+        state.program_attempts = 0;
+        let _ = state_store.store(&state.serialize());
     }
 
     // No pending update: jump to the installed application.

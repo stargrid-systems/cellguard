@@ -77,7 +77,7 @@ pub struct UpdateAgent<'k, S, K, St> {
     layout: StagingLayout,
     target_id: u16,
     cellagent_target_id: u16,
-    key: &'k [u8],
+    key: &'k mut [u8],
     key_store: K,
     state_store: St,
     state: PersistentState,
@@ -90,11 +90,13 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// `target_id` is this device's identity, used to reject images built for a
     /// different device. `cellagent_target_id` is the cellagent's identity,
     /// used to verify cellagent images relayed through the cellcore. `key` is
-    /// the shared HMAC key, normally a slice over the USERROW. `key_store`
-    /// writes a replacement key (use
-    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production). `state_store`
-    /// persists the probe-able state, and `state` is the state already loaded
-    /// from it at boot (see [`crate::update::state::load`]).
+    /// the shared HMAC key, normally a mutable slice over a boot-time buffer
+    /// copied from USERROW. On a successful key replacement the buffer is
+    /// updated in-place, so the new key takes effect immediately. Use
+    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production to disable key
+    /// replacement. `state_store` persists the probe-able state, and `state`
+    /// is the state already loaded from it at boot (see
+    /// [`crate::update::state::load`]).
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a distinct, required piece of hardware state"
@@ -104,7 +106,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         layout: StagingLayout,
         target_id: u16,
         cellagent_target_id: u16,
-        key: &'k [u8],
+        key: &'k mut [u8],
         key_store: K,
         state_store: St,
         state: PersistentState,
@@ -205,11 +207,12 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         if self.key_store.write_key(new_key).is_err() {
             return Response::Nack(NackReason::StorageError);
         }
+        self.key.copy_from_slice(new_key);
         Response::Ack { next_offset: 0 }
     }
 
     fn on_begin(&mut self, header_bytes: &[u8; HEADER_LEN]) -> Response {
-        let Ok((header, verifier)) = Verifier::new(HMAC::new(self.key), header_bytes) else {
+        let Ok((header, verifier)) = Verifier::new(HMAC::new(&*self.key), header_bytes) else {
             return Response::Nack(NackReason::Malformed);
         };
         let expected_id = match header.region {
@@ -332,7 +335,7 @@ mod tests {
     use crate::update::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
     use crate::update::state::{PersistentState, STATE_LEN, StagedState, UpdateOutcome};
 
-    const KEY: &[u8] = b"session-test-key";
+    const KEY: [u8; 16] = *b"session-test-key";
     const TARGET: u16 = 0x2A2A;
     const CELLAGENT_TARGET: u16 = 0x2B2B;
     const CAP: usize = 4096;
@@ -429,7 +432,7 @@ mod tests {
         }
     }
 
-    fn signed_image(payload: &[u8]) -> [u8; HEADER_LEN] {
+    fn signed_image_with(payload: &[u8], key: &[u8]) -> [u8; HEADER_LEN] {
         let header = ImageHeader {
             kind: ImageKind::Application,
             region: Region::ApplicationCode,
@@ -439,10 +442,14 @@ mod tests {
             payload_crc32: 0,
             hmac: [0u8; 32],
         };
-        let full = crate::update::verify::sign(header, HMAC::new(KEY), payload).unwrap();
+        let full = crate::update::verify::sign(header, HMAC::new(key), payload).unwrap();
         let mut only_header = [0u8; HEADER_LEN];
         only_header.copy_from_slice(&full);
         only_header
+    }
+
+    fn signed_image(payload: &[u8]) -> [u8; HEADER_LEN] {
+        signed_image_with(payload, &KEY)
     }
 
     #[expect(
@@ -476,12 +483,13 @@ mod tests {
     fn happy_path_stages_and_verifies() {
         let payload = ramp300();
         let header = signed_image(&payload);
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -512,12 +520,13 @@ mod tests {
         let header = signed_image(&payload);
         let mut tampered = payload;
         tampered[100] ^= 0x01;
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -535,12 +544,13 @@ mod tests {
     fn wrong_target_is_rejected() {
         let payload = [1u8, 2, 3];
         let header = signed_image(&payload);
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             0x9999,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -555,12 +565,13 @@ mod tests {
     fn out_of_order_data_is_rejected() {
         let payload = [1u8, 2, 3, 4, 5, 6];
         let header = signed_image(&payload);
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -577,12 +588,13 @@ mod tests {
 
     #[test]
     fn data_without_begin_is_rejected() {
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -600,12 +612,13 @@ mod tests {
     fn abort_clears_session() {
         let payload = [1u8, 2, 3, 4];
         let header = signed_image(&payload);
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
@@ -647,42 +660,75 @@ mod tests {
     #[test]
     fn key_replace_authorized_writes_new_key() {
         let store = AcceptingKeyStore;
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             store,
             NullStateStore,
             PersistentState::new(1),
         );
         let new_key = [0x5Au8; KEY_LEN];
-        let tag = replace_key_tag(KEY, &new_key);
+        let tag = replace_key_tag(&KEY, &new_key);
 
         assert!(matches!(
             agent.handle(Command::ReplaceKey { new_key, tag }),
             Response::Ack { .. }
         ));
         // The self-check on the auth helper mirrors what the device did.
-        assert!(authenticate_key_replace(KEY, &new_key, &tag));
+        assert!(authenticate_key_replace(&KEY, &new_key, &tag));
     }
 
     #[test]
-    fn key_replace_rejects_bad_tag() {
+    fn key_replace_takes_effect_immediately() {
         let store = AcceptingKeyStore;
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             store,
             NullStateStore,
             PersistentState::new(1),
         );
         let new_key = [0x5Au8; KEY_LEN];
-        let mut tag = replace_key_tag(KEY, &new_key);
+        let tag = replace_key_tag(&KEY, &new_key);
+
+        assert!(matches!(
+            agent.handle(Command::ReplaceKey { new_key, tag }),
+            Response::Ack { .. }
+        ));
+
+        // An image signed with the new key is accepted without a reboot.
+        let payload = ramp300();
+        let header = signed_image_with(&payload, &new_key);
+        assert!(matches!(
+            agent.handle(Command::Begin { header }),
+            Response::Ack { .. }
+        ));
+    }
+
+    #[test]
+    fn key_replace_rejects_bad_tag() {
+        let store = AcceptingKeyStore;
+        let mut key = KEY;
+        let mut agent = UpdateAgent::new(
+            MemStore::new(),
+            layout(),
+            TARGET,
+            CELLAGENT_TARGET,
+            &mut key,
+            store,
+            NullStateStore,
+            PersistentState::new(1),
+        );
+        let new_key = [0x5Au8; KEY_LEN];
+        let mut tag = replace_key_tag(&KEY, &new_key);
         tag[0] ^= 0x01;
         assert_eq!(
             agent.handle(Command::ReplaceKey { new_key, tag }),
@@ -692,18 +738,19 @@ mod tests {
 
     #[test]
     fn key_replace_rejected_when_locked() {
+        let mut key = KEY;
         let mut agent = UpdateAgent::new(
             MemStore::new(),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            &mut key,
             NoKeyStore,
             NullStateStore,
             PersistentState::new(1),
         );
         let new_key = [0x5Au8; KEY_LEN];
-        let tag = replace_key_tag(KEY, &new_key);
+        let tag = replace_key_tag(&KEY, &new_key);
         // Authentication passes, but a locked key store refuses the write.
         assert_eq!(
             agent.handle(Command::ReplaceKey { new_key, tag }),
@@ -718,12 +765,13 @@ mod tests {
         let header = signed_image(&payload);
 
         {
+            let mut key = KEY;
             let mut agent = UpdateAgent::new(
                 MemStore::new(),
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
-                KEY,
+                &mut key,
                 NoKeyStore,
                 SharedStore(&backing),
                 PersistentState::new(1),
@@ -748,12 +796,13 @@ mod tests {
         let payload = [1u8, 2, 3, 4];
         let header = signed_image(&payload);
         {
+            let mut key = KEY;
             let mut agent = UpdateAgent::new(
                 MemStore::new(),
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
-                KEY,
+                &mut key,
                 NoKeyStore,
                 SharedStore(&backing),
                 PersistentState::new(1),

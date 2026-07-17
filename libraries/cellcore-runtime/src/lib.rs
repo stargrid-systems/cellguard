@@ -19,6 +19,13 @@
 //! [`Dispatcher::take_pending_program`]), which persists the new state, then
 //! signals the programmer. A reset mid-programming therefore cannot make the
 //! core re-trigger the same flash on reboot.
+//!
+//! The consume-before-signal ordering means a failed write to the programmer
+//! link loses the update silently: the staged image is already cleared and the
+//! outcome is `Success`. This is acceptable because the programmer link is a
+//! local UART with negligible failure probability, and the alternative
+//! (write-first) would race the bootloader self-program path with the cellprog
+//! UPDI flash if the programmer resets the core before the runtime can consume.
 
 #![no_std]
 #![warn(missing_docs)]
@@ -169,9 +176,12 @@ where
     /// Services one received bus byte.
     ///
     /// Feeds the byte to the dispatcher, writes any response back to the bus,
-    /// and hands a newly committed image off to the programmer. Link errors are
-    /// swallowed: a dropped response or handoff is retried on the next byte, and
-    /// the agent state is already durable.
+    /// and hands a newly committed image off to the programmer. Link errors
+    /// are swallowed. A dropped bus response is retried on the next byte
+    /// because the dispatcher re-derives it from the decoded command. A
+    /// dropped handoff is not retried: the staged image is consumed before
+    /// signaling (see [`hand_off`](Self::hand_off)) to avoid races with the
+    /// bootloader self-program path.
     pub fn service(&mut self, byte: u8) {
         if let Some(response) = self.dispatcher.feed(byte) {
             let _ = self.bus.write_all(response);
@@ -182,6 +192,12 @@ where
     }
 
     /// Signals the programmer to flash the committed `region`.
+    ///
+    /// The staged image is consumed and persisted before the frame is written.
+    /// If the write fails the update is lost (the outcome is already `Success`
+    /// and `pending_program` returns `None`). This ordering prevents the
+    /// bootloader from self-programming the same image on the next reboot while
+    /// cellprog is simultaneously flashing it over UPDI.
     fn hand_off(&mut self, region: Region) {
         let mut frame = [0u8; PROGRAM_WIRE];
         let Some(len) = handoff::program_frame(self.prog_id, region, &mut frame) else {
@@ -207,7 +223,7 @@ mod tests {
 
     use super::CoreRuntime;
 
-    const KEY: &[u8] = b"runtime-test-key";
+    const KEY: [u8; 16] = *b"runtime-test-key";
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
@@ -299,14 +315,15 @@ mod tests {
     }
 
     fn runtime_with(
+        key: &mut [u8],
         state: PersistentState,
-    ) -> CoreRuntime<'static, MemStore, NoKeyStore, NullStateStore, MockLink, MockLink, 512> {
+    ) -> CoreRuntime<'_, MemStore, NoKeyStore, NullStateStore, MockLink, MockLink, 512> {
         let agent = UpdateAgent::new(
             MemStore { buf: [0; CAP] },
             layout(),
             TARGET,
             CELLAGENT_TARGET,
-            KEY,
+            key,
             NoKeyStore,
             NullStateStore,
             state,
@@ -318,7 +335,7 @@ mod tests {
     /// Feeds a COBS-encoded command frame byte by byte.
     fn feed_command(
         runtime: &mut CoreRuntime<
-            'static,
+            '_,
             MemStore,
             NoKeyStore,
             NullStateStore,
@@ -376,7 +393,8 @@ mod tests {
 
     #[test]
     fn probe_is_answered_on_the_bus_only() {
-        let mut runtime = runtime_with(PersistentState::new(1));
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, PersistentState::new(1));
         feed_command(&mut runtime, Kind::BootProbe, &[]);
 
         assert_eq!(decode_kind(&runtime.bus.written), Kind::BootStatus);
@@ -397,9 +415,11 @@ mod tests {
             staged: StagedState::Ready,
             staged_region: Some(Region::ApplicationCode),
             last_outcome: UpdateOutcome::None,
+            program_attempts: 0,
             boot_count: 0,
         };
-        let mut runtime = runtime_with(ready);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready);
 
         // Any serviced byte drives the handoff. A bare COBS delimiter decodes to
         // no command, so only the pending-program path runs.

@@ -114,6 +114,8 @@ pub enum UpdateOutcome {
     StorageFailed,
     /// The most recent update was aborted by the host.
     Aborted,
+    /// Programming the staged image into flash failed.
+    ProgramFailed,
 }
 
 impl UpdateOutcome {
@@ -124,6 +126,7 @@ impl UpdateOutcome {
             Self::VerifyFailed => 2,
             Self::StorageFailed => 3,
             Self::Aborted => 4,
+            Self::ProgramFailed => 5,
         }
     }
 
@@ -134,6 +137,7 @@ impl UpdateOutcome {
             2 => Some(Self::VerifyFailed),
             3 => Some(Self::StorageFailed),
             4 => Some(Self::Aborted),
+            5 => Some(Self::ProgramFailed),
             _ => None,
         }
     }
@@ -156,6 +160,10 @@ pub struct PersistentState {
     pub staged_region: Option<cellboot::image::Region>,
     /// Result of the most recent update attempt.
     pub last_outcome: UpdateOutcome,
+    /// Bootloader self-program attempts for the current staged image.
+    /// Incremented on each failed attempt; cleared on success or when the
+    /// bootloader gives up. Meaningful only to the bootloader.
+    pub program_attempts: u8,
     /// Boots since the application last confirmed itself.
     pub boot_count: u16,
 }
@@ -172,6 +180,7 @@ impl PersistentState {
             staged: StagedState::Empty,
             staged_region: None,
             last_outcome: UpdateOutcome::None,
+            program_attempts: 0,
             boot_count: 0,
         }
     }
@@ -187,6 +196,7 @@ impl PersistentState {
         out[4] = self
             .staged_region
             .map_or(NO_REGION, cellboot::image::Region::to_code);
+        out[5] = self.program_attempts;
         out[6..8].copy_from_slice(&self.boot_count.to_le_bytes());
         out[8..12].copy_from_slice(&self.agent_version.to_le_bytes());
         out[12..16].copy_from_slice(&self.app_version.to_le_bytes());
@@ -220,6 +230,7 @@ impl PersistentState {
             Some(cellboot::image::Region::from_code(bytes[4]).ok_or(StateError::BadField)?)
         };
 
+        let program_attempts = bytes[5];
         let boot_count = u16::from_le_bytes([bytes[6], bytes[7]]);
         let agent_version = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
         let app_version = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
@@ -233,6 +244,7 @@ impl PersistentState {
             staged,
             staged_region,
             last_outcome,
+            program_attempts,
             boot_count,
         })
     }
@@ -277,6 +289,7 @@ mod tests {
             staged: StagedState::Ready,
             staged_region: Some(Region::ApplicationCode),
             last_outcome: UpdateOutcome::Success,
+            program_attempts: 0,
             boot_count: 3,
         }
     }
@@ -284,6 +297,16 @@ mod tests {
     #[test]
     fn roundtrip() {
         let state = sample();
+        assert_eq!(PersistentState::parse(&state.serialize()), Ok(state));
+    }
+
+    #[test]
+    fn program_attempts_and_outcome_roundtrip() {
+        let state = PersistentState {
+            program_attempts: 2,
+            last_outcome: UpdateOutcome::ProgramFailed,
+            ..sample()
+        };
         assert_eq!(PersistentState::parse(&state.serialize()), Ok(state));
     }
 
