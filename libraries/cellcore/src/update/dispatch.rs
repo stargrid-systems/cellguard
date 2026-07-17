@@ -114,7 +114,8 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
 #[cfg(test)]
 mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use cellboot::io::{ImageStore, NoKeyStore, StateStore};
+    use cellboot::io::NoKeyStore;
+    use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore};
     use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
     use hmac_sha256::HMAC;
 
@@ -127,50 +128,8 @@ mod tests {
     const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
     const CAP: usize = 4096;
-
-    struct MemStore {
-        buf: [u8; CAP],
-    }
-
-    impl ImageStore for MemStore {
-        type Error = ();
-
-        fn capacity(&self) -> u32 {
-            u32::try_from(CAP).unwrap()
-        }
-
-        fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), ()> {
-            let start = usize::try_from(offset).map_err(|_| ())?;
-            let end = start.checked_add(buf.len()).ok_or(())?;
-            buf.copy_from_slice(self.buf.get(start..end).ok_or(())?);
-            Ok(())
-        }
-
-        fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
-            let start = usize::try_from(offset).map_err(|_| ())?;
-            let end = start.checked_add(data.len()).ok_or(())?;
-            self.buf
-                .get_mut(start..end)
-                .ok_or(())?
-                .copy_from_slice(data);
-            Ok(())
-        }
-    }
-
-    /// A state store that drops writes and reports an empty load.
-    struct NullStateStore;
-
-    impl StateStore for NullStateStore {
-        type Error = ();
-
-        fn load(&mut self, _buf: &mut [u8]) -> Result<(), ()> {
-            Err(())
-        }
-
-        fn store(&mut self, _data: &[u8]) -> Result<(), ()> {
-            Ok(())
-        }
-    }
+    /// Concrete test store, pinned to the test capacity.
+    type MemStore = MemStoreImpl<CAP>;
 
     fn make_dispatcher(
         key: &mut [u8; 16],
@@ -190,7 +149,7 @@ mod tests {
             },
         };
         let agent = UpdateAgent::new(
-            MemStore { buf: [0; CAP] },
+            MemStore::new(),
             layout,
             TARGET,
             CELLAGENT_TARGET,

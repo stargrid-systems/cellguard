@@ -348,6 +348,7 @@ mod tests {
 
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::{ImageStore, KeyStore, NoKeyStore, StateStore};
+    use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore, SharedStore};
     use hmac_sha256::HMAC;
 
     use super::{RegionSlot, StagingLayout, UpdateAgent};
@@ -359,81 +360,8 @@ mod tests {
     const TARGET: u16 = 0x2A2A;
     const CELLAGENT_TARGET: u16 = 0x2B2B;
     const CAP: usize = 4096;
-
-    struct MemStore {
-        buf: [u8; CAP],
-    }
-
-    impl MemStore {
-        const fn new() -> Self {
-            Self { buf: [0u8; CAP] }
-        }
-    }
-
-    impl ImageStore for MemStore {
-        type Error = ();
-
-        fn capacity(&self) -> u32 {
-            u32::try_from(CAP).unwrap()
-        }
-
-        fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), ()> {
-            let start = usize::try_from(offset).map_err(|_| ())?;
-            let end = start.checked_add(buf.len()).ok_or(())?;
-            buf.copy_from_slice(self.buf.get(start..end).ok_or(())?);
-            Ok(())
-        }
-
-        fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
-            let start = usize::try_from(offset).map_err(|_| ())?;
-            let end = start.checked_add(data.len()).ok_or(())?;
-            self.buf
-                .get_mut(start..end)
-                .ok_or(())?
-                .copy_from_slice(data);
-            Ok(())
-        }
-    }
-
-    /// A state store that drops writes and reports an empty load.
-    struct NullStateStore;
-
-    impl StateStore for NullStateStore {
-        type Error = ();
-
-        fn load(&mut self, _buf: &mut [u8]) -> Result<(), ()> {
-            Err(())
-        }
-
-        fn store(&mut self, _data: &[u8]) -> Result<(), ()> {
-            Ok(())
-        }
-    }
-
-    /// A state store backed by shared bytes, so a second agent can load what a
-    /// first one persisted. `None` stands in for a blank store.
-    struct SharedStore<'a>(&'a RefCell<Option<[u8; STATE_LEN]>>);
-
-    impl StateStore for SharedStore<'_> {
-        type Error = ();
-
-        fn load(&mut self, buf: &mut [u8]) -> Result<(), ()> {
-            let guard = self.0.borrow();
-            let bytes = guard.as_ref().ok_or(())?;
-            buf.get_mut(..STATE_LEN).ok_or(())?.copy_from_slice(bytes);
-            Ok(())
-        }
-
-        fn store(&mut self, data: &[u8]) -> Result<(), ()> {
-            let bytes: [u8; STATE_LEN] = data
-                .get(..STATE_LEN)
-                .ok_or(())?
-                .try_into()
-                .map_err(|_| ())?;
-            *self.0.borrow_mut() = Some(bytes);
-            Ok(())
-        }
-    }
+    /// Concrete test store, pinned to the test capacity.
+    type MemStore = MemStoreImpl<CAP>;
 
     fn layout() -> StagingLayout {
         StagingLayout {
@@ -780,7 +708,7 @@ mod tests {
 
     #[test]
     fn state_persists_across_reset() {
-        let backing = RefCell::new(None);
+        let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);
         let payload = ramp300();
         let header = signed_image(&payload);
 
@@ -793,7 +721,7 @@ mod tests {
                 CELLAGENT_TARGET,
                 &mut key,
                 NoKeyStore,
-                SharedStore(&backing),
+                SharedStore::new(&backing),
                 PersistentState::new(1),
             );
             assert!(matches!(
@@ -803,7 +731,7 @@ mod tests {
         }
 
         // Reset: a fresh agent loads what the first one persisted at commit.
-        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Ready);
         assert_eq!(restored.staged_region, Some(Region::ApplicationCode));
         assert_eq!(restored.last_outcome, UpdateOutcome::Success);
@@ -812,7 +740,7 @@ mod tests {
 
     #[test]
     fn abort_is_persisted() {
-        let backing = RefCell::new(None);
+        let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);
         let payload = [1u8, 2, 3, 4];
         let header = signed_image(&payload);
         {
@@ -824,13 +752,13 @@ mod tests {
                 CELLAGENT_TARGET,
                 &mut key,
                 NoKeyStore,
-                SharedStore(&backing),
+                SharedStore::new(&backing),
                 PersistentState::new(1),
             );
             agent.handle(Command::Begin { header });
             agent.handle(Command::Abort);
         }
-        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::Aborted);
     }
@@ -860,7 +788,7 @@ mod tests {
     /// begin and trigger an unintended handoff. See `on_begin`.
     #[test]
     fn begin_storage_failure_clears_stale_ready() {
-        let backing = RefCell::new(None);
+        let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);
         let payload = ramp300();
         let header = signed_image(&payload);
 
@@ -874,7 +802,7 @@ mod tests {
                 CELLAGENT_TARGET,
                 &mut key,
                 NoKeyStore,
-                SharedStore(&backing),
+                SharedStore::new(&backing),
                 PersistentState::new(1),
             );
             assert!(matches!(
@@ -888,7 +816,7 @@ mod tests {
         // Ready must be cleared so `pending_program` reports nothing.
         {
             let mut key = KEY;
-            let state = crate::update::state::load(&mut SharedStore(&backing), 1);
+            let state = crate::update::state::load(&mut SharedStore::new(&backing), 1);
             let mut agent = UpdateAgent::new(
                 FailingStore,
                 layout(),
@@ -896,7 +824,7 @@ mod tests {
                 CELLAGENT_TARGET,
                 &mut key,
                 NoKeyStore,
-                SharedStore(&backing),
+                SharedStore::new(&backing),
                 state,
             );
             assert_eq!(
@@ -909,7 +837,7 @@ mod tests {
         }
 
         // The cleared state survives a reset.
-        let restored = crate::update::state::load(&mut SharedStore(&backing), 1);
+        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::StorageFailed);
     }

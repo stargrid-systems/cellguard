@@ -16,5 +16,8 @@ crc = { workspace = true }
 hmac-sha256 = { workspace = true }
 cellguard-panic = { workspace = true }
 
+[dev-dependencies]
+cellboot = { workspace = true, features = ["testutil"] }
+
 [lints]
 workspace = true

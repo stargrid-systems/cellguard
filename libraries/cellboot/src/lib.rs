@@ -18,6 +18,8 @@
 //! - `avr128`: the AVR128 on-chip `drivers::EepromState` and
 //!   `drivers::UserRowKeyStore` adapters. Pulls in `avrxt-hal`, so it only
 //!   builds for the `avr-none` target.
+//! - `testutil`: shared in-RAM test mocks (`testutil::MemStore`,
+//!   `testutil::NullStateStore`, `testutil::SharedStore`). Test-only.
 #![no_std]
 #![warn(missing_docs)]
 
@@ -25,3 +27,5 @@
 pub mod drivers;
 pub mod image;
 pub mod io;
+#[cfg(feature = "testutil")]
+pub mod testutil;

@@ -15,6 +15,7 @@ cellcore = { workspace = true }
 embedded-io = { workspace = true }
 
 [dev-dependencies]
+cellboot = { workspace = true, features = ["testutil"] }
 cellguard-protocol = { workspace = true, features = ["bootloader"] }
 
 [lints]
