@@ -41,7 +41,8 @@
 //! - op-amps ([`opamp`])
 //! - zero-cross ([`zcd`])
 //! - signature row ([`sigrow`])
-//! - non-volatile memory controller ([`nvmctrl`]) for on-chip EEPROM and USERROW
+//! - non-volatile memory controller ([`nvmctrl`]) for on-chip EEPROM and
+//!   USERROW
 //! - reset controller ([`rstctrl`])
 #![no_std]
 #![allow(
@@ -61,8 +62,8 @@ pub mod gpio;
 pub mod nvmctrl;
 pub mod opamp;
 pub mod pwm;
-pub mod rtc;
 pub mod rstctrl;
+pub mod rtc;
 pub mod sigrow;
 pub mod spi;
 pub mod twi;

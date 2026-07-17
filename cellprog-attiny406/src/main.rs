@@ -7,8 +7,9 @@
 //!
 //! This MCU reflashes the cellcore (AVR128) over UPDI, reading staged images
 //! from the shared SPI EEPROM. The cellcore is the sole orchestrator for field
-//! updates: it stages images, then sends a `ProgProgram` packet over its USART3,
-//! which reaches this MCU's USART0 through the U1004 analog mux (channel 0).
+//! updates: it stages images, then sends a `ProgProgram` packet over its
+//! USART3, which reaches this MCU's USART0 through the U1004 analog mux
+//! (channel 0).
 //!
 //! The programmer also watches the cellcore heartbeat (`AVR64_TO_PROG` on PB4,
 //! toggled by the cellcore via the U103 GPIO expander). If the heartbeat goes
@@ -30,6 +31,9 @@
 //! - SPI0_ALT (PC0 SCK, PC1 MISO, PC2 MOSI). App EEPROM U104 CS = PA2, Boot
 //!   EEPROM U105 CS = PC3.
 
+use core::cell::RefCell;
+use core::panic::PanicInfo;
+
 use avr_device::attiny406 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::delay::Delay;
@@ -39,9 +43,10 @@ use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
 use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
 use avrxt_hal::usart::{Frame, Usart};
-use cat25::{CAT25128, CAT25M01, Cat25};
+use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::Cat25Store;
 use cellboot::io::BandedStore;
+use cellguard_panic::{Decision, clear, store_and_decide};
 use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
 use cellprog::writer::{TinyNvmWriter, UpdiNvmWriter};
@@ -50,10 +55,6 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use embedded_io::Write;
-use panic_log::{Decision, clear, store_and_decide};
-
-use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 use self::updi_link::UsartUpdiLink;
 
@@ -145,9 +146,7 @@ fn main() -> ! {
     let portc = Port::new(dp.PORTC).split();
 
     // SPI0 on its alternate (PORTC) pins: PC0 SCK, PC1 MISO, PC2 MOSI.
-    dp.PORTMUX
-        .ctrlb()
-        .write(|w| w.spi0().set_bit());
+    dp.PORTMUX.ctrlb().write(|w| w.spi0().set_bit());
     let _sck = portc.p0.into_output();
     let _miso = portc.p1.into_input();
     let _mosi = portc.p2.into_output();

@@ -14,7 +14,7 @@ cellboot = { workspace = true }
 cellguard-protocol = { workspace = true, features = ["bootloader"] }
 crc = { workspace = true }
 hmac-sha256 = { workspace = true }
-panic-log = { workspace = true }
+cellguard-panic = { workspace = true }
 
 [lints]
 workspace = true

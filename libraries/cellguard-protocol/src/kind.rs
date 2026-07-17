@@ -74,7 +74,8 @@ pub enum Kind {
     #[cfg(feature = "bootloader")]
     ProgResult = 19,
     /// Request: set the cellagent balancer gate state.
-    /// Payload: 1 byte bitmask (bit 0 = `GATE_A`, bit 1 = `GATE_B`, bit 2 = `ALL_OFF`).
+    /// Payload: 1 byte bitmask (bit 0 = `GATE_A`, bit 1 = `GATE_B`, bit 2 =
+    /// `ALL_OFF`).
     SetBalancer = 20,
     /// Request: report the last panic record. Available on every node.
     PanicProbe = 21,

@@ -17,7 +17,7 @@ cellboot = { path = "../libraries/cellboot", features = ["avr128"] }
 cellcore = { path = "../libraries/cellcore" }
 cellcore-runtime = { path = "../libraries/cellcore-runtime" }
 embedded-hal = { version = "1", default-features = false }
-panic-log = { path = "../libraries/panic-log", features = ["hal"] }
+cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }

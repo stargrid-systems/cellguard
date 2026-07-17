@@ -1,9 +1,9 @@
 //! AVR128 high-frequency clock control.
 //!
 //! The AVR128 DB/DA family boots on the internal OSCHF at 4 MHz. [`set_oschf`]
-//! selects another OSCHF frequency. [`set_extclk`] switches the main clock to an
-//! external clock instead. `OSCHFCTRLA`, `XOSCHFCTRLA` and `MCLKCTRLA` are all
-//! configuration-change protected.
+//! selects another OSCHF frequency. [`set_extclk`] switches the main clock to
+//! an external clock instead. `OSCHFCTRLA`, `XOSCHFCTRLA` and `MCLKCTRLA` are
+//! all configuration-change protected.
 
 use super::{CcpUnlock, impl_ccp_unlock};
 
@@ -111,9 +111,9 @@ impl_osc_control!(avr_device::avr128da64::CLKCTRL);
 pub trait ExtClockControl {
     /// Enables the external clock source. On DB parts this writes `XOSCHFCTRLA`
     /// to run `XOSCHF` from an external clock at the range matching `freq`. On
-    /// DA parts the external clock feeds the pin directly, so this does nothing.
-    /// The caller must have just called [`CcpUnlock::unlock_ioreg`] (the DB
-    /// register is protected).
+    /// DA parts the external clock feeds the pin directly, so this does
+    /// nothing. The caller must have just called
+    /// [`CcpUnlock::unlock_ioreg`] (the DB register is protected).
     fn enable_extclk(&self, freq: HfFreq);
     /// Selects the external clock as the main clock (`MCLKCTRLA.CLKSEL`). The
     /// caller must have just called [`CcpUnlock::unlock_ioreg`].
@@ -149,8 +149,8 @@ pub fn set_extclk<C: CcpUnlock, K: ExtClockControl>(cpu: &C, clkctrl: &K, freq: 
     crate::wait::spin_until(|| !clkctrl.switch_in_progress());
 }
 
-/// External-clock control for DA parts: the clock feeds the EXTCLK pin directly,
-/// so there is no source register to enable.
+/// External-clock control for DA parts: the clock feeds the EXTCLK pin
+/// directly, so there is no source register to enable.
 macro_rules! impl_extclk_direct {
     ($CLKCTRL:ty) => {
         impl ExtClockControl for $CLKCTRL {

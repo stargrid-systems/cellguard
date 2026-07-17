@@ -3,9 +3,9 @@
 //! [`CellagentRuntime`] decodes incoming COBS frames, dispatches requests to
 //! the cellagent hardware, and writes encoded responses back to the bus.
 
+use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{Decoder, Kind, Packet, encode_frame};
 use embedded_io::Write;
-use panic_log::{PanicRecord, RECORD_LEN};
 
 use crate::hw::{GateControl, TempSensor};
 
@@ -49,7 +49,7 @@ impl CellagentRuntime {
 
     /// Caches the last panic record so a later `PanicProbe` reports it. Call
     /// this once at boot after reading the slot from EEPROM.
-    pub fn set_panic_record(&mut self, record: Option<PanicRecord>) {
+    pub const fn set_panic_record(&mut self, record: Option<PanicRecord>) {
         self.panic_record = record;
     }
 
@@ -58,13 +58,7 @@ impl CellagentRuntime {
     /// When a complete packet is decoded, handles it and writes any response to
     /// `out`. Returns the number of bytes written, or 0 if no response was
     /// produced (incomplete frame, wrong node, or a decode error).
-    pub fn service<G, T, W>(
-        &mut self,
-        byte: u8,
-        gates: &mut G,
-        temp: &mut T,
-        out: &mut W,
-    ) -> usize
+    pub fn service<G, T, W>(&mut self, byte: u8, gates: &mut G, temp: &mut T, out: &mut W) -> usize
     where
         G: GateControl,
         T: TempSensor,
@@ -131,8 +125,9 @@ impl CellagentRuntime {
 
 #[cfg(test)]
 mod tests {
-    use cellguard_protocol::{Decoder, Kind, Packet, encode_frame, max_encoded_len};
     use std::vec::Vec;
+
+    use cellguard_protocol::{Decoder, Kind, Packet, encode_frame, max_encoded_len};
 
     use super::CellagentRuntime;
     use crate::hw::{GateControl, TempSensor};
@@ -181,8 +176,7 @@ mod tests {
     /// COBS-encodes a request packet addressed to [`NODE`].
     fn encode_request(kind: Kind, payload: &[u8]) -> Vec<u8> {
         let mut raw = [0u8; 32];
-        let raw_len = Packet::write(NODE, kind, payload, &mut raw)
-            .expect("test: write raw packet");
+        let raw_len = Packet::write(NODE, kind, payload, &mut raw).expect("test: write raw packet");
         let cap = max_encoded_len(raw_len);
         let mut wire = std::vec![0u8; cap];
         let n = encode_frame(
@@ -214,9 +208,7 @@ mod tests {
         let mut runtime = CellagentRuntime::new(NODE);
         let mut gates = MockGates { mask: 0 };
         let mut temp = MockTemp { value: 0 };
-        let mut writer = VecWriter {
-            buf: Vec::new(),
-        };
+        let mut writer = VecWriter { buf: Vec::new() };
 
         let wire = encode_request(Kind::SetBalancer, &[0x03]);
         for &byte in &wire {
@@ -234,12 +226,8 @@ mod tests {
         const TEMP_CENTI: i16 = 2500;
         let mut runtime = CellagentRuntime::new(NODE);
         let mut gates = MockGates { mask: 0 };
-        let mut temp = MockTemp {
-            value: TEMP_CENTI,
-        };
-        let mut writer = VecWriter {
-            buf: Vec::new(),
-        };
+        let mut temp = MockTemp { value: TEMP_CENTI };
+        let mut writer = VecWriter { buf: Vec::new() };
 
         let wire = encode_request(Kind::ReadTemperature, &[]);
         for &byte in &wire {
@@ -251,10 +239,10 @@ mod tests {
         assert_eq!(payload, TEMP_CENTI.to_le_bytes());
     }
 
-    fn sample_record() -> panic_log::PanicRecord {
-        let mut file = [0u8; panic_log::FILE_CAP];
+    fn sample_record() -> cellguard_panic::PanicRecord {
+        let mut file = [0u8; cellguard_panic::FILE_CAP];
         file[..3].copy_from_slice(b"app");
-        panic_log::PanicRecord {
+        cellguard_panic::PanicRecord {
             reset_flags: 0x10,
             consecutive_panics: 1,
             file,
@@ -279,9 +267,12 @@ mod tests {
 
         let (kind, payload) = decode_response(&writer.buf);
         assert_eq!(kind, Kind::PanicStatus);
-        assert_eq!(payload.len(), panic_log::RECORD_LEN);
-        let bytes: &[u8; panic_log::RECORD_LEN] = payload.as_slice().try_into().unwrap();
-        assert_eq!(panic_log::PanicRecord::parse(bytes).unwrap(), sample_record());
+        assert_eq!(payload.len(), cellguard_panic::RECORD_LEN);
+        let bytes: &[u8; cellguard_panic::RECORD_LEN] = payload.as_slice().try_into().unwrap();
+        assert_eq!(
+            cellguard_panic::PanicRecord::parse(bytes).unwrap(),
+            sample_record()
+        );
     }
 
     #[test]

@@ -26,9 +26,9 @@ pub enum Decision {
 ///
 /// Call this once a boot has proven itself healthy (past all initialization
 /// that could panic), or after programming fresh application code. A blank
-/// slot reads back as "no record", so [`store_and_decide`] treats the next panic
-/// as the first. Storage is best-effort: a write error is ignored, since a
-/// failed erase never blocks the boot.
+/// slot reads back as "no record", so [`store_and_decide`] treats the next
+/// panic as the first. Storage is best-effort: a write error is ignored, since
+/// a failed erase never blocks the boot.
 pub fn clear<T, C>(nvm: &Nvm<T>, cpu: &C, offset: u16)
 where
     T: NvmInstance,
@@ -43,8 +43,8 @@ where
 ///
 /// The counter is read from the [`PanicRecord`] at EEPROM `offset`. A blank or
 /// corrupt slot counts as zero. The first `threshold` panics reset the device
-/// (counter 1..=`threshold`); the next panic returns [`Decision::Halt`] instead.
-/// A healthy boot clears the slot so a single transient panic does not
+/// (counter 1..=`threshold`); the next panic returns [`Decision::Halt`]
+/// instead. A healthy boot clears the slot so a single transient panic does not
 /// accumulate.
 ///
 /// Storage is best-effort: a read or write error falls through to a reset (the

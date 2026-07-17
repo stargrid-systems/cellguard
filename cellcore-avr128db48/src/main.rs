@@ -10,6 +10,8 @@
 //! The on-chip EEPROM state store and USERROW key read are real on this
 //! silicon.
 
+use core::panic::PanicInfo;
+
 use avr_device::avr128db48 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::gpio::Port;
@@ -22,9 +24,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{CoreRuntime, RamImageStore};
-use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
-
-use core::panic::PanicInfo;
+use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 
 /// Core clock frequency.
 const F_CPU: HfFreq = HfFreq::Mhz24;
@@ -150,7 +150,8 @@ fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
     PanicRecord::parse(&buf).ok()
 }
 
-/// Finishes a USART builder as 8N1, halting the core if the baud is unattainable.
+/// Finishes a USART builder as 8N1, halting the core if the baud is
+/// unattainable.
 fn build_usart<T: UsartInstance>(builder: Builder<T, u32, Unset>) -> Usart<T> {
     match builder.frame(Frame::EIGHT_N_1).build() {
         Ok(usart) => usart,

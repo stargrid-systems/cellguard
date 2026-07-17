@@ -8,8 +8,8 @@
 //! handled without buffering a whole page.
 
 use cellboot::io::NvmWriter;
-use updi::{PAGE_SIZE, ProgError, Programmer, TinyProgrammer, UpdiLink};
 use updi::tiny::PAGE_SIZE as TINY_PAGE_SIZE;
+use updi::{PAGE_SIZE, ProgError, Programmer, TinyProgrammer, UpdiLink};
 
 /// An [`NvmWriter`] that programs an AVR Dx target over UPDI.
 pub struct UpdiNvmWriter<L> {
@@ -112,9 +112,7 @@ impl<L: UpdiLink> NvmWriter for TinyNvmWriter<L> {
                     .erase_flash_page(page.saturating_mul(TINY_PAGE_SIZE))?;
                 self.erased_page = Some(page);
             }
-            let page_end = page
-                .saturating_add(1)
-                .saturating_mul(TINY_PAGE_SIZE);
+            let page_end = page.saturating_add(1).saturating_mul(TINY_PAGE_SIZE);
             let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
             let n = rest.len().min(room);
             let (chunk, tail) = rest.split_at(n);

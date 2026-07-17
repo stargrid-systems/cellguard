@@ -41,9 +41,7 @@ impl ResetFlags {
     /// Builds the flags from raw `RSTFR` bits, masking reserved bits.
     #[must_use]
     pub const fn from_bits_trimming(bits: u8) -> Self {
-        Self {
-            bits: bits & 0x3F,
-        }
+        Self { bits: bits & 0x3F }
     }
 
     /// The raw flag bits.

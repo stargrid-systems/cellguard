@@ -3,12 +3,12 @@
 //! [`CoreRuntime`] ties the hardware-independent [`Dispatcher`] to two links: a
 //! field bus (RS485 or debug UART) that carries host commands, and the local
 //! link to the `cellprog` programmer. It pumps received bytes through the
-//! dispatcher, writes each response back to the bus, and hands a committed image
-//! off to the programmer.
+//! dispatcher, writes each response back to the bus, and hands a committed
+//! image off to the programmer.
 //!
 //! Both links are any [`embedded_io`] `Read`/`Write`, so the firmware crates
-//! pass a HAL `Usart` and stay thin, and this crate is host-testable with a mock
-//! link. It knows nothing about pins, clocks, or a specific chip.
+//! pass a HAL `Usart` and stay thin, and this crate is host-testable with a
+//! mock link. It knows nothing about pins, clocks, or a specific chip.
 //!
 //! # Handoff
 //!
@@ -180,7 +180,7 @@ where
     /// are swallowed. A dropped bus response is retried on the next byte
     /// because the dispatcher re-derives it from the decoded command. A
     /// dropped handoff is not retried: the staged image is consumed before
-    /// signaling (see [`hand_off`](Self::hand_off)) to avoid races with the
+    /// signaling (see `hand_off`) to avoid races with the
     /// bootloader self-program path.
     pub fn service(&mut self, byte: u8) {
         if let Some(response) = self.dispatcher.feed(byte) {
@@ -251,7 +251,10 @@ mod tests {
         fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
             let start = usize::try_from(offset).map_err(|_| ())?;
             let end = start.checked_add(data.len()).ok_or(())?;
-            self.buf.get_mut(start..end).ok_or(())?.copy_from_slice(data);
+            self.buf
+                .get_mut(start..end)
+                .ok_or(())?
+                .copy_from_slice(data);
             Ok(())
         }
     }
@@ -329,7 +332,12 @@ mod tests {
             state,
         );
         let dispatcher = Dispatcher::new(agent, NODE);
-        CoreRuntime::new(dispatcher, MockLink::default(), MockLink::default(), PROG_ID)
+        CoreRuntime::new(
+            dispatcher,
+            MockLink::default(),
+            MockLink::default(),
+            PROG_ID,
+        )
     }
 
     /// Feeds a COBS-encoded command frame byte by byte.
@@ -385,10 +393,7 @@ mod tests {
         assert_eq!(buf, [0xBB; 4]);
 
         // An access crossing the boundary is refused.
-        assert_eq!(
-            store.write(62, &[0; 4]),
-            Err(BandedError::OutOfBounds)
-        );
+        assert_eq!(store.write(62, &[0; 4]), Err(BandedError::OutOfBounds));
     }
 
     #[test]
@@ -429,7 +434,10 @@ mod tests {
             "a ready image must be signaled to the programmer"
         );
         assert_eq!(decode_kind(&runtime.prog.written), Kind::ProgProgram);
-        assert_eq!(runtime.dispatcher.agent().status().staged, StagedState::Empty);
+        assert_eq!(
+            runtime.dispatcher.agent().status().staged,
+            StagedState::Empty
+        );
 
         // A second byte must not signal again: the image was consumed.
         let sent = runtime.prog.written.len();

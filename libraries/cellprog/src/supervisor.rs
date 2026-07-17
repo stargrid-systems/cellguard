@@ -151,7 +151,8 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
     #[must_use]
     pub fn reply(&mut self, status: ProgStatus) -> Option<&[u8]> {
         let mut raw = [0u8; RESULT_FRAME];
-        let raw_len = Packet::write(self.id, Kind::ProgResult, &[status.to_code()], &mut raw).ok()?;
+        let raw_len =
+            Packet::write(self.id, Kind::ProgResult, &[status.to_code()], &mut raw).ok()?;
         let wire_len = encode_frame(raw.get(..raw_len)?, &mut self.tx)?;
         self.tx.get(..wire_len)
     }

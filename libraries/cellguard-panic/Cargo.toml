@@ -1,5 +1,5 @@
 [package]
-name = "panic-log"
+name = "cellguard-panic"
 version = "0.1.0"
 description = "Persistent panic record and crash-loop policy for the CellGuard firmware."
 authors.workspace = true
@@ -10,9 +10,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-# NVM-backed panic-record storage and reset/halt policy. Pulls in `avrxt-hal`,
-# so this feature only builds for the `avr-none` target. The [`record`]
-# `PanicRecord` type is always available without it.
 hal = ["dep:avrxt-hal"]
 
 [dependencies]

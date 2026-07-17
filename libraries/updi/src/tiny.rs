@@ -9,7 +9,6 @@
 
 use crate::driver::{RESET_RELEASE, RESET_REQUEST, Updi, cs};
 use crate::link::UpdiLink;
-
 pub use crate::programmer::ProgError;
 
 /// NVMCTRL base in the 16-bit data space (shared by tinyAVR 0/1-series).
@@ -138,8 +137,8 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     }
 
     fn do_erase(&mut self, flash_offset: u32) -> Result<(), ProgError<L::Error>> {
-        let addr = FLASH_BASE
-            + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
+        let addr =
+            FLASH_BASE + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
         self.updi.sts8_16(addr, 0xFF)?;
         self.wait_flash_ready()
     }
@@ -188,28 +187,18 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         Ok(())
     }
 
-    fn write_page(
-        &mut self,
-        offset: u32,
-        segment: &[u8],
-    ) -> Result<(), ProgError<L::Error>> {
+    fn write_page(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
         self.nvm_command(nvmctrl::CMD_WP)?;
         let r = self.stream_page(offset, segment);
         let disarm = self.nvm_command(nvmctrl::CMD_NONE);
         r.and(disarm)
     }
 
-    fn stream_page(
-        &mut self,
-        offset: u32,
-        segment: &[u8],
-    ) -> Result<(), ProgError<L::Error>> {
-        let addr = FLASH_BASE
-            + u16::try_from(offset).map_err(|_| ProgError::InvalidOffset)?;
+    fn stream_page(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
+        let addr = FLASH_BASE + u16::try_from(offset).map_err(|_| ProgError::InvalidOffset)?;
         self.updi.set_pointer_16(addr)?;
 
-        let page_remain = usize::try_from(PAGE_SIZE - (offset % PAGE_SIZE))
-            .unwrap_or(0);
+        let page_remain = usize::try_from(PAGE_SIZE - (offset % PAGE_SIZE)).unwrap_or(0);
         if segment.len() < page_remain {
             // Partial page: pad with 0xFF so the tinyAVR page buffer commits.
             let mut padded = [0xFFu8; PAGE_SIZE as usize];
@@ -243,8 +232,8 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         if end > FLASH_SIZE {
             return Err(ProgError::InvalidOffset);
         }
-        let addr = FLASH_BASE
-            + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
+        let addr =
+            FLASH_BASE + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
         self.updi.set_pointer_16(addr)?;
         self.updi.ld_inc(buf)?;
         Ok(())

@@ -178,7 +178,7 @@ mod tests {
             reset_flags: 0x14,
             consecutive_panics: 2,
             file,
-            file_len: path.len() as u8,
+            file_len: u8::try_from(path.len()).unwrap(),
             line: 4123,
             col: 7,
         }
@@ -241,7 +241,7 @@ mod tests {
         assert!(path.len() > FILE_CAP);
         let mut file = [0u8; FILE_CAP];
         let len = store_path(path, &mut file);
-        assert_eq!(len, FILE_CAP as u8);
+        assert_eq!(usize::from(len), FILE_CAP);
         let (kept, _) = file.split_at(FILE_CAP);
         let (expected, _) = path.split_at(FILE_CAP);
         assert_eq!(kept, expected);

@@ -100,9 +100,9 @@ dependencies = [
 name = "cellagent"
 version = "0.1.0"
 dependencies = [
+ "cellguard-panic",
  "cellguard-protocol",
  "embedded-io",
- "panic-log",
 ]
 
 [[package]]
@@ -120,10 +120,10 @@ name = "cellcore"
 version = "0.1.0"
 dependencies = [
  "cellboot",
+ "cellguard-panic",
  "cellguard-protocol",
  "crc",
  "hmac-sha256",
- "panic-log",
 ]
 
 [[package]]
@@ -134,6 +134,14 @@ dependencies = [
  "cellcore",
  "cellguard-protocol",
  "embedded-io",
+]
+
+[[package]]
+name = "cellguard-panic"
+version = "0.1.0"
+dependencies = [
+ "avrxt-hal",
+ "crc",
 ]
 
 [[package]]
@@ -474,14 +482,6 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal",
  "embedded-hal-mock",
-]
-
-[[package]]
-name = "panic-log"
-version = "0.1.0"
-dependencies = [
- "avrxt-hal",
- "crc",
 ]
 
 [[package]]

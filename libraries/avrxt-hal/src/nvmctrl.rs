@@ -29,7 +29,8 @@
 //!
 //! tinyAVR note (`ATtiny416` errata DS80000933 section 2.6.1): `NVMCTRL.CTRLA`
 //! may read non-zero after reset. The code here never branches on the reset
-//! value; it always writes the command it wants, then disarms with `CMD = NONE`.
+//! value; it always writes the command it wants, then disarms with `CMD =
+//! NONE`.
 
 use core::mem::MaybeUninit;
 
@@ -68,8 +69,8 @@ pub trait NvmInstance {
     /// Returns `true` if `STATUS` flags a write error.
     fn write_error(&self) -> bool;
 
-    /// Writes the erase-write command for an EEPROM byte/page. AVR128: `EEERWR`,
-    /// tinyAVR: `ERWP`. Caller must open the SPM window first.
+    /// Writes the erase-write command for an EEPROM byte/page. AVR128:
+    /// `EEERWR`, tinyAVR: `ERWP`. Caller must open the SPM window first.
     fn command_eeprom_erase_write(&self);
     /// Writes `CMD = NONE` (disarm). Caller must open the SPM window first.
     fn command_none(&self);
@@ -339,9 +340,9 @@ impl<T: FlashInstance> Nvm<T> {
     ///
     /// # Errors
     ///
-    /// [`NvmError::OutOfBounds`] if `flash_offset` is not page-aligned or leaves
-    /// flash, or [`NvmError::WriteFailed`] if the controller flags a write
-    /// error.
+    /// [`NvmError::OutOfBounds`] if `flash_offset` is not page-aligned or
+    /// leaves flash, or [`NvmError::WriteFailed`] if the controller flags a
+    /// write error.
     pub fn erase_flash_page<C: CcpUnlock>(
         &self,
         cpu: &C,
@@ -398,8 +399,7 @@ impl<T: FlashInstance> Nvm<T> {
         let mut offset = flash_offset;
         let mut rest = data;
         while !rest.is_empty() {
-            let section_end =
-                (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
+            let section_end = (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
             let room = usize::try_from(section_end - offset).unwrap_or(usize::MAX);
             let n = rest.len().min(room);
             let (chunk, tail) = rest.split_at(n);
@@ -462,8 +462,7 @@ impl<T: FlashInstance> Nvm<T> {
         let mut rest = buf;
         while !rest.is_empty() {
             let section = u8::try_from(offset / Self::FLASH_WINDOW_SIZE).unwrap_or(0);
-            let section_end =
-                (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
+            let section_end = (offset / Self::FLASH_WINDOW_SIZE + 1) * Self::FLASH_WINDOW_SIZE;
             let room = usize::try_from(section_end - offset).unwrap_or(usize::MAX);
             let n = rest.len().min(room);
             let (chunk, tail) = rest.split_at_mut(n);

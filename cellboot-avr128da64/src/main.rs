@@ -15,6 +15,9 @@
 //! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. App U104 chip-select
 //!   is `PG6`, Boot U105 chip-select is `PA7` (both active-low).
 
+use core::cell::RefCell;
+use core::panic::PanicInfo;
+
 use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, CcpUnlock, HfFreq};
 use avrxt_hal::delay::Delay;
@@ -22,17 +25,14 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
-use cat25::{CAT25128, CAT25M01, Cat25};
+use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
 use cellcore::update::state::{self, StagedState, UpdateOutcome};
+use cellguard_panic::{Decision, clear, store_and_decide};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
-use panic_log::{Decision, clear, store_and_decide};
-
-use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 /// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
 const BASE_FREQ: u32 = 24_000_000;
@@ -166,9 +166,7 @@ fn software_reset(cpu: &pac::CPU) -> ! {
         cpu.unlock_ioreg();
         // SAFETY: writing SWRR triggers an immediate microcontroller reset.
         unsafe {
-            (*pac::RSTCTRL::ptr())
-                .swrr()
-                .write(|w| w.swrst().set_bit());
+            (*pac::RSTCTRL::ptr()).swrr().write(|w| w.swrst().set_bit());
         }
     });
     #[expect(clippy::empty_loop)]

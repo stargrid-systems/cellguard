@@ -8,8 +8,10 @@
 //! dev board. The production balancer gates, the LM61, and OUT_TINY_ALL_OFF do
 //! not exist on the devkit, so this firmware uses mock hardware: gate state is
 //! stored but drives no pins, and the temperature is a fixed value. PB5 (the
-//! on-board LED) stands in for the ALIVE heartbeat. USART0 (PB2/PB3) carries the
-//! `cellguard-protocol` link as on the production board.
+//! on-board LED) stands in for the ALIVE heartbeat. USART0 (PB2/PB3) carries
+//! the `cellguard-protocol` link as on the production board.
+
+use core::panic::PanicInfo;
 
 use avr_device::attiny416 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
@@ -19,10 +21,8 @@ use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
+use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 use embedded_hal::digital::StatefulOutputPin;
-use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
-
-use core::panic::PanicInfo;
 
 /// Main clock: 20 MHz internal, prescaler off.
 const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
@@ -94,7 +94,12 @@ fn main() -> ! {
         .unwrap_or_else(|_| halt());
 
     // RTC as a free-running time base (~1.024 kHz).
-    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
+    let rtc = Rtc::new(
+        dp.RTC,
+        ClockSource::Internal1k,
+        RtcPrescaler::Div1,
+        u16::MAX,
+    );
 
     let mut runtime = CellagentRuntime::new(NODE_ID);
     let mut gates = MockGates { mask: 0 };
@@ -150,6 +155,9 @@ fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
 /// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
-    #[expect(clippy::empty_loop, reason = "nothing left to do after a fatal init error")]
+    #[expect(
+        clippy::empty_loop,
+        reason = "nothing left to do after a fatal init error"
+    )]
     loop {}
 }

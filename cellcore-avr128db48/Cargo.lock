@@ -103,10 +103,10 @@ name = "cellcore"
 version = "0.1.0"
 dependencies = [
  "cellboot",
+ "cellguard-panic",
  "cellguard-protocol",
  "crc",
  "hmac-sha256",
- "panic-log",
 ]
 
 [[package]]
@@ -118,8 +118,8 @@ dependencies = [
  "cellboot",
  "cellcore",
  "cellcore-runtime",
+ "cellguard-panic",
  "embedded-hal",
- "panic-log",
 ]
 
 [[package]]
@@ -129,6 +129,14 @@ dependencies = [
  "cellboot",
  "cellcore",
  "embedded-io",
+]
+
+[[package]]
+name = "cellguard-panic"
+version = "0.1.0"
+dependencies = [
+ "avrxt-hal",
+ "crc",
 ]
 
 [[package]]
@@ -432,14 +440,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "panic-log"
-version = "0.1.0"
-dependencies = [
- "avrxt-hal",
- "crc",
-]
 
 [[package]]
 name = "percent-encoding"

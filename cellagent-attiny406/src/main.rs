@@ -17,6 +17,8 @@
 //! - PB2 = USART0 TxD, PB3 = USART0 RxD.
 //! - PC1 = OUT_TINY_ALL_OFF.
 
+use core::panic::PanicInfo;
+
 use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
@@ -26,10 +28,8 @@ use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
+use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
-use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
-
-use core::panic::PanicInfo;
 
 /// Main clock: 20 MHz internal, prescaler off.
 const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
@@ -130,7 +130,12 @@ fn main() -> ! {
         .unwrap_or_else(|_| halt());
 
     // RTC as a free-running time base (~1.024 kHz).
-    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
+    let rtc = Rtc::new(
+        dp.RTC,
+        ClockSource::Internal1k,
+        RtcPrescaler::Div1,
+        u16::MAX,
+    );
 
     let mut runtime = CellagentRuntime::new(NODE_ID);
 
@@ -204,6 +209,9 @@ fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
 /// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
-    #[expect(clippy::empty_loop, reason = "nothing left to do after a fatal init error")]
+    #[expect(
+        clippy::empty_loop,
+        reason = "nothing left to do after a fatal init error"
+    )]
     loop {}
 }

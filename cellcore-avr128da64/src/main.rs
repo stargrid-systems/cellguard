@@ -23,6 +23,9 @@
 //! (`AVR64_TO_PROG`) is toggled over I2C1 roughly every 250 ms using the RTC
 //! as a time base, so the cellprog's watchdog knows the cellcore is alive.
 
+use core::cell::RefCell;
+use core::panic::PanicInfo;
+
 use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
@@ -33,20 +36,17 @@ use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::twi::Twi;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
-use cat25::{CAT25128, CAT25M01, Cat25};
+use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::NoKeyStore;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{BandedStore, CoreRuntime};
+use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
-use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 use tca9535::{Address, PinIndex, Tca9535};
-
-use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 /// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
 const F_CPU: HfFreq = HfFreq::Mhz24;
@@ -216,7 +216,12 @@ fn main() -> ! {
     };
 
     // RTC as a free-running time base (~1.024 kHz, ~64 s before wrap).
-    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, RtcPrescaler::Div1, u16::MAX);
+    let rtc = Rtc::new(
+        dp.RTC,
+        ClockSource::Internal1k,
+        RtcPrescaler::Div1,
+        u16::MAX,
+    );
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
 
@@ -244,7 +249,8 @@ fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
     PanicRecord::parse(&buf).ok()
 }
 
-/// Finishes a USART builder as 8N1, halting the core if the baud is unattainable.
+/// Finishes a USART builder as 8N1, halting the core if the baud is
+/// unattainable.
 fn build_usart<T: UsartInstance>(builder: Builder<T, u32, Unset>) -> Usart<T> {
     match builder.frame(Frame::EIGHT_N_1).build() {
         Ok(usart) => usart,

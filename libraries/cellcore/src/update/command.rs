@@ -5,8 +5,8 @@
 //! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
 
 use cellboot::image::HEADER_LEN;
+use cellguard_panic::PanicRecord;
 use cellguard_protocol::{Error as PacketError, Kind, Packet};
-use panic_log::PanicRecord;
 
 use crate::update::state::PersistentState;
 
@@ -338,15 +338,15 @@ mod tests {
         );
     }
 
-    fn sample_panic_record() -> panic_log::PanicRecord {
-        let mut file = [0u8; panic_log::FILE_CAP];
+    fn sample_panic_record() -> cellguard_panic::PanicRecord {
+        let mut file = [0u8; cellguard_panic::FILE_CAP];
         let path = b"src/lib.rs";
         file[..path.len()].copy_from_slice(path);
-        panic_log::PanicRecord {
+        cellguard_panic::PanicRecord {
             reset_flags: 0x14,
             consecutive_panics: 2,
             file,
-            file_len: path.len() as u8,
+            file_len: u8::try_from(path.len()).unwrap(),
             line: 99,
             col: 3,
         }
@@ -371,9 +371,9 @@ mod tests {
             .unwrap();
         let packet = Packet::parse(&buf[..n]).unwrap();
         assert_eq!(packet.kind, Kind::PanicStatus);
-        let bytes: &[u8; panic_log::RECORD_LEN] =
+        let bytes: &[u8; cellguard_panic::RECORD_LEN] =
             packet.payload.try_into().expect("record payload length");
-        assert_eq!(panic_log::PanicRecord::parse(bytes).unwrap(), record);
+        assert_eq!(cellguard_panic::PanicRecord::parse(bytes).unwrap(), record);
 
         let n = Response::PanicStatus(None).to_packet(2, &mut buf).unwrap();
         let packet = Packet::parse(&buf[..n]).unwrap();

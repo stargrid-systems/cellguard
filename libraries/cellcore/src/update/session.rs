@@ -9,8 +9,8 @@
 
 use cellboot::image::{HEADER_LEN, ImageHeader, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
+use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
-use panic_log::PanicRecord;
 
 use crate::update::command::{Command, NackReason, Response};
 use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
@@ -131,7 +131,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
 
     /// Caches the last panic record so a later `PanicProbe` reports it. Call
     /// this once at boot after reading the slot from EEPROM.
-    pub fn set_panic_record(&mut self, record: Option<PanicRecord>) {
+    pub const fn set_panic_record(&mut self, record: Option<PanicRecord>) {
         self.panic_record = record;
     }
 
@@ -161,14 +161,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Consumes the staged image as it is handed off to the programmer.
     ///
     /// Returns the region to program, or `None` when nothing is staged and
-    /// ready. Programming resets the core: the programmer halts it over UPDI, so
-    /// the core never sees the result and must treat the handoff as final. This
-    /// commits to it. The staged image is cleared, an application image advances
-    /// the recorded `app_version` to the staged version (health back to
-    /// `Unknown` until the new app confirms itself), and the outcome is recorded
-    /// as a success. The new state is persisted before this returns, so a reset
-    /// during programming cannot make the core re-trigger the same handoff on
-    /// reboot.
+    /// ready. Programming resets the core: the programmer halts it over UPDI,
+    /// so the core never sees the result and must treat the handoff as
+    /// final. This commits to it. The staged image is cleared, an
+    /// application image advances the recorded `app_version` to the staged
+    /// version (health back to `Unknown` until the new app confirms
+    /// itself), and the outcome is recorded as a success. The new state is
+    /// persisted before this returns, so a reset during programming cannot
+    /// make the core re-trigger the same handoff on reboot.
     ///
     /// There is no rollback enforcement, so if programming never happens (for
     /// example power is lost first) the still-working old image keeps running.

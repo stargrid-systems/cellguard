@@ -8,8 +8,7 @@
 //! persistent fault cannot reboot-loop forever.
 //!
 //! The [`record`] module is pure and host-testable. The NVM-backed storage and
-//! reset/halt decision live behind the `hal` feature, which pulls in
-//! `avrxt-hal` and so only builds for the `avr-none` target.
+//! reset/halt decision live behind the `hal` feature.
 //!
 //! # Features
 //!

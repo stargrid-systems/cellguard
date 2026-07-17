@@ -12,8 +12,8 @@
 
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
+use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
-use panic_log::{PanicRecord, RECORD_LEN};
 
 use crate::update::command::Command;
 use crate::update::session::UpdateAgent;
@@ -75,7 +75,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
 
     /// Caches the last panic record so a later `PanicProbe` reports it. Call
     /// this once at boot after reading the slot from EEPROM.
-    pub fn set_panic_record(&mut self, record: Option<PanicRecord>) {
+    pub const fn set_panic_record(&mut self, record: Option<PanicRecord>) {
         self.agent.set_panic_record(record);
     }
 
@@ -270,11 +270,11 @@ mod tests {
     fn panic_probe_returns_cached_record() {
         let mut key = KEY;
         let mut dispatcher = make_dispatcher(&mut key);
-        let record = panic_log::PanicRecord {
+        let record = cellguard_panic::PanicRecord {
             reset_flags: 0x14,
             consecutive_panics: 2,
             file: {
-                let mut f = [0u8; panic_log::FILE_CAP];
+                let mut f = [0u8; cellguard_panic::FILE_CAP];
                 f[..3].copy_from_slice(b"lib");
                 f
             },
@@ -286,9 +286,10 @@ mod tests {
 
         let (kind, payload, len) = exchange(&mut dispatcher, Kind::PanicProbe, &[]);
         assert_eq!(kind, Kind::PanicStatus);
-        assert_eq!(len, panic_log::RECORD_LEN);
-        let bytes: &[u8; panic_log::RECORD_LEN] = payload.get(..len).unwrap().try_into().unwrap();
-        assert_eq!(panic_log::PanicRecord::parse(bytes).unwrap(), record);
+        assert_eq!(len, cellguard_panic::RECORD_LEN);
+        let bytes: &[u8; cellguard_panic::RECORD_LEN] =
+            payload.get(..len).unwrap().try_into().unwrap();
+        assert_eq!(cellguard_panic::PanicRecord::parse(bytes).unwrap(), record);
     }
 
     #[test]

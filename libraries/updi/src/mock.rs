@@ -1,6 +1,6 @@
 //! A mock UPDI target for host tests.
 //!
-//! [`MockTarget`] implements [`UpdiLink`](crate::UpdiLink) by emulating the
+//! [`MockTarget`] implements [`UpdiLink`] by emulating the
 //! target side of the protocol: it parses the instruction byte stream, keeps
 //! the CS and ASI registers, an NVM controller, and a flash array, and returns
 //! the bytes a real slave would. It lets the link and programmer layers run
