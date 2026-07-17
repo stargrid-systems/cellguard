@@ -6,6 +6,7 @@
 
 use cellboot::image::HEADER_LEN;
 use cellguard_protocol::{Error as PacketError, Kind, Packet};
+use panic_log::PanicRecord;
 
 use crate::update::state::PersistentState;
 
@@ -46,6 +47,8 @@ pub enum Command<'a> {
         /// Authentication tag over the new key, keyed with the current key.
         tag: [u8; TAG_LEN],
     },
+    /// Report the last panic record.
+    PanicProbe,
 }
 
 impl<'a> Command<'a> {
@@ -89,6 +92,7 @@ impl<'a> Command<'a> {
                     .map_err(|_| MapError::BadPayload)?;
                 Ok(Self::ReplaceKey { new_key, tag })
             }
+            Kind::PanicProbe => Ok(Self::PanicProbe),
             other => Err(MapError::NotBootCommand(other)),
         }
     }
@@ -107,6 +111,9 @@ pub enum Response {
     },
     /// The command was rejected.
     Nack(NackReason),
+    /// The last panic record, in reply to [`Command::PanicProbe`]. `None` means
+    /// no panic is recorded for this session.
+    PanicStatus(Option<PanicRecord>),
 }
 
 impl Response {
@@ -125,6 +132,10 @@ impl Response {
                 Packet::write(id, Kind::BootAck, &next_offset.to_le_bytes(), out)
             }
             Self::Nack(reason) => Packet::write(id, Kind::BootNack, &[reason.to_code()], out),
+            Self::PanicStatus(maybe) => match maybe {
+                Some(record) => Packet::write(id, Kind::PanicStatus, &record.serialize(), out),
+                None => Packet::write(id, Kind::PanicStatus, &[], out),
+            },
         }
     }
 }
@@ -325,5 +336,48 @@ mod tests {
             NackReason::from_code(packet.payload[0]),
             Some(NackReason::VerifyFailed)
         );
+    }
+
+    fn sample_panic_record() -> panic_log::PanicRecord {
+        let mut file = [0u8; panic_log::FILE_CAP];
+        let path = b"src/lib.rs";
+        file[..path.len()].copy_from_slice(path);
+        panic_log::PanicRecord {
+            reset_flags: 0x14,
+            consecutive_panics: 2,
+            file,
+            file_len: path.len() as u8,
+            line: 99,
+            col: 3,
+        }
+    }
+
+    #[test]
+    fn maps_panic_probe() {
+        let mut buf = [0u8; 128];
+        assert_eq!(
+            command_from_bytes(Kind::PanicProbe, &[], &mut buf),
+            Command::PanicProbe
+        );
+    }
+
+    #[test]
+    fn panic_status_roundtrips_record_and_empty() {
+        let record = sample_panic_record();
+        let mut buf = [0u8; 128];
+
+        let n = Response::PanicStatus(Some(record))
+            .to_packet(2, &mut buf)
+            .unwrap();
+        let packet = Packet::parse(&buf[..n]).unwrap();
+        assert_eq!(packet.kind, Kind::PanicStatus);
+        let bytes: &[u8; panic_log::RECORD_LEN] =
+            packet.payload.try_into().expect("record payload length");
+        assert_eq!(panic_log::PanicRecord::parse(bytes).unwrap(), record);
+
+        let n = Response::PanicStatus(None).to_packet(2, &mut buf).unwrap();
+        let packet = Packet::parse(&buf[..n]).unwrap();
+        assert_eq!(packet.kind, Kind::PanicStatus);
+        assert!(packet.payload.is_empty());
     }
 }

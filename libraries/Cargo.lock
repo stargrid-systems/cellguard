@@ -102,6 +102,7 @@ version = "0.1.0"
 dependencies = [
  "cellguard-protocol",
  "embedded-io",
+ "panic-log",
 ]
 
 [[package]]
@@ -122,6 +123,7 @@ dependencies = [
  "cellguard-protocol",
  "crc",
  "hmac-sha256",
+ "panic-log",
 ]
 
 [[package]]

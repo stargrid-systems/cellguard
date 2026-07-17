@@ -13,7 +13,7 @@
 use avr_device::avr128db48 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::gpio::Port;
-use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cellboot::drivers::EepromState;
@@ -22,7 +22,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{CoreRuntime, RamImageStore};
-use panic_log::{Decision, clear, store_and_decide};
+use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -119,7 +119,10 @@ fn main() -> ! {
         state_store,
         boot_state,
     );
-    let dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
+    let mut dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
+
+    // Cache the last panic record for the field-bus probe before clearing it.
+    dispatcher.set_panic_record(read_panic_record(&nvm));
 
     // USART1 = field bus on the default PC0/PC1 pins (mirrors the DA64 bus role
     // on pins that exist on the 48-pin devkit).
@@ -138,6 +141,13 @@ fn main() -> ! {
     // Init completed: this boot is healthy, so any prior panic was transient.
     clear(&nvm, &cpu, PANIC_OFFSET);
     runtime.run();
+}
+
+/// Reads the last panic record from EEPROM, if a valid one is stored.
+fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
+    let mut buf = [0u8; RECORD_LEN];
+    nvm.read_eeprom(PANIC_OFFSET, &mut buf).ok()?;
+    PanicRecord::parse(&buf).ok()
 }
 
 /// Finishes a USART builder as 8N1, halting the core if the baud is unattainable.

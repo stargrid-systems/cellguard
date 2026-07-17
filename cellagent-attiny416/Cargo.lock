@@ -97,6 +97,7 @@ version = "0.1.0"
 dependencies = [
  "cellguard-protocol",
  "embedded-io",
+ "panic-log",
 ]
 
 [[package]]

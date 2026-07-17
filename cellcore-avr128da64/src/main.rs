@@ -27,7 +27,7 @@ use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
-use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::spi::{Prescaler, Spi};
@@ -42,7 +42,7 @@ use cellcore::update::state;
 use cellcore_runtime::{BandedStore, CoreRuntime};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
-use panic_log::{Decision, clear, store_and_decide};
+use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 use tca9535::{Address, PinIndex, Tca9535};
 
 use core::cell::RefCell;
@@ -176,7 +176,10 @@ fn main() -> ! {
         state_store,
         boot_state,
     );
-    let dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
+    let mut dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
+
+    // Cache the last panic record for the field-bus probe before clearing it.
+    dispatcher.set_panic_record(read_panic_record(&nvm));
 
     // USART1 = RS485 field bus on PC4/PC5, which is PORTMUX ALT1. The transceiver
     // handles direction (no MCU DE pin).
@@ -232,6 +235,13 @@ fn main() -> ! {
             last_toggle = now;
         }
     }
+}
+
+/// Reads the last panic record from EEPROM, if a valid one is stored.
+fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
+    let mut buf = [0u8; RECORD_LEN];
+    nvm.read_eeprom(PANIC_OFFSET, &mut buf).ok()?;
+    PanicRecord::parse(&buf).ok()
 }
 
 /// Finishes a USART builder as 8N1, halting the core if the baud is unattainable.

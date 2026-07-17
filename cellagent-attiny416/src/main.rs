@@ -14,13 +14,13 @@
 use avr_device::attiny416 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::gpio::Port;
-use avrxt_hal::nvmctrl::Nvm;
+use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
 use embedded_hal::digital::StatefulOutputPin;
-use panic_log::{Decision, clear, store_and_decide};
+use panic_log::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
 
 use core::panic::PanicInfo;
 
@@ -100,6 +100,9 @@ fn main() -> ! {
     let mut gates = MockGates { mask: 0 };
     let mut temp = MockTemp;
 
+    // Cache the last panic record for the field-bus probe before clearing it.
+    runtime.set_panic_record(read_panic_record(&nvm));
+
     // Init completed: this boot is healthy, so any prior panic was transient.
     clear(&nvm, &cpu, PANIC_OFFSET);
 
@@ -135,6 +138,13 @@ impl TempSensor for MockTemp {
     fn read_centi_celsius(&mut self) -> i16 {
         MOCK_TEMP_CENTI
     }
+}
+
+/// Reads the last panic record from EEPROM, if a valid one is stored.
+fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
+    let mut buf = [0u8; RECORD_LEN];
+    nvm.read_eeprom(PANIC_OFFSET, &mut buf).ok()?;
+    PanicRecord::parse(&buf).ok()
 }
 
 /// Halts with interrupts disabled.

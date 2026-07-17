@@ -13,13 +13,22 @@
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
+use panic_log::{PanicRecord, RECORD_LEN};
 
 use crate::update::command::Command;
 use crate::update::session::UpdateAgent;
 use crate::update::state::STATE_LEN;
 
-/// Largest pre-COBS response frame: a status reply (header + state + CRC).
-const MAX_RESPONSE_FRAME: usize = HEADER_LEN + STATE_LEN + PAYLOAD_CRC_LEN;
+/// Largest response payload: a status reply or a panic record, whichever is
+/// bigger.
+const MAX_RESPONSE_PAYLOAD: usize = if STATE_LEN > RECORD_LEN {
+    STATE_LEN
+} else {
+    RECORD_LEN
+};
+
+/// Largest pre-COBS response frame: header + biggest payload + payload CRC.
+const MAX_RESPONSE_FRAME: usize = HEADER_LEN + MAX_RESPONSE_PAYLOAD + PAYLOAD_CRC_LEN;
 
 /// Worst-case COBS-encoded size of the largest response, including the
 /// terminator. COBS adds one code byte per 254 data bytes plus the delimiter.
@@ -62,6 +71,12 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
     #[must_use]
     pub fn take_pending_program(&mut self) -> Option<Region> {
         self.agent.take_pending_program()
+    }
+
+    /// Caches the last panic record so a later `PanicProbe` reports it. Call
+    /// this once at boot after reading the slot from EEPROM.
+    pub fn set_panic_record(&mut self, record: Option<PanicRecord>) {
+        self.agent.set_panic_record(record);
     }
 
     /// Feeds one received wire byte.
@@ -249,6 +264,40 @@ mod tests {
         let mut dispatcher = make_dispatcher(&mut key);
         let (kind, _payload, _len) = exchange(&mut dispatcher, Kind::BootProbe, &[]);
         assert_eq!(kind, Kind::BootStatus);
+    }
+
+    #[test]
+    fn panic_probe_returns_cached_record() {
+        let mut key = KEY;
+        let mut dispatcher = make_dispatcher(&mut key);
+        let record = panic_log::PanicRecord {
+            reset_flags: 0x14,
+            consecutive_panics: 2,
+            file: {
+                let mut f = [0u8; panic_log::FILE_CAP];
+                f[..3].copy_from_slice(b"lib");
+                f
+            },
+            file_len: 3,
+            line: 40,
+            col: 1,
+        };
+        dispatcher.set_panic_record(Some(record));
+
+        let (kind, payload, len) = exchange(&mut dispatcher, Kind::PanicProbe, &[]);
+        assert_eq!(kind, Kind::PanicStatus);
+        assert_eq!(len, panic_log::RECORD_LEN);
+        let bytes: &[u8; panic_log::RECORD_LEN] = payload.get(..len).unwrap().try_into().unwrap();
+        assert_eq!(panic_log::PanicRecord::parse(bytes).unwrap(), record);
+    }
+
+    #[test]
+    fn panic_probe_without_record_is_empty() {
+        let mut key = KEY;
+        let mut dispatcher = make_dispatcher(&mut key);
+        let (kind, _payload, len) = exchange(&mut dispatcher, Kind::PanicProbe, &[]);
+        assert_eq!(kind, Kind::PanicStatus);
+        assert_eq!(len, 0);
     }
 
     #[test]

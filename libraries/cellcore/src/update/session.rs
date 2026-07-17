@@ -10,6 +10,7 @@
 use cellboot::image::{HEADER_LEN, ImageHeader, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use hmac_sha256::HMAC;
+use panic_log::PanicRecord;
 
 use crate::update::command::{Command, NackReason, Response};
 use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
@@ -82,6 +83,9 @@ pub struct UpdateAgent<'k, S, K, St> {
     state_store: St,
     state: PersistentState,
     session: Session,
+    /// Cached last panic record, reported on `PanicProbe`. `None` until the
+    /// firmware reads the slot at boot.
+    panic_record: Option<PanicRecord>,
 }
 
 impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
@@ -121,7 +125,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             state_store,
             state,
             session: Session::Idle,
+            panic_record: None,
         }
+    }
+
+    /// Caches the last panic record so a later `PanicProbe` reports it. Call
+    /// this once at boot after reading the slot from EEPROM.
+    pub fn set_panic_record(&mut self, record: Option<PanicRecord>) {
+        self.panic_record = record;
     }
 
     /// Returns the current probe-able state.
@@ -188,6 +199,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let before = self.state;
         let response = match command {
             Command::Probe => Response::Status(self.state),
+            Command::PanicProbe => Response::PanicStatus(self.panic_record),
             Command::Begin { header } => self.on_begin(&header),
             Command::Data { offset, chunk } => self.on_data(offset, chunk),
             Command::Commit => self.on_commit(),

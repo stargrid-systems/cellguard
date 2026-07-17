@@ -115,6 +115,7 @@ dependencies = [
  "cellguard-protocol",
  "crc",
  "hmac-sha256",
+ "panic-log",
 ]
 
 [[package]]
