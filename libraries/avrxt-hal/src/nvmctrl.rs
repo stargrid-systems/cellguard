@@ -1,23 +1,35 @@
-//! Non-volatile memory controller (NVMCTRL) for AVR128 DA/DB.
+//! Non-volatile memory controller (NVMCTRL) for AVR128 DA/DB and tinyAVR
+//! 0/1-series.
 //!
-//! [`Nvm`] programs the on-chip EEPROM, the USERROW, and the program flash. It
-//! is generic over an [`NvmInstance`] (implemented for each AVR128 `NVMCTRL`).
-//! Flash self-programming remaps a 32 KiB data-space window over the 128 KiB
-//! flash in four `CTRLB.FLMAP` sections, so the bootloader can rewrite
-//! application code in place.
+//! [`Nvm`] reads and writes the on-chip EEPROM. On AVR128 it also writes the
+//! USERROW and self-programs flash. It is generic over an [`NvmInstance`],
+//! implemented for each device's `NVMCTRL`.
+//!
+//! Both families memory-map the EEPROM in data space and program it the same
+//! way: a store to the mapped address loads the shared page buffer, then an
+//! NVMCTRL command commits it. EEPROM has byte granularity, so a per-byte
+//! erase-write only touches the stored byte. AVR128 uses the `EEERWR` command
+//! for that, tinyAVR `ERWP`; both are mapped onto
+//! [`NvmInstance::command_eeprom_erase_write`].
 //!
 //! `NVMCTRL.CTRLA` is configuration-change protected with the SPM signature, so
 //! every command goes through [`CcpUnlock::unlock_spm`] inside
 //! `avr_device::interrupt::free`: an interrupt cannot land in the unlock
-//! window. `CTRLB.FLMAP` is protected with the IOREG signature instead, so it
-//! goes through [`CcpUnlock::unlock_ioreg`]. Do not run an NVM operation from
-//! an interrupt handler. This includes a plain store to the mapped EEPROM,
-//! USERROW, or flash region: such a store loads the page buffer that a
-//! foreground write is about to commit, so an interrupt that does so mid-write
-//! corrupts the buffer.
+//! window. Do not run an NVM operation from an interrupt handler. This includes
+//! a plain store to the mapped EEPROM, USERROW, or flash region: such a store
+//! loads the page buffer that a foreground write is about to commit, so an
+//! interrupt that does so mid-write corrupts the buffer.
 //!
-//! The register command sequences here follow the AVR Dx model and match the
-//! `DxCore` reference flows.
+//! On AVR128 the USERROW is flash technology and a single page, so writing it
+//! erases the whole page first. AVR128 flash self-programming remaps a 32 KiB
+//! data-space window over the 128 KiB flash in four `CTRLB.FLMAP` sections, so
+//! the bootloader can rewrite application code in place. Those operations need
+//! a [`FlashInstance`] and follow the AVR Dx model (the `DxCore` reference
+//! flows). They are unavailable on tinyAVR, whose USERROW is plain EEPROM.
+//!
+//! tinyAVR note (`ATtiny416` errata DS80000933 section 2.6.1): `NVMCTRL.CTRLA`
+//! may read non-zero after reset. The code here never branches on the reset
+//! value; it always writes the command it wants, then disarms with `CMD = NONE`.
 
 use core::mem::MaybeUninit;
 
@@ -29,15 +41,16 @@ use crate::clock::CcpUnlock;
 pub enum NvmError {
     /// The requested range does not fit the target region.
     OutOfBounds,
-    /// The controller reported a write error (`STATUS.ERROR`).
+    /// The controller reported a write error (`STATUS.WRERROR` / `.ERROR`).
     WriteFailed,
 }
 
-/// An `NVMCTRL` peripheral. Implemented for each AVR128 device. Not for
-/// external use.
+/// An `NVMCTRL` peripheral. Implemented for each AVR128 and tinyAVR device. Not
+/// for external use.
 ///
 /// The associated constants give each region's data-space base and size, so a
-/// future part with a different map only changes these values.
+/// part with a different map only changes these values. The command methods map
+/// the family-specific NVM command onto a common name.
 pub trait NvmInstance {
     /// Data-space base pointer of the on-chip EEPROM.
     const EEPROM_START: *mut u8;
@@ -47,32 +60,19 @@ pub trait NvmInstance {
     const USERROW_START: *mut u8;
     /// USERROW size in bytes.
     const USERROW_SIZE: u16;
-    /// Program flash page size in bytes (AVR Dx: 512).
-    const FLASH_PAGE_SIZE: u32 = 512;
-    /// Total program flash in bytes (AVR128: 128 KiB).
-    const FLASH_SIZE: u32 = 128 * 1024;
 
-    /// Spins until the flash/USERROW controller is idle (`!STATUS.FBUSY`).
+    /// Spins until the flash/USERROW controller is idle.
     fn wait_flash_ready(&self);
-    /// Spins until the EEPROM controller is idle (`!STATUS.EEBUSY`).
+    /// Spins until the EEPROM controller is idle.
     fn wait_eeprom_ready(&self);
-    /// Returns `true` if `STATUS.ERROR` flags a write error.
+    /// Returns `true` if `STATUS` flags a write error.
     fn write_error(&self) -> bool;
 
-    /// Writes `CMD = NONE`. Caller must open the SPM window first.
-    fn command_none(&self);
-    /// Writes `CMD = EEERWR` (EEPROM erase-write). SPM window first.
+    /// Writes the erase-write command for an EEPROM byte/page. AVR128: `EEERWR`,
+    /// tinyAVR: `ERWP`. Caller must open the SPM window first.
     fn command_eeprom_erase_write(&self);
-    /// Writes `CMD = FLPER` (flash page erase). SPM window first.
-    fn command_flash_page_erase(&self);
-    /// Writes `CMD = FLWR` (flash write). SPM window first.
-    fn command_flash_write(&self);
-
-    /// Writes `CTRLB.FLMAP` to select the 32 KiB flash section visible in data
-    /// space. The caller must open the IOREG configuration-change window first.
-    /// Section 0 covers flash `0x0000-0x7FFF`, 1 covers `0x8000-0xFFFF`, 2
-    /// covers `0x10000-0x17FFF`, and 3 covers `0x18000-0x1FFFF`.
-    fn set_flmap(&self, section: u8);
+    /// Writes `CMD = NONE` (disarm). Caller must open the SPM window first.
+    fn command_none(&self);
 }
 
 /// The non-volatile memory controller.
@@ -102,21 +102,6 @@ impl<T: NvmInstance> Nvm<T> {
         });
     }
 
-    /// Runs `cmd` inside the IOREG configuration-change window with interrupts
-    /// masked, so the unlock and the protected write stay adjacent. Used for
-    /// `CTRLB.FLMAP`, which is IOREG-protected rather than SPM-protected.
-    fn protected_ioreg<C: CcpUnlock>(&self, cpu: &C, cmd: impl FnOnce(&T)) {
-        avr_device::interrupt::free(|_| {
-            cpu.unlock_ioreg();
-            cmd(&self.instance);
-        });
-    }
-
-    /// Data-space base of the mapped flash window.
-    const FLASH_WINDOW_BASE: usize = 0x8000;
-    /// Flash bytes mapped per `CTRLB.FLMAP` section (32 KiB).
-    const FLASH_WINDOW_SIZE: u32 = 0x8000;
-
     /// Reads `buf.len()` bytes from the on-chip EEPROM at `offset`.
     ///
     /// # Errors
@@ -144,9 +129,9 @@ impl<T: NvmInstance> Nvm<T> {
 
     /// Writes `data` to the on-chip EEPROM at `offset`.
     ///
-    /// Uses the erase-write command per byte, so callers do not pre-erase. This
-    /// follows the `DxCore` EEPROM flow: store the byte to load the page
-    /// buffer, then issue `EEERWR` to commit it.
+    /// Uses the erase-write command per byte, so callers do not pre-erase. The
+    /// store loads the page buffer for that byte, then the command commits it
+    /// (byte granularity: only the stored byte changes).
     ///
     /// # Errors
     ///
@@ -205,6 +190,98 @@ impl<T: NvmInstance> Nvm<T> {
         // bytes.
         unsafe { read_region(offset, buf, T::USERROW_START, T::USERROW_SIZE) }
     }
+}
+
+/// Checks that `[offset, offset + len)` fits within a region of `size` bytes.
+const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError> {
+    match (offset as usize).checked_add(len) {
+        Some(end) if end <= size as usize => Ok(()),
+        _ => Err(NvmError::OutOfBounds),
+    }
+}
+
+/// Views an initialized byte slice as uninitialized, so an initialized read can
+/// reuse the uninitialized read path. Sound because a `u8` is always a valid
+/// `MaybeUninit<u8>`.
+const fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
+    let len = buf.len();
+    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`.
+    unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), len) }
+}
+
+/// Reads `buf.len()` bytes from the data-space region based at `start` into an
+/// uninitialized buffer, returning the now-initialized bytes.
+///
+/// # Safety
+///
+/// `start` must be the base of a readable data-space region of at least `size`
+/// bytes, so that `[start, start + size)` is a valid mapped range.
+///
+/// # Errors
+///
+/// [`NvmError::OutOfBounds`] if the range leaves the region.
+unsafe fn read_region(
+    offset: u16,
+    buf: &mut [MaybeUninit<u8>],
+    start: *mut u8,
+    size: u16,
+) -> Result<&mut [u8], NvmError> {
+    check_bounds(offset, buf.len(), size)?;
+    let mut addr = start.wrapping_add(offset as usize);
+    for slot in buf.iter_mut() {
+        // SAFETY: the caller guarantees `start`/`size` map a real region, and
+        // `check_bounds` kept every `addr` inside it.
+        slot.write(unsafe { addr.read_volatile() });
+        addr = addr.wrapping_add(1);
+    }
+    let len = buf.len();
+    let ptr = buf.as_mut_ptr().cast::<u8>();
+    // SAFETY: every slot in `buf` was written above, so the region is a fully
+    // initialized `[u8]` for the borrow of `buf`.
+    Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
+}
+
+// =============================================================================
+// AVR128 DA/DB: USERROW (flash-tech) and flash self-programming.
+// =============================================================================
+
+/// AVR128-only flash capability on top of [`NvmInstance`]. tinyAVR does not
+/// implement this: its USERROW is plain EEPROM and it never self-programs
+/// flash (the cellprog flashes it over UPDI).
+#[cfg(feature = "_avr128")]
+pub trait FlashInstance: NvmInstance {
+    /// Program flash page size in bytes (AVR Dx: 512).
+    const FLASH_PAGE_SIZE: u32;
+    /// Total program flash in bytes (AVR128: 128 KiB).
+    const FLASH_SIZE: u32;
+
+    /// Writes `CMD = FLPER` (flash page erase). SPM window first.
+    fn command_flash_page_erase(&self);
+    /// Writes `CMD = FLWR` (flash write). SPM window first.
+    fn command_flash_write(&self);
+    /// Writes `CTRLB.FLMAP` to select the 32 KiB flash section visible in data
+    /// space. The caller must open the IOREG configuration-change window first.
+    /// Section 0 covers flash `0x0000-0x7FFF`, 1 covers `0x8000-0xFFFF`, 2
+    /// covers `0x10000-0x17FFF`, and 3 covers `0x18000-0x1FFFF`.
+    fn set_flmap(&self, section: u8);
+}
+
+#[cfg(feature = "_avr128")]
+impl<T: FlashInstance> Nvm<T> {
+    /// Runs `cmd` inside the IOREG configuration-change window with interrupts
+    /// masked, so the unlock and the protected write stay adjacent. Used for
+    /// `CTRLB.FLMAP`, which is IOREG-protected rather than SPM-protected.
+    fn protected_ioreg<C: CcpUnlock>(&self, cpu: &C, cmd: impl FnOnce(&T)) {
+        avr_device::interrupt::free(|_| {
+            cpu.unlock_ioreg();
+            cmd(&self.instance);
+        });
+    }
+
+    /// Data-space base of the mapped flash window.
+    const FLASH_WINDOW_BASE: usize = 0x8000;
+    /// Flash bytes mapped per `CTRLB.FLMAP` section (32 KiB).
+    const FLASH_WINDOW_SIZE: u32 = 0x8000;
 
     /// Erases the USERROW and writes `data` from its start.
     ///
@@ -407,55 +484,8 @@ impl<T: NvmInstance> Nvm<T> {
     }
 }
 
-/// Checks that `[offset, offset + len)` fits within a region of `size` bytes.
-const fn check_bounds(offset: u16, len: usize, size: u16) -> Result<(), NvmError> {
-    match (offset as usize).checked_add(len) {
-        Some(end) if end <= size as usize => Ok(()),
-        _ => Err(NvmError::OutOfBounds),
-    }
-}
-
-/// Views an initialized byte slice as uninitialized, so an initialized read can
-/// reuse the uninitialized read path. Sound because a `u8` is always a valid
-/// `MaybeUninit<u8>`.
-const fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
-    let len = buf.len();
-    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`.
-    unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), len) }
-}
-
-/// Reads `buf.len()` bytes from the data-space region based at `start` into an
-/// uninitialized buffer, returning the now-initialized bytes.
-///
-/// # Safety
-///
-/// `start` must be the base of a readable data-space region of at least `size`
-/// bytes, so that `[start, start + size)` is a valid mapped range.
-///
-/// # Errors
-///
-/// [`NvmError::OutOfBounds`] if the range leaves the region.
-unsafe fn read_region(
-    offset: u16,
-    buf: &mut [MaybeUninit<u8>],
-    start: *mut u8,
-    size: u16,
-) -> Result<&mut [u8], NvmError> {
-    check_bounds(offset, buf.len(), size)?;
-    let mut addr = start.wrapping_add(offset as usize);
-    for slot in buf.iter_mut() {
-        // SAFETY: the caller guarantees `start`/`size` map a real region, and
-        // `check_bounds` kept every `addr` inside it.
-        slot.write(unsafe { addr.read_volatile() });
-        addr = addr.wrapping_add(1);
-    }
-    let len = buf.len();
-    let ptr = buf.as_mut_ptr().cast::<u8>();
-    // SAFETY: every slot in `buf` was written above, so the region is a fully
-    // initialized `[u8]` for the borrow of `buf`.
-    Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
-}
-
+/// Implements [`NvmInstance`] and [`FlashInstance`] for an AVR128 `NVMCTRL`.
+#[cfg(feature = "_avr128")]
 macro_rules! impl_nvm_instance {
     ($NVMCTRL:ty) => {
         impl NvmInstance for $NVMCTRL {
@@ -464,8 +494,6 @@ macro_rules! impl_nvm_instance {
             const EEPROM_SIZE: u16 = 512;
             const USERROW_START: *mut u8 = 0x1080 as *mut u8;
             const USERROW_SIZE: u16 = 32;
-            const FLASH_PAGE_SIZE: u32 = 512;
-            const FLASH_SIZE: u32 = 128 * 1024;
 
             #[inline(always)]
             fn wait_flash_ready(&self) {
@@ -480,13 +508,19 @@ macro_rules! impl_nvm_instance {
                 !self.status().read().error().is_noerror()
             }
             #[inline(always)]
-            fn command_none(&self) {
-                self.ctrla().write(|w| w.cmd().none());
-            }
-            #[inline(always)]
             fn command_eeprom_erase_write(&self) {
                 self.ctrla().write(|w| w.cmd().eeerwr());
             }
+            #[inline(always)]
+            fn command_none(&self) {
+                self.ctrla().write(|w| w.cmd().none());
+            }
+        }
+
+        impl FlashInstance for $NVMCTRL {
+            const FLASH_PAGE_SIZE: u32 = 512;
+            const FLASH_SIZE: u32 = 128 * 1024;
+
             #[inline(always)]
             fn command_flash_page_erase(&self) {
                 self.ctrla().write(|w| w.cmd().flper());
@@ -515,8 +549,7 @@ impl_nvm_instance!(avr_device::avr128db64::NVMCTRL);
 #[cfg(feature = "avr128da64")]
 impl_nvm_instance!(avr_device::avr128da64::NVMCTRL);
 
-// The HAL builds only for `avr-none`, so these guard `check_bounds` at compile
-// time instead of a host test runner.
+#[cfg(feature = "_avr128")]
 const _: () = {
     assert!(check_bounds(0, 512, 512).is_ok());
     assert!(check_bounds(508, 4, 512).is_ok());
@@ -524,4 +557,60 @@ const _: () = {
     assert!(check_bounds(0, 513, 512).is_err());
     assert!(check_bounds(509, 4, 512).is_err());
     assert!(check_bounds(u16::MAX, 2, 512).is_err());
+};
+
+// ============================================================================
+// tinyAVR 0/1-series: EEPROM only.
+// ============================================================================
+
+/// Implements [`NvmInstance`] for a tinyAVR `NVMCTRL`.
+///
+/// tinyAVR maps 128 bytes of EEPROM at `0x1400` and 32 bytes of USERROW at
+/// `0x1300`. EEPROM byte writes use `CMD = ERWP` (byte granularity: only the
+/// stored byte is erased and written).
+#[cfg(feature = "_tinyavr")]
+macro_rules! impl_tiny_nvm_instance {
+    ($NVMCTRL:ty) => {
+        impl NvmInstance for $NVMCTRL {
+            const EEPROM_START: *mut u8 = 0x1400 as *mut u8;
+            const EEPROM_SIZE: u16 = 128;
+            const USERROW_START: *mut u8 = 0x1300 as *mut u8;
+            const USERROW_SIZE: u16 = 32;
+
+            #[inline(always)]
+            fn wait_flash_ready(&self) {
+                crate::wait::spin_until(|| self.status().read().fbusy().bit_is_clear());
+            }
+            #[inline(always)]
+            fn wait_eeprom_ready(&self) {
+                crate::wait::spin_until(|| self.status().read().eebusy().bit_is_clear());
+            }
+            #[inline(always)]
+            fn write_error(&self) -> bool {
+                self.status().read().wrerror().bit_is_set()
+            }
+            #[inline(always)]
+            fn command_eeprom_erase_write(&self) {
+                self.ctrla().write(|w| w.cmd().erwp());
+            }
+            #[inline(always)]
+            fn command_none(&self) {
+                self.ctrla().write(|w| w.cmd().none());
+            }
+        }
+    };
+}
+
+#[cfg(feature = "attiny406")]
+impl_tiny_nvm_instance!(avr_device::attiny406::NVMCTRL);
+#[cfg(feature = "attiny416")]
+impl_tiny_nvm_instance!(avr_device::attiny416::NVMCTRL);
+
+#[cfg(feature = "_tinyavr")]
+const _: () = {
+    assert!(check_bounds(0, 128, 128).is_ok());
+    assert!(check_bounds(124, 4, 128).is_ok());
+    assert!(check_bounds(128, 0, 128).is_ok());
+    assert!(check_bounds(0, 129, 128).is_err());
+    assert!(check_bounds(u16::MAX, 2, 128).is_err());
 };

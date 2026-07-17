@@ -7,7 +7,7 @@
 //! each adapter a reference.
 
 use avrxt_hal::clock::CcpUnlock;
-use avrxt_hal::nvmctrl::{Nvm, NvmError, NvmInstance};
+use avrxt_hal::nvmctrl::{FlashInstance, Nvm, NvmError, NvmInstance};
 
 use crate::io::{KeyStore, NvmWriter, StateStore};
 
@@ -64,12 +64,12 @@ impl<T: NvmInstance, C: CcpUnlock> StateStore for EepromState<'_, T, C> {
 /// instead; this writable path exists so a key can be replaced over a trusted
 /// bus during bring-up. Writing the key erases the whole USERROW page, so the
 /// key must own it (it is written from offset 0).
-pub struct UserRowKeyStore<'a, T: NvmInstance, C: CcpUnlock> {
+pub struct UserRowKeyStore<'a, T: FlashInstance, C: CcpUnlock> {
     nvm: &'a Nvm<T>,
     cpu: &'a C,
 }
 
-impl<'a, T: NvmInstance, C: CcpUnlock> UserRowKeyStore<'a, T, C> {
+impl<'a, T: FlashInstance, C: CcpUnlock> UserRowKeyStore<'a, T, C> {
     /// Binds a key store to the USERROW.
     #[must_use]
     pub const fn new(nvm: &'a Nvm<T>, cpu: &'a C) -> Self {
@@ -77,7 +77,7 @@ impl<'a, T: NvmInstance, C: CcpUnlock> UserRowKeyStore<'a, T, C> {
     }
 }
 
-impl<T: NvmInstance, C: CcpUnlock> KeyStore for UserRowKeyStore<'_, T, C> {
+impl<T: FlashInstance, C: CcpUnlock> KeyStore for UserRowKeyStore<'_, T, C> {
     type Error = NvmError;
 
     fn write_key(&mut self, key: &[u8]) -> Result<(), Self::Error> {
@@ -93,13 +93,13 @@ impl<T: NvmInstance, C: CcpUnlock> KeyStore for UserRowKeyStore<'_, T, C> {
 /// without buffering a whole page. The page-erase bookkeeping mirrors the UPDI
 /// programmer: a single `erased_page` tracker assumes writes arrive in
 /// ascending, contiguous order.
-pub struct FlashNvmWriter<'a, T: NvmInstance, C: CcpUnlock> {
+pub struct FlashNvmWriter<'a, T: FlashInstance, C: CcpUnlock> {
     nvm: &'a Nvm<T>,
     cpu: &'a C,
     erased_page: Option<u32>,
 }
 
-impl<'a, T: NvmInstance, C: CcpUnlock> FlashNvmWriter<'a, T, C> {
+impl<'a, T: FlashInstance, C: CcpUnlock> FlashNvmWriter<'a, T, C> {
     /// Binds a flash writer to a shared `Nvm` and `CPU` handle.
     #[must_use]
     pub const fn new(nvm: &'a Nvm<T>, cpu: &'a C) -> Self {
@@ -111,7 +111,7 @@ impl<'a, T: NvmInstance, C: CcpUnlock> FlashNvmWriter<'a, T, C> {
     }
 }
 
-impl<T: NvmInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
+impl<T: FlashInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
     type Error = NvmError;
 
     fn begin(&mut self) -> Result<(), Self::Error> {
