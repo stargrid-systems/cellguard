@@ -23,7 +23,49 @@ pub mod record;
 #[cfg(feature = "hal")]
 pub mod store;
 #[cfg(feature = "hal")]
-pub use self::store::{Decision, clear, store_and_decide};
+pub use self::store::{Decision, clear, read_panic_record, store_and_decide};
+
+/// Defines a standard `#[panic_handler]` for a CellGuard firmware crate.
+///
+/// Expands to a handler that disables interrupts, steals the peripherals,
+/// records the panic via [`store_and_decide`], then either resets (under the
+/// crash-loop threshold) or halts. `$steal_peripherals` is the expression that
+/// takes the device peripherals (e.g.
+/// `unsafe { avr_device::avr128da64::Peripherals::steal() }`). `$offset` and
+/// `$threshold` configure the EEPROM panic-record slot.
+///
+/// The handler also pulls the reset-cause flags from `RSTCTRL.RSTFR`, so the
+/// record shows why the panic fired.
+///
+/// Requires the `hal` feature.
+#[cfg(feature = "hal")]
+#[macro_export]
+macro_rules! panic_handler {
+    ($steal_peripherals:expr, $offset:expr, $threshold:expr) => {
+        #[panic_handler]
+        fn panic(info: &core::panic::PanicInfo) -> ! {
+            avr_device::interrupt::disable();
+            let dp = $steal_peripherals;
+            let nvm = avrxt_hal::nvmctrl::Nvm::new(dp.NVMCTRL);
+            let flags = avrxt_hal::rstctrl::RstInstance::flags(&dp.RSTCTRL).bits();
+            match $crate::store_and_decide(
+                &nvm,
+                &dp.CPU,
+                $offset,
+                $threshold,
+                flags,
+                info,
+            ) {
+                $crate::Decision::Reset => {
+                    avrxt_hal::rstctrl::RstInstance::software_reset(&dp.RSTCTRL, &dp.CPU)
+                }
+                $crate::Decision::Halt => loop {
+                    core::hint::spin_loop();
+                },
+            }
+        }
+    };
+}
 
 /// An error returned when a [`PanicRecord`] cannot be parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

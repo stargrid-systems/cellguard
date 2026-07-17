@@ -24,14 +24,12 @@
 //! as a time base, so the cellprog's watchdog knows the cellcore is alive.
 
 use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 use avr_device::avr128da64 as pac;
 use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
-use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
-use avrxt_hal::rstctrl::RstInstance;
+use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::twi::Twi;
@@ -43,7 +41,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
 use cellcore_runtime::{BandedStore, CoreRuntime};
-use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
+use cellguard_panic::{clear, read_panic_record};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use tca9535::{Address, PinIndex, Tca9535};
@@ -90,21 +88,11 @@ const HEARTBEAT_TICKS: u16 = 256;
 /// USART1 receive timeout in ms. Short enough that the heartbeat is serviced.
 const BUS_RX_TIMEOUT_MS: u32 = 10;
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
-    // (to recover) or halt (once the crash-loop limit is reached).
-    avr_device::interrupt::disable();
-    let dp = unsafe { pac::Peripherals::steal() };
-    let nvm = Nvm::new(dp.NVMCTRL);
-    let flags = dp.RSTCTRL.flags().bits();
-    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
-        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
-        Decision::Halt => loop {
-            core::hint::spin_loop();
-        },
-    }
-}
+cellguard_panic::panic_handler!(
+    unsafe { pac::Peripherals::steal() },
+    PANIC_OFFSET,
+    PANIC_THRESHOLD
+);
 
 #[avr_device::entry]
 fn main() -> ! {
@@ -179,7 +167,7 @@ fn main() -> ! {
     let mut dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
 
     // Cache the last panic record for the field-bus probe before clearing it.
-    dispatcher.set_panic_record(read_panic_record(&nvm));
+    dispatcher.set_panic_record(read_panic_record(&nvm, PANIC_OFFSET));
 
     // USART1 = RS485 field bus on PC4/PC5, which is PORTMUX ALT1. The transceiver
     // handles direction (no MCU DE pin).
@@ -240,13 +228,6 @@ fn main() -> ! {
             last_toggle = now;
         }
     }
-}
-
-/// Reads the last panic record from EEPROM, if a valid one is stored.
-fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
-    let mut buf = [0u8; RECORD_LEN];
-    nvm.read_eeprom(PANIC_OFFSET, &mut buf).ok()?;
-    PanicRecord::parse(&buf).ok()
 }
 
 /// Finishes a USART builder as 8N1, halting the core if the baud is

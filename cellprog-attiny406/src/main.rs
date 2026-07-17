@@ -32,21 +32,19 @@
 //!   EEPROM U105 CS = PC3.
 
 use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::{Output, Port};
 use avrxt_hal::nvmctrl::Nvm;
-use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
 use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
 use avrxt_hal::usart::{Frame, Usart};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::Cat25Store;
 use cellboot::io::BandedStore;
-use cellguard_panic::{Decision, clear, store_and_decide};
+use cellguard_panic::clear;
 use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
 use cellprog::writer::UpdiNvmWriter;
@@ -115,21 +113,11 @@ const PANIC_OFFSET: u16 = 0;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
-    // (to recover) or halt (once the crash-loop limit is reached).
-    avr_device::interrupt::disable();
-    let dp = unsafe { pac::Peripherals::steal() };
-    let nvm = Nvm::new(dp.NVMCTRL);
-    let flags = dp.RSTCTRL.flags().bits();
-    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
-        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
-        Decision::Halt => loop {
-            core::hint::spin_loop();
-        },
-    }
-}
+cellguard_panic::panic_handler!(
+    unsafe { pac::Peripherals::steal() },
+    PANIC_OFFSET,
+    PANIC_THRESHOLD
+);
 
 #[avr_device::entry]
 fn main() -> ! {

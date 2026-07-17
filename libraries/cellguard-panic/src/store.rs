@@ -12,6 +12,17 @@ use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
 
 use crate::record::{PanicRecord, RECORD_LEN};
 
+/// Reads the last panic record from the EEPROM slot at `offset`, if a valid one
+/// is stored.
+///
+/// Call this once at boot before [`clear`]-ing the slot, so the firmware can
+/// cache the record for a later `PanicProbe` response.
+pub fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>, offset: u16) -> Option<PanicRecord> {
+    let mut buf = [0u8; RECORD_LEN];
+    nvm.read_eeprom(offset, &mut buf).ok()?;
+    PanicRecord::parse(&buf).ok()
+}
+
 /// What the caller should do after [`store_and_decide`] records the panic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {

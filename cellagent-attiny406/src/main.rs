@@ -17,18 +17,15 @@
 //! - PB2 = USART0 TxD, PB3 = USART0 RxD.
 //! - PC1 = OUT_TINY_ALL_OFF.
 
-use core::panic::PanicInfo;
-
 use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::gpio::{Output, Port};
-use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
-use avrxt_hal::rstctrl::RstInstance;
+use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
-use cellguard_panic::{Decision, PanicRecord, RECORD_LEN, clear, store_and_decide};
+use cellguard_panic::{clear, read_panic_record};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 
 /// Main clock: 20 MHz internal, prescaler off.
@@ -70,21 +67,11 @@ const PANIC_OFFSET: u16 = 0;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
-    // (to recover) or halt (once the crash-loop limit is reached).
-    avr_device::interrupt::disable();
-    let dp = unsafe { pac::Peripherals::steal() };
-    let nvm = Nvm::new(dp.NVMCTRL);
-    let flags = dp.RSTCTRL.flags().bits();
-    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
-        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
-        Decision::Halt => loop {
-            core::hint::spin_loop();
-        },
-    }
-}
+cellguard_panic::panic_handler!(
+    unsafe { pac::Peripherals::steal() },
+    PANIC_OFFSET,
+    PANIC_THRESHOLD
+);
 
 #[avr_device::entry]
 fn main() -> ! {
@@ -140,7 +127,7 @@ fn main() -> ! {
     let mut runtime = CellagentRuntime::new(NODE_ID);
 
     // Cache the last panic record for the field-bus probe before clearing it.
-    runtime.set_panic_record(read_panic_record(&nvm));
+    runtime.set_panic_record(read_panic_record(&nvm, PANIC_OFFSET));
 
     // Init completed: this boot is healthy, so any prior panic was transient.
     clear(&nvm, &cpu, PANIC_OFFSET);
@@ -197,13 +184,6 @@ impl TempSensor for Lm61Temp {
         let v_mv = u32::from(raw) * VDD_MV / ADC_FULLSCALE;
         i16::try_from(v_mv.saturating_sub(LM61_BIAS_MV) * LM61_CENTI_PER_MV).unwrap_or(0)
     }
-}
-
-/// Reads the last panic record from EEPROM, if a valid one is stored.
-fn read_panic_record<T: NvmInstance>(nvm: &Nvm<T>) -> Option<PanicRecord> {
-    let mut buf = [0u8; RECORD_LEN];
-    nvm.read_eeprom(PANIC_OFFSET, &mut buf).ok()?;
-    PanicRecord::parse(&buf).ok()
 }
 
 /// Halts with interrupts disabled.

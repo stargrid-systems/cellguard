@@ -16,10 +16,9 @@
 //!   is `PG6`, Boot U105 chip-select is `PA7` (both active-low).
 
 use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 use avr_device::avr128da64 as pac;
-use avrxt_hal::clock::{self, CcpUnlock, HfFreq};
+use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
@@ -30,7 +29,7 @@ use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
 use cellcore::update::state::{self, AppHealth, BOOT_HEALTH_THRESHOLD, StagedState};
-use cellguard_panic::{Decision, clear, store_and_decide};
+use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 
@@ -66,21 +65,11 @@ const MAX_PROGRAM_ATTEMPTS: u8 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    // Stop interrupts, then record the panic in on-chip EEPROM and either reset
-    // (to recover) or halt (once the crash-loop limit is reached).
-    avr_device::interrupt::disable();
-    let dp = unsafe { pac::Peripherals::steal() };
-    let nvm = Nvm::new(dp.NVMCTRL);
-    let flags = dp.RSTCTRL.flags().bits();
-    match store_and_decide(&nvm, &dp.CPU, PANIC_OFFSET, PANIC_THRESHOLD, flags, info) {
-        Decision::Reset => dp.RSTCTRL.software_reset(&dp.CPU),
-        Decision::Halt => loop {
-            core::hint::spin_loop();
-        },
-    }
-}
+cellguard_panic::panic_handler!(
+    unsafe { pac::Peripherals::steal() },
+    PANIC_OFFSET,
+    PANIC_THRESHOLD
+);
 
 #[avr_device::entry]
 fn main() -> ! {
@@ -131,12 +120,12 @@ fn main() -> ! {
                     let _ = state_store.store(&state.serialize());
                     // Fresh application code gets a fresh crash-loop counter.
                     clear(&nvm, &cpu, PANIC_OFFSET);
-                    software_reset(&cpu);
+                    dp.RSTCTRL.software_reset(&cpu);
                 }
                 Err(_) => {
                     state.program_attempts += 1;
                     let _ = state_store.store(&state.serialize());
-                    software_reset(&cpu);
+                    dp.RSTCTRL.software_reset(&cpu);
                 }
             }
         }
@@ -163,20 +152,6 @@ fn main() -> ! {
 
     // No pending update: jump to the installed application.
     unsafe { jump_to_app() }
-}
-
-/// Triggers a software reset of the microcontroller.
-fn software_reset(cpu: &pac::CPU) -> ! {
-    avr_device::interrupt::disable();
-    avr_device::interrupt::free(|_| {
-        cpu.unlock_ioreg();
-        // SAFETY: writing SWRR triggers an immediate microcontroller reset.
-        unsafe {
-            (*pac::RSTCTRL::ptr()).swrr().write(|w| w.swrst().set_bit());
-        }
-    });
-    #[expect(clippy::empty_loop)]
-    loop {}
 }
 
 /// Jumps to the application at [`APP_TARGET_BASE`].
