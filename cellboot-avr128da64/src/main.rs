@@ -155,11 +155,27 @@ fn main() -> ! {
 
 /// Jumps to the application at [`APP_TARGET_BASE`].
 ///
+/// `APP_TARGET_BASE` is the app's reset vector: the CRT linked at the start of
+/// the app's FLASH region (0x1000), which re-initializes the stack pointer,
+/// clears `.bss`, copies `.data`, and then calls `main`. So a jump here is
+/// functionally a warm reset into the app, and the bootloader's stack and
+/// state do not leak.
+///
+/// Interrupts are disabled first as defense-in-depth, even though the
+/// bootloader never enables them.
+///
+/// Note: on AVR Dx the hardware interrupt-vector table lives at 0x0000, inside
+/// this boot section. The app therefore cannot register its own ISRs while the
+/// bootloader owns the boot section, and the current app is polling-only by
+/// design. If ISRs are ever added to the app, the bootloader must forward the
+/// vectors.
+///
 /// # Safety
 ///
 /// Transmutes a flash address to a function pointer. The caller must guarantee
-/// that valid application code is present at that address.
+/// that valid application code with a reset vector is present at that address.
 unsafe fn jump_to_app() -> ! {
+    avr_device::interrupt::disable();
     type Entry = fn() -> !;
     let entry: Entry = unsafe { core::mem::transmute(APP_TARGET_BASE as usize) };
     entry();
