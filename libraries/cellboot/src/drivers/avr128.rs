@@ -9,7 +9,7 @@
 use avrxt_hal::clock::CcpUnlock;
 use avrxt_hal::nvmctrl::{FlashInstance, Nvm, NvmError, NvmInstance};
 
-use crate::io::{KeyStore, NvmWriter, StateStore};
+use crate::io::{KeyStore, NvmWriter, PagedFlash, StateStore, write_with_page_erase};
 
 /// A [`StateStore`] backed by a slot in the on-chip EEPROM.
 ///
@@ -120,24 +120,16 @@ impl<T: FlashInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
     }
 
     fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
-        let mut addr = address;
-        let mut rest = data;
-        while !rest.is_empty() {
-            let page = addr / T::FLASH_PAGE_SIZE;
-            if self.erased_page != Some(page) {
-                self.nvm
-                    .erase_flash_page(self.cpu, page.saturating_mul(T::FLASH_PAGE_SIZE))?;
-                self.erased_page = Some(page);
-            }
-            let page_end = page.saturating_add(1).saturating_mul(T::FLASH_PAGE_SIZE);
-            let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
-            let n = rest.len().min(room);
-            let (chunk, tail) = rest.split_at(n);
-            self.nvm.write_flash(self.cpu, addr, chunk)?;
-            addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
-            rest = tail;
-        }
-        Ok(())
+        // `self.nvm`/`self.cpu` (via the adapter) and `self.erased_page` are
+        // disjoint fields, so both can be borrowed mutably in the same call.
+        let mut adapter = NvmAdapter { nvm: self.nvm, cpu: self.cpu };
+        write_with_page_erase(
+            address,
+            data,
+            T::FLASH_PAGE_SIZE,
+            &mut self.erased_page,
+            &mut adapter,
+        )
     }
 
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
@@ -145,6 +137,29 @@ impl<T: FlashInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
     }
 
     fn finish(&mut self) -> Result<(), Self::Error> {
+        // Self-programming has no programming-mode handshake to leave: flash
+        // is live the moment a write commits, so there is nothing to do here
+        // but report success. The trait's `leave` step is meaningful only for
+        // external programmers (UPDI) that halt the target.
         Ok(())
+    }
+}
+
+/// Local adapter exposing `Nvm` page-erase and write through the
+/// `PagedFlash` seam that `write_with_page_erase` drives.
+struct NvmAdapter<'a, T: FlashInstance, C: CcpUnlock> {
+    nvm: &'a Nvm<T>,
+    cpu: &'a C,
+}
+
+impl<T: FlashInstance, C: CcpUnlock> PagedFlash for NvmAdapter<'_, T, C> {
+    type Error = NvmError;
+
+    fn erase_page(&mut self, page_base: u32) -> Result<(), Self::Error> {
+        self.nvm.erase_flash_page(self.cpu, page_base)
+    }
+
+    fn write_chunk(&mut self, addr: u32, chunk: &[u8]) -> Result<(), Self::Error> {
+        self.nvm.write_flash(self.cpu, addr, chunk)
     }
 }

@@ -248,3 +248,69 @@ where
     H: core::error::Error,
 {
 }
+
+/// A paged flash target that supports page-erase and chunk-write.
+///
+/// The shared [`write_with_page_erase`] helper drives any implementor. Each
+/// concrete backend implements this (usually via a small local adapter) so
+/// the page-erase-and-split loop exists in exactly one place.
+pub trait PagedFlash {
+    /// Error type reported by the target.
+    type Error;
+    /// Erases the page containing `page_base` (a page-aligned address).
+    ///
+    /// # Errors
+    ///
+    /// Returns the target's error if the erase fails.
+    fn erase_page(&mut self, page_base: u32) -> Result<(), Self::Error>;
+    /// Writes `chunk` at `addr`. The page containing `addr` must already be
+    /// erased.
+    ///
+    /// # Errors
+    ///
+    /// Returns the target's error if the write fails.
+    fn write_chunk(&mut self, addr: u32, chunk: &[u8]) -> Result<(), Self::Error>;
+}
+
+/// Streams `data` to a page-oriented target, erasing each page the first time
+/// it is touched.
+///
+/// This is the shared body of every [`NvmWriter`] impl that streams into a
+/// paged target (UPDI AVR Dx, UPDI tinyAVR, AVR128 self-programming). It
+/// assumes writes arrive in ascending, contiguous order from a page boundary,
+/// and tracks the most recently erased page in `erased_page` so consecutive
+/// writes to the same page erase it only once.
+///
+/// Sub-page or page-straddling chunks are split at the page boundary, so the
+/// caller does not need to buffer a whole page.
+///
+/// # Errors
+///
+/// Returns the target's error if any erase or write fails. The `erased_page`
+/// tracker is only advanced after a successful erase, so a mid-stream failure
+/// causes the next call to re-erase the in-flight page.
+pub fn write_with_page_erase<T: PagedFlash>(
+    address: u32,
+    data: &[u8],
+    page_size: u32,
+    erased_page: &mut Option<u32>,
+    target: &mut T,
+) -> Result<(), T::Error> {
+    let mut addr = address;
+    let mut rest = data;
+    while !rest.is_empty() {
+        let page = addr / page_size;
+        if *erased_page != Some(page) {
+            target.erase_page(page.saturating_mul(page_size))?;
+            *erased_page = Some(page);
+        }
+        let page_end = page.saturating_add(1).saturating_mul(page_size);
+        let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
+        let n = rest.len().min(room);
+        let (chunk, tail) = rest.split_at(n);
+        target.write_chunk(addr, chunk)?;
+        addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+        rest = tail;
+    }
+    Ok(())
+}

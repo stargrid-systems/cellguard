@@ -1,101 +1,60 @@
 //! An [`NvmWriter`] backed by the `updi` programmer.
 //!
-//! [`UpdiNvmWriter`] adapts the generic [`updi::Programmer`] to the
-//! [`cellboot::io::NvmWriter`] trait, so [`crate::programmer::program`] can
-//! drive an AVR Dx target over UPDI with no change. It erases each flash page
-//! the first time a write touches it, then streams bytes straight to flash
-//! (NVMCTRL v2 has no page buffer), so a sub-page or page-straddling chunk is
-//! handled without buffering a whole page.
+//! [`UpdiNvmWriter`] adapts any [`FlashProg`] programmer (AVR Dx or tinyAVR)
+//! to the [`cellboot::io::NvmWriter`] trait, so
+//! [`crate::programmer::program`] drives either target with no change. It
+//! erases each flash page the first time a write touches it, then streams
+//! bytes straight to flash, so a sub-page or page-straddling chunk is handled
+//! without buffering a whole page. The shared erase-and-split loop lives in
+//! [`cellboot::io::write_with_page_erase`].
 
-use cellboot::io::NvmWriter;
-use updi::tiny::PAGE_SIZE as TINY_PAGE_SIZE;
-use updi::{PAGE_SIZE, ProgError, Programmer, TinyProgrammer, UpdiLink};
+use cellboot::io::{NvmWriter, PagedFlash, write_with_page_erase};
+use updi::FlashProg;
 
-/// An [`NvmWriter`] that programs an AVR Dx target over UPDI.
-pub struct UpdiNvmWriter<L> {
-    prog: Programmer<L>,
-    erased_page: Option<u32>,
-}
-
-impl<L: UpdiLink> UpdiNvmWriter<L> {
-    /// Wraps a UPDI transport.
-    pub const fn new(link: L) -> Self {
-        Self {
-            prog: Programmer::new(link),
-            erased_page: None,
-        }
-    }
-
-    /// Releases the transport.
-    pub fn free(self) -> L {
-        self.prog.free()
-    }
-}
-
-impl<L: UpdiLink> NvmWriter for UpdiNvmWriter<L> {
-    type Error = ProgError<L::Error>;
-
-    fn begin(&mut self) -> Result<(), Self::Error> {
-        self.erased_page = None;
-        self.prog.enter()
-    }
-
-    fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
-        let mut addr = address;
-        let mut rest = data;
-        while !rest.is_empty() {
-            let page = addr / PAGE_SIZE;
-            if self.erased_page != Some(page) {
-                self.prog.erase_flash_page(page.saturating_mul(PAGE_SIZE))?;
-                self.erased_page = Some(page);
-            }
-            let page_end = page.saturating_add(1).saturating_mul(PAGE_SIZE);
-            let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
-            let n = rest.len().min(room);
-            let (chunk, tail) = rest.split_at(n);
-            self.prog.write_flash(addr, chunk)?;
-            addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
-            rest = tail;
-        }
-        Ok(())
-    }
-
-    fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.prog.read_flash(address, buf)
-    }
-
-    fn finish(&mut self) -> Result<(), Self::Error> {
-        self.prog.leave()
-    }
-}
-
-/// An [`NvmWriter`] that programs a tinyAVR 0/1-series target over UPDI.
+/// An [`NvmWriter`] that programs any UPDI flash target (AVR Dx or tinyAVR).
 ///
-/// Like [`UpdiNvmWriter`] but for tinyAVR (NVMCTRL v0/v1). The tinyAVR has a
-/// page buffer, so [`TinyProgrammer::write_flash`] pads partial pages
-/// internally.
-pub struct TinyNvmWriter<L> {
-    prog: TinyProgrammer<L>,
+/// Generic over a [`FlashProg`] programmer, so the same writer drives both
+/// target families. The page mechanics live in the programmer and the shared
+/// `write_with_page_erase` helper.
+pub struct UpdiNvmWriter<P> {
+    prog: P,
     erased_page: Option<u32>,
 }
 
-impl<L: UpdiLink> TinyNvmWriter<L> {
-    /// Wraps a UPDI transport.
-    pub const fn new(link: L) -> Self {
+impl<P: FlashProg> UpdiNvmWriter<P> {
+    /// Wraps a programmer.
+    pub const fn new(prog: P) -> Self {
         Self {
-            prog: TinyProgrammer::new(link),
+            prog,
             erased_page: None,
         }
     }
 
-    /// Releases the transport.
-    pub fn free(self) -> L {
-        self.prog.free()
+    /// Releases the programmer.
+    pub fn free(self) -> P {
+        self.prog
     }
 }
 
-impl<L: UpdiLink> NvmWriter for TinyNvmWriter<L> {
-    type Error = ProgError<L::Error>;
+/// Local adapter so the shared `write_with_page_erase` helper can drive a
+/// `FlashProg` programmer through the cellboot `PagedFlash` seam without
+/// cellboot depending on `updi`.
+struct FlashProgAdapter<'a, P: FlashProg>(&'a mut P);
+
+impl<P: FlashProg> PagedFlash for FlashProgAdapter<'_, P> {
+    type Error = P::Error;
+
+    fn erase_page(&mut self, page_base: u32) -> Result<(), Self::Error> {
+        self.0.erase_page(page_base)
+    }
+
+    fn write_chunk(&mut self, addr: u32, chunk: &[u8]) -> Result<(), Self::Error> {
+        self.0.write(addr, chunk)
+    }
+}
+
+impl<P: FlashProg> NvmWriter for UpdiNvmWriter<P> {
+    type Error = P::Error;
 
     fn begin(&mut self) -> Result<(), Self::Error> {
         self.erased_page = None;
@@ -103,28 +62,20 @@ impl<L: UpdiLink> NvmWriter for TinyNvmWriter<L> {
     }
 
     fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
-        let mut addr = address;
-        let mut rest = data;
-        while !rest.is_empty() {
-            let page = addr / TINY_PAGE_SIZE;
-            if self.erased_page != Some(page) {
-                self.prog
-                    .erase_flash_page(page.saturating_mul(TINY_PAGE_SIZE))?;
-                self.erased_page = Some(page);
-            }
-            let page_end = page.saturating_add(1).saturating_mul(TINY_PAGE_SIZE);
-            let room = usize::try_from(page_end.saturating_sub(addr)).unwrap_or(usize::MAX);
-            let n = rest.len().min(room);
-            let (chunk, tail) = rest.split_at(n);
-            self.prog.write_flash(addr, chunk)?;
-            addr = addr.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
-            rest = tail;
-        }
-        Ok(())
+        // `self.prog` and `self.erased_page` are disjoint fields, so both can
+        // be borrowed mutably in the same call.
+        let mut adapter = FlashProgAdapter(&mut self.prog);
+        write_with_page_erase(
+            address,
+            data,
+            P::PAGE_SIZE,
+            &mut self.erased_page,
+            &mut adapter,
+        )
     }
 
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
-        self.prog.read_flash(address, buf)
+        self.prog.read(address, buf)
     }
 
     fn finish(&mut self) -> Result<(), Self::Error> {
@@ -136,6 +87,7 @@ impl<L: UpdiLink> NvmWriter for TinyNvmWriter<L> {
 mod tests {
     use cellboot::io::NvmWriter;
     use updi::mock::MockTarget;
+    use updi::Programmer;
 
     use super::UpdiNvmWriter;
 
@@ -143,9 +95,13 @@ mod tests {
         core::array::from_fn(|i| u8::try_from(i % 251).unwrap())
     }
 
+    fn make() -> UpdiNvmWriter<Programmer<MockTarget>> {
+        UpdiNvmWriter::new(Programmer::new(MockTarget::new()))
+    }
+
     #[test]
     fn single_write_straddles_page_boundary() {
-        let mut w = UpdiNvmWriter::new(MockTarget::new());
+        let mut w = make();
         let data = ramp();
         w.begin().unwrap();
         // 600 bytes in one call cross the 512-byte page boundary: the adapter
@@ -159,7 +115,7 @@ mod tests {
 
     #[test]
     fn streamed_sub_page_chunks_program_correctly() {
-        let mut w = UpdiNvmWriter::new(MockTarget::new());
+        let mut w = make();
         let data = ramp();
         w.begin().unwrap();
         for (i, chunk) in data.chunks(64).enumerate() {
@@ -176,7 +132,7 @@ mod tests {
     fn each_page_is_erased_once() {
         // Write page 0 in two chunks. The page must be erased on the first
         // chunk only, or the second chunk's data would be wiped.
-        let mut w = UpdiNvmWriter::new(MockTarget::new());
+        let mut w = make();
         w.begin().unwrap();
         w.write(0, &[0x11; 8]).unwrap();
         w.write(8, &[0x22; 8]).unwrap();

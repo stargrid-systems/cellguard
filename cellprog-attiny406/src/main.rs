@@ -49,12 +49,13 @@ use cellboot::io::BandedStore;
 use cellguard_panic::{Decision, clear, store_and_decide};
 use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
-use cellprog::writer::{TinyNvmWriter, UpdiNvmWriter};
+use cellprog::writer::UpdiNvmWriter;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use embedded_io::Write;
+use updi::{Programmer, TinyProgrammer};
 
 use self::updi_link::UsartUpdiLink;
 
@@ -229,13 +230,13 @@ fn main() -> ! {
                 ProgSource::CellagentAppStaged => {
                     mux.cellagent_updi();
                     let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = TinyNvmWriter::new(link);
+                    let mut writer = UpdiNvmWriter::new(TinyProgrammer::new(link));
                     supervisor.program(source, &mut writer)
                 }
                 _ => {
                     mux.cellcore_updi();
                     let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(link);
+                    let mut writer = UpdiNvmWriter::new(Programmer::new(link));
                     supervisor.program(source, &mut writer)
                 }
             };
@@ -270,7 +271,7 @@ fn main() -> ! {
                 mux.cellcore_updi();
                 let _ = {
                     let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(link);
+                    let mut writer = UpdiNvmWriter::new(Programmer::new(link));
                     supervisor.program(ProgSource::AppStaged, &mut writer)
                 };
                 usart.set_frame(Frame::EIGHT_N_1);
