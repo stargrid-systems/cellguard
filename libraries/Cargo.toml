@@ -11,6 +11,7 @@ members = [
     "cellguard-protocol",
     "cellprog",
     "crc",
+    "panic-log",
     "p3t1755",
     "tca9535",
     "updi",
@@ -54,6 +55,7 @@ cellcore = { path = "cellcore" }
 cellguard-protocol = { path = "cellguard-protocol" }
 cellprog = { path = "cellprog" }
 crc = { path = "crc" }
+panic-log = { path = "panic-log" }
 updi = { path = "updi" }
 
 avr-device = { version = "0.8", default-features = false }

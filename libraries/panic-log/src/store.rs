@@ -1,0 +1,67 @@
+//! EEPROM-backed panic storage and the crash-loop reset/halt decision.
+//!
+//! [`store_and_decide`] is the policy entry point a panic handler calls after
+//! taking the peripherals. It reads the stored crash-loop counter from the
+//! record slot, writes a fresh record for the current panic, and tells the
+//! caller whether to reset or halt.
+
+use core::panic::PanicInfo;
+
+use avrxt_hal::clock::CcpUnlock;
+use avrxt_hal::nvmctrl::{Nvm, NvmInstance};
+
+use crate::record::{PanicRecord, RECORD_LEN};
+
+/// What the caller should do after [`store_and_decide`] records the panic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Reset the device: the crash-loop limit has not been reached.
+    Reset,
+    /// Halt: the limit of consecutive panic-resets has been reached.
+    Halt,
+}
+
+/// Reads the stored crash-loop counter, writes a record for this panic, and
+/// returns whether the caller should reset or halt.
+///
+/// The counter is read from the [`PanicRecord`] at EEPROM `offset`. A blank or
+/// corrupt slot counts as zero. The first `threshold` panics reset the device
+/// (counter 1..=`threshold`); the next panic returns [`Decision::Halt`] instead.
+/// A healthy boot clears the slot so a single transient panic does not
+/// accumulate.
+///
+/// Storage is best-effort: a read or write error falls through to a reset (the
+/// counter is treated as zero, the record is written if it can be), so a flaky
+/// EEPROM never blocks recovery.
+pub fn store_and_decide<T, C>(
+    nvm: &Nvm<T>,
+    cpu: &C,
+    offset: u16,
+    threshold: u8,
+    reset_flags: u8,
+    info: &PanicInfo,
+) -> Decision
+where
+    T: NvmInstance,
+    C: CcpUnlock,
+{
+    let mut buf = [0u8; RECORD_LEN];
+    let current = nvm
+        .read_eeprom(offset, &mut buf)
+        .ok()
+        .and_then(|()| PanicRecord::parse(&buf).ok())
+        .map_or(0u8, |r| r.consecutive_panics);
+
+    let mut record = PanicRecord::from_panic_info(info, reset_flags);
+    if current >= threshold {
+        // Park the counter at the threshold and still record the latest
+        // location, then leave the decision to the caller (halt).
+        record.consecutive_panics = current;
+        let _ = nvm.write_eeprom(offset, &record.serialize(), cpu);
+        Decision::Halt
+    } else {
+        record.consecutive_panics = current + 1;
+        let _ = nvm.write_eeprom(offset, &record.serialize(), cpu);
+        Decision::Reset
+    }
+}
