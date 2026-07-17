@@ -14,7 +14,7 @@
 
 use cellboot::image::Region;
 use cellguard_protocol::{
-    HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
+    HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame, max_encoded_len,
 };
 
 /// Size of a `ProgProgram` frame before COBS: header, one selector byte, and
@@ -22,8 +22,9 @@ use cellguard_protocol::{
 const PROGRAM_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
 
 /// Worst-case COBS-encoded size of a `ProgProgram` frame, including the
-/// terminator. Size an outbound buffer with this.
-pub const PROGRAM_WIRE: usize = PROGRAM_FRAME + PROGRAM_FRAME.div_ceil(254) + 1;
+/// terminator. Computed from the shared helper so it cannot drift. Size an
+/// outbound buffer with this.
+pub const PROGRAM_WIRE: usize = max_encoded_len(PROGRAM_FRAME);
 
 /// Maps a committed region to the programmer source that flashes it.
 ///

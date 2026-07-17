@@ -29,6 +29,7 @@
 use cellboot::io::{ImageStore, NvmWriter};
 use cellguard_protocol::{
     Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
+    max_encoded_len,
 };
 
 use crate::programmer::{ProgramError, program};
@@ -40,7 +41,8 @@ const SCRATCH: usize = 64;
 const RESULT_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
 
 /// Worst-case COBS-encoded size of a result frame, including the terminator.
-const RESULT_WIRE: usize = RESULT_FRAME + RESULT_FRAME.div_ceil(254) + 1;
+/// Computed from the shared helper so it cannot drift.
+const RESULT_WIRE: usize = max_encoded_len(RESULT_FRAME);
 
 /// Where a source image sits in the store and where it maps in the target.
 #[derive(Debug, Clone, Copy)]

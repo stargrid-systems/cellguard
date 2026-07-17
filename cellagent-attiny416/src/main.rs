@@ -101,7 +101,7 @@ fn main() -> ! {
     let mut last_toggle = rtc.count();
     loop {
         if let Ok(byte) = usart.read_byte() {
-            let _ = runtime.service(byte, &mut gates, &mut temp, &mut usart);
+            runtime.service(byte, &mut gates, &mut temp, &mut usart);
         }
 
         let now = rtc.count();

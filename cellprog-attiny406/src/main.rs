@@ -204,6 +204,10 @@ fn main() -> ! {
     let mut last_edge = rtc.count();
     let mut resets = 0u8;
     let mut reflashes = 0u8;
+    // Latched once both recovery tiers are exhausted, so the dead branch does
+    // not re-evaluate the timeout every loop iteration. Cleared by any
+    // heartbeat edge, which means the cellcore came back.
+    let mut recovery_given_up = false;
 
     // Init completed: this boot is healthy, so any prior panic was transient.
     clear(&nvm, &cpu, PANIC_OFFSET);
@@ -242,10 +246,11 @@ fn main() -> ! {
             last_edge = rtc.count();
             resets = 0;
             reflashes = 0;
+            recovery_given_up = false;
         }
 
         // --- Heartbeat lost: tiered recovery ---
-        if rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS {
+        if !recovery_given_up && rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS {
             if resets < MAX_RESETS {
                 // Tier 1: pulse RESET_AVR64 low.
                 let _ = reset_n.set_low();
@@ -267,8 +272,11 @@ fn main() -> ! {
                 reflashes += 1;
                 last_edge = rtc.count();
                 resets = 0;
+            } else {
+                // Exhausted: keep listening, stop recovering. Latch so this
+                // branch does not re-evaluate the timeout every iteration.
+                recovery_given_up = true;
             }
-            // Exhausted: keep listening, stop recovering.
         }
     }
 }

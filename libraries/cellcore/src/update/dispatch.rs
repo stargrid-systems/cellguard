@@ -13,7 +13,7 @@
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_panic::{PanicRecord, RECORD_LEN};
-use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame};
+use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len};
 
 use crate::update::command::Command;
 use crate::update::session::UpdateAgent;
@@ -31,8 +31,8 @@ const MAX_RESPONSE_PAYLOAD: usize = if STATE_LEN > RECORD_LEN {
 const MAX_RESPONSE_FRAME: usize = HEADER_LEN + MAX_RESPONSE_PAYLOAD + PAYLOAD_CRC_LEN;
 
 /// Worst-case COBS-encoded size of the largest response, including the
-/// terminator. COBS adds one code byte per 254 data bytes plus the delimiter.
-const MAX_RESPONSE_WIRE: usize = MAX_RESPONSE_FRAME + MAX_RESPONSE_FRAME.div_ceil(254) + 1;
+/// terminator. Computed from the shared helper so it cannot drift.
+const MAX_RESPONSE_WIRE: usize = max_encoded_len(MAX_RESPONSE_FRAME);
 
 /// Bus driver for the update agent.
 ///

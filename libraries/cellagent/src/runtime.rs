@@ -56,37 +56,37 @@ impl CellagentRuntime {
     /// Feeds one received byte.
     ///
     /// When a complete packet is decoded, handles it and writes any response to
-    /// `out`. Returns the number of bytes written, or 0 if no response was
-    /// produced (incomplete frame, wrong node, or a decode error).
-    pub fn service<G, T, W>(&mut self, byte: u8, gates: &mut G, temp: &mut T, out: &mut W) -> usize
+    /// `out`. No response is produced (and nothing is written) for an incomplete
+    /// frame, a frame addressed to another node, or a decode error.
+    pub fn service<G, T, W>(&mut self, byte: u8, gates: &mut G, temp: &mut T, out: &mut W)
     where
         G: GateControl,
         T: TempSensor,
         W: Write,
     {
         let Ok(Some(frame_len)) = self.decoder.feed(byte, &mut self.rx_buf) else {
-            return 0;
+            return;
         };
         let Some(frame) = self.rx_buf.get(..frame_len) else {
-            return 0;
+            return;
         };
         let Ok(packet) = Packet::parse(frame) else {
-            return 0;
+            return;
         };
         if packet.id != self.node_id {
-            return 0;
+            return;
         }
 
         match packet.kind {
             Kind::ReadTemperature => {
                 let centi = temp.read_centi_celsius();
                 let payload = centi.to_le_bytes();
-                self.write_response(Kind::Temperature, &payload, out)
+                self.write_response(Kind::Temperature, &payload, out);
             }
             Kind::SetBalancer => match packet.payload {
                 &[mask] => {
                     gates.set_gates(mask);
-                    self.write_response(Kind::Ack, &[], out)
+                    self.write_response(Kind::Ack, &[], out);
                 }
                 _ => self.write_response(Kind::Nack, &[], out),
             },
@@ -99,27 +99,24 @@ impl CellagentRuntime {
     }
 
     /// Builds and writes a response packet COBS-encoded onto `out`.
-    fn write_response<W: Write>(&self, kind: Kind, payload: &[u8], out: &mut W) -> usize {
+    fn write_response<W: Write>(&self, kind: Kind, payload: &[u8], out: &mut W) {
         let mut raw = [0u8; MAX_RESPONSE_RAW];
         let Ok(raw_len) = Packet::write(self.node_id, kind, payload, &mut raw) else {
-            return 0;
+            return;
         };
         let Some(raw_slice) = raw.get(..raw_len) else {
-            return 0;
+            return;
         };
 
         let mut wire = [0u8; MAX_RESPONSE_WIRE];
         let Some(wire_len) = encode_frame(raw_slice, &mut wire) else {
-            return 0;
+            return;
         };
         let Some(wire_slice) = wire.get(..wire_len) else {
-            return 0;
+            return;
         };
 
-        if out.write_all(wire_slice).is_err() {
-            return 0;
-        }
-        wire_len
+        let _ = out.write_all(wire_slice);
     }
 }
 

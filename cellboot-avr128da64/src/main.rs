@@ -36,16 +36,6 @@ use embedded_hal_bus::spi::RefCellDevice;
 /// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
 const BASE_FREQ: u32 = 24_000_000;
 
-/// App staging EEPROM capacity (U104, CAT25M01, 128 KB).
-#[allow(dead_code)]
-const APP_CAP: u32 = 128 * 1024;
-/// Boot staging EEPROM capacity (U105, CAT25128, 16 KB).
-#[allow(dead_code)]
-const BOOT_CAP: u32 = 16 * 1024;
-/// Cellagent app staging capacity (carved from the end of U104).
-#[allow(dead_code)]
-const CELLAGENT_CAP: u32 = 4 * 1024;
-
 /// On-chip EEPROM slot holding the probe-able agent state.
 const STATE_OFFSET: u16 = 0;
 const STATE_LEN: u16 = 64;
@@ -105,7 +95,10 @@ fn main() -> ! {
 
     // If a verified application image is staged, self-program it into flash.
     if state.staged == StagedState::Ready && state.staged_region == Some(Region::ApplicationCode) {
-        if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
+        // A corrupt staged source or an unparseable header will never succeed
+        // by retrying, so they short-circuit straight to giving up. Transient
+        // failures (NVM/store/verify/release) consume a retry attempt and reset.
+        let give_up = if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
             let mut writer = FlashNvmWriter::new(&nvm, &cpu);
             let mut scratch = [0u8; 256];
             match cellprog::programmer::program(
@@ -122,20 +115,26 @@ fn main() -> ! {
                     clear(&nvm, &cpu, PANIC_OFFSET);
                     dp.RSTCTRL.software_reset(&cpu);
                 }
+                Err(cellprog::programmer::ProgramError::CorruptSource)
+                | Err(cellprog::programmer::ProgramError::Header(_)) => true,
                 Err(_) => {
                     state.program_attempts += 1;
                     let _ = state_store.store(&state.serialize());
                     dp.RSTCTRL.software_reset(&cpu);
                 }
             }
+        } else {
+            true
+        };
+        // Give up: clear staged so the device does not loop, and fall through
+        // to the installed app. If the error was non-destructive (corrupt
+        // source, bad header) the installed app is intact and runs normally.
+        // If it was destructive, the cellprog watchdog detects heartbeat loss
+        // and attempts recovery.
+        if give_up {
+            state.mark_program_failed();
+            let _ = state_store.store(&state.serialize());
         }
-        // Attempts exhausted. Clear staged so the device does not loop, and
-        // fall through to the installed app. If the error was non-destructive
-        // (corrupt source, bad header) the installed app is intact and runs
-        // normally. If it was destructive, the cellprog watchdog detects
-        // heartbeat loss and attempts recovery.
-        state.mark_program_failed();
-        let _ = state_store.store(&state.serialize());
     }
 
     // Every boot that hands control to the app counts toward the health
