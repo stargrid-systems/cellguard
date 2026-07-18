@@ -13,20 +13,17 @@
 //! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. Each of the three
 //!   staging EEPROMs has its own active-low chip-select GPIO: App `PG6` (U104),
 //!   Boot `PA7` (U105), Factory `PG7` (U106).
-//! - USART1 (PC4/PC5) is the RS485 field bus (LAST/upstream link).
+//! - USART5 (PG4/PG5 via PORTMUX ALT1) is the debug UART for bring-up.
 //! - USART3 (PB0/PB1) is the local link to the ATtiny406 PROG programmer.
 //!
-//! The agent stages App and Boot images, banded into one address space, then
-//! hands them to the PROG programmer.
-//!
-//! The main loop also drives the cellcore heartbeat: U103 P12
-//! (`AVR64_TO_PROG`) is toggled over I2C1 roughly every 250 ms using the RTC
-//! as a time base, so the cellprog's watchdog knows the cellcore is alive.
+//! BRING-UP STATE: runs on the default 4 MHz internal RC (Y100 not verified),
+//! field bus on USART5 debug UART at 9600 baud, heartbeat disabled (I2C
+//! blocking bug). See `scratch/bring-up/test-report.md` for details.
 
 use core::cell::RefCell;
 
 use avr_device::avr128da64 as pac;
-use avrxt_hal::clock::{self, HfFreq};
+use avrxt_hal::clock::HfFreq;
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
@@ -46,11 +43,11 @@ use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 use tca9535::{Address, PinIndex, Tca9535};
 
-/// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
-const F_CPU: HfFreq = HfFreq::Mhz24;
+/// BRING-UP: default internal RC at 4 MHz (Y100 not verified).
+const F_CPU: HfFreq = HfFreq::Mhz4;
 
-/// Field-bus baud (USART1, RS485 LAST link).
-const BUS_BAUD: u32 = 115_200;
+/// Debug UART baud (USART5, bring-up).
+const BUS_BAUD: u32 = 9_600;
 /// Baud on the local link to the PROG programmer (USART3).
 const PROG_BAUD: u32 = 115_200;
 
@@ -99,32 +96,45 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // Run from the external 24 MHz clock on PA0/EXTCLK.
-    clock::set_extclk(&cpu, &dp.CLKCTRL, F_CPU);
+    // BRING-UP: USART5 debug UART on PG4/PG5. Default USART5 pins are PG0/PG1;
+    // PORTMUX ALT1 routes to PG4/PG5 where the DFRobot adapter is connected.
+    // Initialized first so diagnostic output is available for every later step.
+    dp.PORTMUX.usartrouteb().modify(|_, w| w.usart5().alt1());
+    let portg = Port::new(dp.PORTG).split();
+    let _bus_tx = portg.p4.into_output_high();
+    let _bus_rx = portg.p5.into_input();
+    let mut bus = build_usart(
+        Usart::builder(dp.USART5, F_CPU.hz())
+            .baud(BUS_BAUD)
+            .rx_timeout_ms(BUS_RX_TIMEOUT_MS),
+    );
+
+    bus.write_byte(b'1');
 
     // Mandatory: verify the crypto primitives on this silicon before trusting
     // any image. A miscompiled hash must never authenticate firmware.
     if cellcore::kat::self_test().is_err() {
+        bus.write_byte(b'K');
         halt();
     }
+    bus.write_byte(b'2');
 
     // On-chip NVM: read the fleet key from the USERROW and back the agent state
     // with an EEPROM slot.
-    let nvm = Nvm::new(dp.NVMCTRL);
+    let nvm = Nvm::new(unsafe { pac::Peripherals::steal().NVMCTRL });
     let mut key = [0u8; KEY_LEN];
     if nvm.read_userrow(0, &mut key).is_err() {
+        bus.write_byte(b'U');
         halt();
     }
+    bus.write_byte(b'3');
     let mut state_store = EepromState::new(&nvm, &cpu, STATE_OFFSET, STATE_LEN);
     let boot_state = state::load(&mut state_store, AGENT_VERSION);
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
-    let portc = Port::new(dp.PORTC).split();
-    let portg = Port::new(dp.PORTG).split();
 
-    // SPI0 host bus (PA4 MOSI, PA5 MISO, PA6 SCK), the staging EEPROM bus. Pin
-    // directions are the application's job.
+    // SPI0 host bus (PA4 MOSI, PA5 MISO, PA6 SCK), the staging EEPROM bus.
     let _mosi = porta.p4.into_output();
     let _miso = porta.p5.into_input();
     let _sck = porta.p6.into_output();
@@ -139,6 +149,7 @@ fn main() -> ! {
     let app = Cat25Store::new(Cat25::new(app_dev, CAT25M01, Delay::new(F_CPU.hz())));
     let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(F_CPU.hz())));
     let store = BandedStore::new(app, boot);
+    bus.write_byte(b'4');
 
     let layout = StagingLayout {
         application: RegionSlot {
@@ -165,25 +176,14 @@ fn main() -> ! {
         boot_state,
     );
     let mut dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
-
-    // Cache the last panic record for the field-bus probe before clearing it.
     dispatcher.set_panic_record(read_panic_record(&nvm, PANIC_OFFSET));
-
-    // USART1 = RS485 field bus on PC4/PC5, which is PORTMUX ALT1. The transceiver
-    // handles direction (no MCU DE pin).
-    dp.PORTMUX.usartroutea().modify(|_, w| w.usart1().alt1());
-    let _bus_tx = portc.p4.into_output_high();
-    let _bus_rx = portc.p5.into_input();
-    let bus = build_usart(
-        Usart::builder(dp.USART1, F_CPU.hz())
-            .baud(BUS_BAUD)
-            .rx_timeout_ms(BUS_RX_TIMEOUT_MS),
-    );
+    bus.write_byte(b'5');
 
     // USART3 = link to the PROG programmer on the default PB0/PB1 pins.
     let _prog_tx = portb.p0.into_output_high();
     let _prog_rx = portb.p1.into_input();
     let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
+    bus.write_byte(b'6');
 
     // I2C1 (TWI1) internal bus. PB2 SDA, PB3 SCL (default pins, no PORTMUX).
     // Reaches U103 (TCA9535 @0x20). External pull-ups on the board.
@@ -202,6 +202,7 @@ fn main() -> ! {
         let _ = expander.write_output(tca9535::Output(out));
         out
     };
+    bus.write_byte(b'7');
 
     // RTC as a free-running time base (~1.024 kHz, ~64 s before wrap).
     let rtc = Rtc::new(
@@ -210,6 +211,7 @@ fn main() -> ! {
         RtcPrescaler::Div1,
         u16::MAX,
     );
+    bus.write_byte(b'8');
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
 
@@ -217,16 +219,12 @@ fn main() -> ! {
     // Clear the crash-loop counter so unrelated panics do not accumulate.
     clear(&nvm, &cpu, PANIC_OFFSET);
 
-    let mut last_toggle = rtc.count();
+    // BRING-UP: heartbeat disabled. The I2C write_output call blocks
+    // indefinitely when the TCA9535 is unreachable, starving the UART
+    // poll. Re-enable once the TWI driver has a bounded timeout.
+    let _ = expander;
     loop {
         runtime.try_service();
-
-        let now = rtc.count();
-        if now.wrapping_sub(last_toggle) >= HEARTBEAT_TICKS {
-            heartbeat_out ^= PinIndex::P12.mask();
-            let _ = expander.write_output(tca9535::Output(heartbeat_out));
-            last_toggle = now;
-        }
     }
 }
 
