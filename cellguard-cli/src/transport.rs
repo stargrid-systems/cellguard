@@ -70,7 +70,6 @@ impl Transport {
         let mut wire = vec![0u8; TX_WIRE];
         let wire_len = encode_frame(&raw[..raw_len], &mut wire)
             .ok_or_else(|| io::Error::other("COBS encode failed: output too small"))?;
-        eprintln!("RAW SEND ({} bytes): {:02x?}", wire_len, &wire[..wire_len]);
         self.port
             .write_all(&wire[..wire_len])?;
         self.port.flush()
@@ -78,21 +77,17 @@ impl Transport {
 
     fn recv(&mut self) -> io::Result<Reply> {
         let mut byte = [0u8; 1];
-        let mut raw_log = Vec::new();
         loop {
             match self.port.read(&mut byte) {
                 Ok(0) => return Err(io::Error::new(io::ErrorKind::TimedOut, "serial read timed out")),
                 Ok(_) => {}
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                    eprintln!("RAW RECV ({} bytes): {:02x?}", raw_log.len(), raw_log);
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "no response within timeout"));
                 }
                 Err(e) => return Err(e),
             }
-            raw_log.push(byte[0]);
             match self.decoder.feed(byte[0], &mut self.rx) {
                 Ok(Some(len)) => {
-                    eprintln!("RAW RECV ({} bytes): {:02x?}", raw_log.len(), raw_log);
                     let frame = self.rx.get(..len).ok_or_else(|| {
                         io::Error::other("internal: decoded frame longer than RX buffer")
                     })?;
@@ -106,17 +101,14 @@ impl Transport {
                 }
                 Ok(None) => {}
                 Err(DecodeError::BufferTooSmall) => {
-                    eprintln!("RAW RECV ({} bytes): {:02x?}", raw_log.len(), raw_log);
                     return Err(io::Error::other(
                         "response frame too large for RX buffer",
                     ));
                 }
                 Err(DecodeError::InvalidFrame) => {
-                    eprintln!("RAW RECV ({} bytes): {:02x?}", raw_log.len(), raw_log);
                     return Err(io::Error::other("malformed COBS frame on bus"));
                 }
                 Err(_) => {
-                    eprintln!("RAW RECV ({} bytes): {:02x?}", raw_log.len(), raw_log);
                     return Err(io::Error::other("unknown COBS decode error"));
                 }
             }
