@@ -193,6 +193,18 @@ impl<T: UsartInstance> Usart<T> {
         Ok(())
     }
 
+    /// Reconfigures the frame format, keeping the baud rate.
+    ///
+    /// Drains the transmit shift register first, then rewrites
+    /// `CTRLC`/`CTRLB`. The receiver should be idle when this is called. An
+    /// in-flight RX frame may be corrupted by the `CTRLC` rewrite. This lets
+    /// one USART switch between, for example, an 8N1 command link and an 8E2
+    /// UPDI one-wire link on the fly.
+    pub fn set_frame(&mut self, frame: Frame) {
+        self.drain_tx();
+        self.instance.configure(self.baud_reg, frame);
+    }
+
     /// Sends a BREAK: holds the line low well beyond one frame, then restores
     /// the baud rate.
     ///
