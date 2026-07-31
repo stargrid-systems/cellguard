@@ -8,7 +8,7 @@
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
 use embedded_hal::spi::{self, Mode, SpiBus};
-#[cfg(feature = "_avr128")]
+#[cfg(any(feature = "_avr128", feature = "_tinyavr"))]
 use embedded_hal::spi::{Phase, Polarity};
 
 /// SPI clock prescaler (divides `CLK_PER`).
@@ -149,9 +149,50 @@ macro_rules! impl_spis {
     };
 }
 
+// tinyAVR uses the same SPI IP, but its `PRESC` field is an enum
+// (`CLK_PER_4_2`, `CLK_PER_16_8`, ...) rather than the AVR128 `div4()`
+// accessors. With `CLK2X` left at its reset value of 0 the dividers match
+// `Prescaler` one-for-one.
+macro_rules! impl_spi_instance_tiny {
+    ($SPI:ty, $flag:ident) => {
+        impl SpiInstance for $SPI {
+            fn configure(&self, mode: Mode, prescaler: Prescaler) {
+                self.ctrlb().write(|w| {
+                    w.ssd().set_bit();
+                    match (mode.polarity, mode.phase) {
+                        (Polarity::IdleLow, Phase::CaptureOnFirstTransition) => w.mode()._0(),
+                        (Polarity::IdleLow, Phase::CaptureOnSecondTransition) => w.mode()._1(),
+                        (Polarity::IdleHigh, Phase::CaptureOnFirstTransition) => w.mode()._2(),
+                        (Polarity::IdleHigh, Phase::CaptureOnSecondTransition) => w.mode()._3(),
+                    }
+                });
+                self.ctrla().write(|w| {
+                    w.master().set_bit().enable().set_bit();
+                    match prescaler {
+                        Prescaler::Div4 => w.presc().clk_per_4_2(),
+                        Prescaler::Div16 => w.presc().clk_per_16_8(),
+                        Prescaler::Div64 => w.presc().clk_per_64_32(),
+                        Prescaler::Div128 => w.presc().clk_per_128_64(),
+                    }
+                });
+            }
+            fn transfer_byte(&self, byte: u8) -> u8 {
+                self.data().write(|w| w.set(byte));
+                crate::wait::spin_until(|| self.intflags().read().$flag().bit_is_set());
+                self.data().read().bits()
+            }
+        }
+    };
+}
+
 #[cfg(feature = "avr128db48")]
 impl_spis!(avr_device::avr128db48::SPI0, avr_device::avr128db48::SPI1);
 #[cfg(feature = "avr128db64")]
 impl_spis!(avr_device::avr128db64::SPI0, avr_device::avr128db64::SPI1);
 #[cfg(feature = "avr128da64")]
 impl_spis!(avr_device::avr128da64::SPI0, avr_device::avr128da64::SPI1);
+// tinyAVR has a single SPI0 with the enum-typed `PRESC` field.
+#[cfg(feature = "attiny406")]
+impl_spi_instance_tiny!(avr_device::attiny406::SPI0, if_);
+#[cfg(feature = "attiny416")]
+impl_spi_instance_tiny!(avr_device::attiny416::SPI0, default_if);
