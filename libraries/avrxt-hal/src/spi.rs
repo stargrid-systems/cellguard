@@ -8,7 +8,7 @@
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
 use embedded_hal::spi::{self, Mode, SpiBus};
-#[cfg(feature = "_avr128")]
+#[cfg(any(feature = "_avr128", feature = "_tinyavr"))]
 use embedded_hal::spi::{Phase, Polarity};
 
 /// SPI clock prescaler (divides `CLK_PER`).
@@ -106,8 +106,6 @@ impl<T: SpiInstance> SpiBus<u8> for Spi<T> {
     }
 }
 
-// Hidden implementation detail. The bodies are identical across the distinct
-// PAC register types. This private macro only emits trait impls, not types.
 macro_rules! impl_spi_instance {
     ($SPI:ty) => {
         impl SpiInstance for $SPI {
@@ -141,11 +139,44 @@ macro_rules! impl_spi_instance {
     };
 }
 
-// One call per device (grouped, so instances never interleave). All three have
-// SPI0 and SPI1.
+// All three AVR128 devices have SPI0 and SPI1.
 macro_rules! impl_spis {
     ($($SPI:ty),+ $(,)?) => {
         $( impl_spi_instance!($SPI); )+
+    };
+}
+
+// tinyAVR SPI: enum-typed PRESC accessors instead of AVR128's `div4()`.
+// CLK2X left at 0 so dividers match `Prescaler`.
+macro_rules! impl_spi_instance_tiny {
+    ($SPI:ty, $flag:ident) => {
+        impl SpiInstance for $SPI {
+            fn configure(&self, mode: Mode, prescaler: Prescaler) {
+                self.ctrlb().write(|w| {
+                    w.ssd().set_bit();
+                    match (mode.polarity, mode.phase) {
+                        (Polarity::IdleLow, Phase::CaptureOnFirstTransition) => w.mode()._0(),
+                        (Polarity::IdleLow, Phase::CaptureOnSecondTransition) => w.mode()._1(),
+                        (Polarity::IdleHigh, Phase::CaptureOnFirstTransition) => w.mode()._2(),
+                        (Polarity::IdleHigh, Phase::CaptureOnSecondTransition) => w.mode()._3(),
+                    }
+                });
+                self.ctrla().write(|w| {
+                    w.master().set_bit().enable().set_bit();
+                    match prescaler {
+                        Prescaler::Div4 => w.presc().clk_per_4_2(),
+                        Prescaler::Div16 => w.presc().clk_per_16_8(),
+                        Prescaler::Div64 => w.presc().clk_per_64_32(),
+                        Prescaler::Div128 => w.presc().clk_per_128_64(),
+                    }
+                });
+            }
+            fn transfer_byte(&self, byte: u8) -> u8 {
+                self.data().write(|w| w.set(byte));
+                crate::wait::spin_until(|| self.intflags().read().$flag().bit_is_set());
+                self.data().read().bits()
+            }
+        }
     };
 }
 
@@ -155,3 +186,8 @@ impl_spis!(avr_device::avr128db48::SPI0, avr_device::avr128db48::SPI1);
 impl_spis!(avr_device::avr128db64::SPI0, avr_device::avr128db64::SPI1);
 #[cfg(feature = "avr128da64")]
 impl_spis!(avr_device::avr128da64::SPI0, avr_device::avr128da64::SPI1);
+// tinyAVR has a single SPI0.
+#[cfg(feature = "attiny406")]
+impl_spi_instance_tiny!(avr_device::attiny406::SPI0, if_);
+#[cfg(feature = "attiny416")]
+impl_spi_instance_tiny!(avr_device::attiny416::SPI0, default_if);

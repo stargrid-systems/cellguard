@@ -2,13 +2,12 @@
 //!
 //! Configuration-change-protected registers are opened with [`CcpUnlock`]. The
 //! per-family clock control lives in submodules: AVR128 selects the internal
-//! high-frequency oscillator (`set_oschf`), tinyAVR runs from `OSC20M` and
-//! adjusts the main-clock prescaler (`set_main_clock_prescaler`). Both do the
-//! CCP unlock plus the protected write inside `avr_device::interrupt::free`, so
-//! an interrupt cannot land in the unlock window.
+//! high-frequency oscillator (`set_oschf`) or an external clock
+//! (`set_extclk`), tinyAVR runs from `OSC20M` and adjusts the main-clock
+//! prescaler (`set_main_clock_prescaler`).
 
 #[cfg(feature = "_avr128")]
-pub use self::avr128::{HfFreq, OscControl, set_oschf};
+pub use self::avr128::{ExtClockControl, HfFreq, OscControl, set_extclk, set_oschf};
 #[cfg(feature = "_tinyavr")]
 pub use self::tiny::{ClkPrescaler, MainClkControl, TinyBaseFreq, set_main_clock_prescaler};
 
@@ -30,8 +29,7 @@ pub trait CcpUnlock {
     fn unlock_spm(&self);
 }
 
-// Shared body, invoked from the family submodule that owns each device. Exposed
-// by path (not textual scope) so it can be used after the `mod` declarations.
+// Exposed by path so family submodules can use it.
 macro_rules! impl_ccp_unlock {
     ($CPU:ty) => {
         impl $crate::clock::CcpUnlock for $CPU {
