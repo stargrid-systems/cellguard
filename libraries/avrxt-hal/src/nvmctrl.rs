@@ -199,9 +199,8 @@ impl<T: NvmInstance> Nvm<T> {
 
     /// Writes `data` to the USERROW from its start.
     ///
-    /// Only on tinyAVR, whose USERROW is plain EEPROM. Uses the same per-byte
-    /// `ERWP` erase-write as [`write_eeprom`](Self::write_eeprom). AVR128 uses
-    /// [`Nvm::write_userrow`](Self::write_userrow) on the `FlashInstance` impl.
+    /// tinyAVR-only (EEPROM-backed USERROW). Same per-byte `ERWP` flow as
+    /// [`write_eeprom`](Self::write_eeprom).
     ///
     /// # Errors
     ///
@@ -248,17 +247,15 @@ fn check_flash_bounds<T: FlashInstance>(offset: u32, len: usize) -> Result<(), N
     }
 }
 
-/// Views an initialized byte slice as uninitialized, so an initialized read can
-/// reuse the uninitialized read path. Sound because a `u8` is always a valid
-/// `MaybeUninit<u8>`.
+/// Views an initialized byte slice as uninitialized.
 const fn as_uninit(buf: &mut [u8]) -> &mut [MaybeUninit<u8>] {
     let len = buf.len();
     // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`.
     unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), len) }
 }
 
-/// Reads `buf.len()` bytes from the data-space region based at `start` into an
-/// uninitialized buffer, returning the now-initialized bytes.
+/// Reads from the region at `start` into `buf`, returning the initialized
+/// bytes.
 ///
 /// # Safety
 ///
@@ -289,13 +286,10 @@ unsafe fn read_region(
     Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
 }
 
-// =============================================================================
 // AVR128 DA/DB: USERROW (flash-tech) and flash self-programming.
-// =============================================================================
 
-/// AVR128-only flash capability on top of [`NvmInstance`]. tinyAVR does not
-/// implement this: its USERROW is plain EEPROM and it never self-programs
-/// flash (the cellprog flashes it over UPDI).
+/// AVR128-only flash capability on top of [`NvmInstance`]. tinyAVR USERROW is
+/// EEPROM and it never self-programs flash.
 ///
 /// # Safety
 ///
@@ -312,10 +306,9 @@ pub unsafe trait FlashInstance: NvmInstance {
     fn command_flash_page_erase(&self);
     /// Writes `CMD = FLWR` (flash write). SPM window first.
     fn command_flash_write(&self);
-    /// Writes `CTRLB.FLMAP` to select the 32 KiB flash section visible in data
-    /// space. The caller must open the IOREG configuration-change window first.
-    /// Section 0 covers flash `0x0000-0x7FFF`, 1 covers `0x8000-0xFFFF`, 2
-    /// covers `0x10000-0x17FFF`, and 3 covers `0x18000-0x1FFFF`.
+    /// Writes `CTRLB.FLMAP` to select the visible 32 KiB flash section. IOREG
+    /// window first. Sections 0-3 map to flash blocks starting at `0x0000`,
+    /// `0x8000`, `0x10000`, `0x18000`.
     fn set_flmap(&self, section: u8);
 }
 
@@ -448,10 +441,8 @@ impl<T: FlashInstance> Nvm<T> {
         Ok(())
     }
 
-    /// Writes `chunk` to a single `CTRLB.FLMAP` section starting at
-    /// `flash_offset`. The caller splits at section boundaries so `chunk`
-    /// never crosses one. Within the section, the write is split at page
-    /// boundaries and `FLWR` is re-armed for each page.
+    /// Writes `chunk` within a single FLMAP section. Splits at page boundaries
+    /// and re-arms `FLWR` per page.
     fn write_flash_section<C: CcpUnlock>(
         &self,
         cpu: &C,
@@ -612,15 +603,9 @@ const _: () = {
     assert!(check_bounds(u16::MAX, 2, 512).is_err());
 };
 
-// ============================================================================
 // tinyAVR 0/1-series: EEPROM only.
-// ============================================================================
 
 /// Implements [`NvmInstance`] for a tinyAVR `NVMCTRL`.
-///
-/// tinyAVR maps 128 bytes of EEPROM at `0x1400` and 32 bytes of USERROW at
-/// `0x1300`. EEPROM byte writes use `CMD = ERWP` (byte granularity: only the
-/// stored byte is erased and written).
 #[cfg(feature = "_tinyavr")]
 macro_rules! impl_tiny_nvm_instance {
     ($NVMCTRL:ty) => {

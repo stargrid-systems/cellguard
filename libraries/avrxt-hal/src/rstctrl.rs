@@ -6,9 +6,7 @@
 
 use crate::clock::CcpUnlock;
 
-/// Reset-cause flags from `RSTCTRL.RSTFR`. More than one may be set; the bit
-/// layout matches the register (PORF=0, BORF=1, EXTRF=2, WDRF=3, SWRF=4,
-/// UPDIRF=5).
+/// Reset-cause flags from `RSTCTRL.RSTFR`. More than one may be set.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResetFlags {
     bits: u8,
@@ -66,8 +64,7 @@ pub trait RstInstance {
     fn flags(&self) -> ResetFlags;
     /// Clears the given flags (write-`1`-to-clear).
     fn clear(&self, flags: ResetFlags);
-    /// Triggers a software reset. Disables interrupts, opens the IOREG window
-    /// on `cpu`, and writes `SWRR`. Never returns.
+    /// Triggers a software reset. Never returns.
     fn software_reset<C: CcpUnlock>(&self, cpu: &C) -> !;
 }
 
@@ -106,8 +103,7 @@ macro_rules! impl_rst_instance {
                     cpu.unlock_ioreg();
                     self.swrr().write(|w| w.$swrr_bit().set_bit());
                 });
-                // The `SWRR` write resets the chip within a few cycles. Spin as a
-                // defensive fallback in case it does not.
+                // Spin in case SWRR doesn't reset immediately.
                 loop {
                     core::hint::spin_loop();
                 }
@@ -127,8 +123,6 @@ impl_rst_instance!(avr_device::attiny406::RSTCTRL, swre);
 #[cfg(feature = "attiny416")]
 impl_rst_instance!(avr_device::attiny416::RSTCTRL, swre);
 
-// The HAL builds only for `avr-none`, so these guard `ResetFlags` at compile
-// time instead of a host test runner.
 const _: () = {
     use crate::rstctrl::ResetFlags as F;
     assert!(F::POWER_ON.bits() == 0x01);
