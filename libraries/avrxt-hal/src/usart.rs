@@ -185,8 +185,7 @@ impl<T: UsartInstance> Usart<T> {
     /// `f_cpu_hz`.
     pub fn set_baud(&mut self, baud: u32) -> Result<(), BaudUnattainable> {
         let reg = baud_reg_checked(self.f_cpu_hz, baud)?;
-        // Let any in-flight frame drain before changing baud, otherwise the
-        // trailing frame is truncated when the baud register changes.
+        // Drain TX before changing baud, otherwise the trailing frame is truncated.
         self.drain_tx();
         self.baud_reg = reg;
         self.instance.set_baud_reg(reg);
@@ -195,11 +194,8 @@ impl<T: UsartInstance> Usart<T> {
 
     /// Reconfigures the frame format, keeping the baud rate.
     ///
-    /// Drains the transmit shift register first, then rewrites
-    /// `CTRLC`/`CTRLB`. The receiver should be idle when this is called. An
-    /// in-flight RX frame may be corrupted by the `CTRLC` rewrite. This lets
-    /// one USART switch between, for example, an 8N1 command link and an 8E2
-    /// UPDI one-wire link on the fly.
+    /// Drains the transmit shift register first. The receiver should be idle.
+    /// An in-flight RX frame may be corrupted by the `CTRLC` rewrite.
     pub fn set_frame(&mut self, frame: Frame) {
         self.drain_tx();
         self.instance.configure(self.baud_reg, frame);
@@ -212,8 +208,7 @@ impl<T: UsartInstance> Usart<T> {
     /// break byte is echoed on a one-wire link, so drain the receiver
     /// afterwards.
     pub fn send_break(&mut self) {
-        // Let any in-flight frame drain before changing baud, otherwise the
-        // trailing frame is truncated when the baud register changes.
+        // Drain TX before changing baud, otherwise the trailing frame is truncated.
         self.drain_tx();
         self.instance.set_baud_reg(BREAK_BAUD_REG);
         self.write_byte(0x00);
@@ -221,10 +216,10 @@ impl<T: UsartInstance> Usart<T> {
         self.instance.set_baud_reg(self.baud_reg);
     }
 
-    /// Waits for a pending transmission to fully leave the shift register, then
-    /// clears the transmit-complete flag. Does nothing when nothing is pending:
-    /// TXCIF stays 0 until the first frame completes, so waiting on it before
-    /// any transmission would spin until the defensive budget panics.
+    /// Waits for the pending transmission to leave the shift register, then
+    /// clears TXCIF. No-op when nothing is pending: TXCIF stays 0 until the
+    /// first frame completes, so waiting before any TX would spin until the
+    /// budget panics.
     fn drain_tx(&mut self) {
         if self.tx_pending {
             crate::wait::spin_until(|| self.instance.tx_complete());
@@ -233,9 +228,7 @@ impl<T: UsartInstance> Usart<T> {
         }
     }
 
-    /// Blocks until the transmit buffer can accept a byte, then writes it. The
-    /// transmitter is host-driven, so this cannot hang unless the peripheral is
-    /// broken (in which case it panics rather than spinning forever).
+    /// Blocks until the transmit buffer can accept a byte, then writes it.
     #[inline]
     pub fn write_byte(&mut self, byte: u8) {
         crate::wait::spin_until(|| self.instance.tx_ready());
@@ -272,19 +265,14 @@ impl<T: UsartInstance> embedded_io::Write for Usart<T> {
         Ok(buf.len())
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        // Drains only when a frame is pending, and clears the sticky TXCIF
-        // afterwards so the next flush does not return on a stale flag.
         self.drain_tx();
         Ok(())
     }
 }
 
 impl<T: UsartInstance> embedded_io::Read for Usart<T> {
-    // The contract wants `read` to block until at least one byte is available,
-    // then return only what is ready. A UART never reaches EOF, so instead of
-    // returning 0 we block on the first byte (up to the receive timeout) and
-    // then drain whatever else is ready. Filling the whole buffer would deadlock
-    // a caller waiting on a short final frame.
+    // A UART never reaches EOF, so we never return 0. Block on the first byte,
+    // then drain whatever else is ready.
     #[expect(
         clippy::indexing_slicing,
         reason = "indices are bounded by explicit length checks"
@@ -314,13 +302,9 @@ impl<T: UsartInstance> ufmt::uWrite for Usart<T> {
     }
 }
 
-// Hidden implementation detail. The bodies are identical across the distinct
-// PAC register types. This private macro only emits trait impls, not types.
-// The `CTRLC` field accessors differ by ATDF vintage: the AVR128 parts and the
-// attiny406 flatten them (`chsize`/`pmode`/`sbmode`), while the older attiny416
-// models `CTRLC` with register modes (`normal_chsize`/`normal_pmode`/
-// `normal_sbmode`). The value setters (`_8bit`, `even`, `_2bit`, ...) are the
-// same everywhere.
+// `CTRLC` field accessors differ by ATDF vintage: AVR128 and attiny406 flatten
+// them (`chsize`/`pmode`/`sbmode`), while attiny416 uses register modes
+// (`normal_chsize`/`normal_pmode`/`normal_sbmode`).
 macro_rules! impl_usart_instance {
     ($USART:ty, $chsize:ident, $pmode:ident, $sbmode:ident) => {
         impl UsartInstance for $USART {
@@ -350,8 +334,7 @@ macro_rules! impl_usart_instance {
                 self.status().read().txcif().bit_is_set()
             }
             fn clear_tx_complete(&self) {
-                // TXCIF is write-1-to-clear. Writing 0 to the other flags leaves
-                // them untouched, so this does not drop a received byte.
+                // TXCIF is write-1-to-clear. Other flags are untouched.
                 self.status().write(|w| w.txcif().set_bit());
             }
             fn push(&self, byte: u8) {
@@ -367,8 +350,7 @@ macro_rules! impl_usart_instance {
     };
 }
 
-// One call per device (grouped, so instances never interleave and are hard to
-// drop). db48 has USART0..4. db64/da64 add USART5.
+// db48 has USART0..4. db64/da64 add USART5.
 macro_rules! impl_usarts {
     ($chsize:ident, $pmode:ident, $sbmode:ident; $($USART:ty),+ $(,)?) => {
         $( impl_usart_instance!($USART, $chsize, $pmode, $sbmode); )+
@@ -404,8 +386,7 @@ impl_usarts!(
     avr_device::avr128da64::USART4,
     avr_device::avr128da64::USART5,
 );
-// tinyAVR has a single USART0. The attiny406 ATDF flattens `CTRLC`. The older
-// attiny416 ATDF models it with register modes.
+// tinyAVR has a single USART0.
 #[cfg(feature = "attiny406")]
 impl_usarts!(chsize, pmode, sbmode; avr_device::attiny406::USART0);
 #[cfg(feature = "attiny416")]
