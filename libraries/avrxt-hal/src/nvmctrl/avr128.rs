@@ -259,6 +259,7 @@ macro_rules! impl_nvm_instance {
             const EEPROM_SIZE: u16 = 512;
             const USERROW_START: *mut u8 = 0x1080 as *mut u8;
             const USERROW_SIZE: u16 = 32;
+            const EEPROM_ARM_FIRST: bool = true;
 
             #[inline(always)]
             fn wait_flash_ready(&self) {

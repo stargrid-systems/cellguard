@@ -22,10 +22,9 @@
 
 use core::mem::MaybeUninit;
 
-use crate::clock::CcpUnlock;
-
 #[cfg(feature = "_avr128")]
 pub use self::avr128::FlashInstance;
+use crate::clock::CcpUnlock;
 
 #[cfg(feature = "_avr128")]
 mod avr128;
@@ -59,6 +58,9 @@ pub unsafe trait NvmInstance {
     const USERROW_START: *mut u8;
     /// USERROW size in bytes.
     const USERROW_SIZE: u16;
+    /// Whether the EEPROM erase-write command must be armed before the store
+    /// (AVR128: `true`) or after each store (tinyAVR: `false`).
+    const EEPROM_ARM_FIRST: bool;
 
     /// Spins until the flash/USERROW controller is idle.
     fn wait_flash_ready(&self);
@@ -143,36 +145,22 @@ impl<T: NvmInstance> Nvm<T> {
         let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
         self.instance.wait_eeprom_ready();
 
-        #[cfg(feature = "_avr128")]
-        {
+        if T::EEPROM_ARM_FIRST {
             self.protected(cpu, T::command_eeprom_erase_write);
-            for &b in data {
-                // SAFETY: `check_bounds` kept `offset + data.len()` inside the
-                // EEPROM, so every `addr` stays within the mapped region.
-                unsafe { addr.write_volatile(b) };
-                self.instance.wait_eeprom_ready();
-                if self.instance.write_error() {
-                    self.protected(cpu, T::command_none);
-                    return Err(NvmError::WriteFailed);
-                }
-                addr = addr.wrapping_add(1);
-            }
         }
-
-        #[cfg(feature = "_tinyavr")]
-        {
-            for &b in data {
-                // SAFETY: `check_bounds` kept `offset + data.len()` inside the
-                // EEPROM, so every `addr` stays within the mapped region.
-                unsafe { addr.write_volatile(b) };
+        for &b in data {
+            // SAFETY: `check_bounds` kept `offset + data.len()` inside the
+            // EEPROM, so every `addr` stays within the mapped region.
+            unsafe { addr.write_volatile(b) };
+            if !T::EEPROM_ARM_FIRST {
                 self.protected(cpu, T::command_eeprom_erase_write);
-                self.instance.wait_eeprom_ready();
-                if self.instance.write_error() {
-                    self.protected(cpu, T::command_none);
-                    return Err(NvmError::WriteFailed);
-                }
-                addr = addr.wrapping_add(1);
             }
+            self.instance.wait_eeprom_ready();
+            if self.instance.write_error() {
+                self.protected(cpu, T::command_none);
+                return Err(NvmError::WriteFailed);
+            }
+            addr = addr.wrapping_add(1);
         }
 
         self.protected(cpu, T::command_none);
@@ -203,35 +191,6 @@ impl<T: NvmInstance> Nvm<T> {
         // SAFETY: `USERROW_START` bases the mapped USERROW of `USERROW_SIZE`
         // bytes.
         unsafe { read_region(offset, buf, T::USERROW_START, T::USERROW_SIZE) }
-    }
-
-    /// Writes `data` to the USERROW from its start.
-    ///
-    /// tinyAVR-only (EEPROM-backed USERROW). Same per-byte `ERWP` flow as
-    /// [`write_eeprom`](Self::write_eeprom).
-    ///
-    /// # Errors
-    ///
-    /// [`NvmError::OutOfBounds`] if `data` is larger than the USERROW, or
-    /// [`NvmError::WriteFailed`] if the controller flags a write error.
-    #[cfg(feature = "_tinyavr")]
-    pub fn write_userrow<C: CcpUnlock>(&self, data: &[u8], cpu: &C) -> Result<(), NvmError> {
-        check_bounds(0, data.len(), T::USERROW_SIZE)?;
-        let mut addr = T::USERROW_START;
-        self.instance.wait_eeprom_ready();
-        for &b in data {
-            // SAFETY: `check_bounds` kept `data.len()` inside the USERROW.
-            unsafe { addr.write_volatile(b) };
-            self.protected(cpu, T::command_eeprom_erase_write);
-            self.instance.wait_eeprom_ready();
-            if self.instance.write_error() {
-                self.protected(cpu, T::command_none);
-                return Err(NvmError::WriteFailed);
-            }
-            addr = addr.wrapping_add(1);
-        }
-        self.protected(cpu, T::command_none);
-        Ok(())
     }
 }
 
