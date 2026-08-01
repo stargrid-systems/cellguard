@@ -6,8 +6,14 @@
 //!
 //! The NVMCTRL command values and status bits come from the `ATtiny406` PAC
 //! (`avr_device::attiny406::nvmctrl`) and the ATtiny406/416 datasheets.
+//!
+//! On NVMCTRL P0 (tinyAVR 0/1-series) writing a command to `CTRLA` **executes**
+//! it immediately against the address or page buffer already loaded. This is
+//! the opposite of AVR Dx (NVMCTRL v2), where `CTRLA` **arms** a command and a
+//! subsequent data write triggers it. The erase and write flows below follow
+//! the execute model: set up the address/data first, then write the command.
 
-use crate::driver::{RESET_RELEASE, RESET_REQUEST, Updi, cs};
+use crate::driver::{cs, Updi, RESET_RELEASE, RESET_REQUEST};
 use crate::link::UpdiLink;
 pub use crate::programmer::ProgError;
 
@@ -30,7 +36,7 @@ pub mod nvmctrl {
     /// Status register.
     pub const STATUS: u16 = super::NVMCTRL_BASE + 0x02;
 
-    /// No command (disarm).
+    /// No command.
     pub const CMD_NONE: u8 = 0x00;
     /// Write page.
     pub const CMD_WP: u8 = 0x01;
@@ -40,8 +46,6 @@ pub mod nvmctrl {
     pub const CMD_ERWP: u8 = 0x03;
     /// Page buffer clear.
     pub const CMD_PBC: u8 = 0x04;
-    /// Chip erase.
-    pub const CMD_CHER: u8 = 0x05;
 
     /// Flash busy (STATUS bit 0).
     pub const STATUS_FBUSY: u8 = 1 << 0;
@@ -103,7 +107,8 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         self.wait_prog_mode()
     }
 
-    /// Erases the whole chip with the chip-erase key.
+    /// Erases the whole chip with the chip-erase key, clearing the lock. Follow
+    /// with [`Self::enter`] to program the erased device.
     ///
     /// # Errors
     ///
@@ -123,6 +128,10 @@ impl<L: UpdiLink> TinyProgrammer<L> {
 
     /// Erases the flash page starting at `flash_offset`.
     ///
+    /// On NVMCTRL P0 the page address must be loaded before the erase command
+    /// executes. A dummy store to any address in the page sets the target, then
+    /// `CMD_ER` erases it.
+    ///
     /// # Errors
     ///
     /// See [`ProgError`].
@@ -130,23 +139,18 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         if !flash_offset.is_multiple_of(PAGE_SIZE) || flash_offset >= FLASH_SIZE {
             return Err(ProgError::InvalidOffset);
         }
-        self.nvm_command(nvmctrl::CMD_ER)?;
-        let r = self.do_erase(flash_offset);
-        let disarm = self.nvm_command(nvmctrl::CMD_NONE);
-        r.and(disarm)
-    }
-
-    fn do_erase(&mut self, flash_offset: u32) -> Result<(), ProgError<L::Error>> {
+        self.wait_flash_ready()?;
         let addr =
             FLASH_BASE + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
         self.updi.sts8_16(addr, 0xFF)?;
+        self.nvm_command(nvmctrl::CMD_ER)?;
         self.wait_flash_ready()
     }
 
     /// Writes `data` to flash at `flash_offset`.
     ///
-    /// Each page touched must be erased first. The final partial page is padded
-    /// with `0xFF` so the page buffer commits.
+    /// Each page touched must be erased first. Data that spans a page boundary
+    /// is programmed one page at a time.
     ///
     /// # Errors
     ///
@@ -187,28 +191,17 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         Ok(())
     }
 
+    /// Clears the page buffer, loads it with `segment`, then commits with
+    /// `CMD_WP`. On P0 the buffer must be loaded before the write command
+    /// executes.
     fn write_page(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
-        self.nvm_command(nvmctrl::CMD_WP)?;
-        let r = self.stream_page(offset, segment);
-        let disarm = self.nvm_command(nvmctrl::CMD_NONE);
-        r.and(disarm)
-    }
-
-    fn stream_page(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
+        self.wait_flash_ready()?;
+        self.nvm_command(nvmctrl::CMD_PBC)?;
+        self.wait_flash_ready()?;
         let addr = FLASH_BASE + u16::try_from(offset).map_err(|_| ProgError::InvalidOffset)?;
         self.updi.set_pointer_16(addr)?;
-
-        let page_remain = usize::try_from(PAGE_SIZE - (offset % PAGE_SIZE)).unwrap_or(0);
-        if segment.len() < page_remain {
-            // Partial page: pad with 0xFF so the tinyAVR page buffer commits.
-            let mut padded = [0xFFu8; PAGE_SIZE as usize];
-            let (dst, _) = padded.split_at_mut(segment.len());
-            dst.copy_from_slice(segment);
-            let (data, _) = padded.split_at(page_remain);
-            self.updi.st_inc(data)?;
-        } else {
-            self.updi.st_inc(segment)?;
-        }
+        self.updi.st_inc(segment)?;
+        self.nvm_command(nvmctrl::CMD_WP)?;
         self.wait_flash_ready()
     }
 
@@ -292,5 +285,124 @@ impl<L: UpdiLink> TinyProgrammer<L> {
             }
         }
         Err(ProgError::Busy)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProgError, TinyProgrammer, FLASH_SIZE, PAGE_SIZE};
+    use crate::mock::MockTarget;
+
+    fn ramp(n: usize) -> [u8; 600] {
+        let mut a = [0u8; 600];
+        for (i, b) in a.iter_mut().enumerate().take(n) {
+            *b = u8::try_from(i % 251).unwrap();
+        }
+        a
+    }
+
+    #[test]
+    fn enter_write_read_roundtrip() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+
+        let data = ramp(64);
+        prog.erase_flash_page(0).unwrap();
+        prog.write_flash(0, &data[..64]).unwrap();
+
+        let mut back = [0u8; 64];
+        prog.read_flash(0, &mut back).unwrap();
+        assert_eq!(&back[..], &data[..64]);
+    }
+
+    #[test]
+    fn erase_sets_page_to_ff() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        prog.write_flash(0, &[0x11, 0x22, 0x33, 0x44]).unwrap();
+        prog.erase_flash_page(0).unwrap();
+        let mut back = [0u8; 4];
+        prog.read_flash(0, &mut back).unwrap();
+        assert_eq!(back, [0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn locked_target_cannot_enter() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny_locked());
+        assert_eq!(prog.enter(), Err(ProgError::Locked));
+    }
+
+    #[test]
+    fn chip_erase_unlocks_then_enter_succeeds() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny_locked());
+        prog.chip_erase().unwrap();
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        prog.write_flash(0, &[0xAB, 0xCD]).unwrap();
+        let mut back = [0u8; 2];
+        prog.read_flash(0, &mut back).unwrap();
+        assert_eq!(back, [0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn second_page_is_addressed() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+        let off = PAGE_SIZE;
+        prog.erase_flash_page(off).unwrap();
+        prog.write_flash(off, &[0x5A; 4]).unwrap();
+        let mut back = [0u8; 4];
+        prog.read_flash(off, &mut back).unwrap();
+        assert_eq!(back, [0x5A; 4]);
+    }
+
+    #[test]
+    fn write_across_page_boundary_roundtrips() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        prog.erase_flash_page(PAGE_SIZE).unwrap();
+        let data = ramp(20);
+        let off = PAGE_SIZE - 8;
+        prog.write_flash(off, &data[..20]).unwrap();
+        let mut back = [0u8; 20];
+        prog.read_flash(off, &mut back).unwrap();
+        assert_eq!(&back[..], &data[..20]);
+    }
+
+    #[test]
+    fn odd_length_write_roundtrips() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        let data = [0x01, 0x02, 0x03];
+        prog.write_flash(0, &data).unwrap();
+        let mut back = [0u8; 3];
+        prog.read_flash(0, &mut back).unwrap();
+        assert_eq!(back, data);
+    }
+
+    #[test]
+    fn misaligned_offsets_are_rejected() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny());
+        prog.enter().unwrap();
+        assert_eq!(
+            prog.write_flash(1, &[0xAA, 0xBB]),
+            Err(ProgError::InvalidOffset)
+        );
+        assert_eq!(prog.erase_flash_page(1), Err(ProgError::InvalidOffset));
+        assert_eq!(
+            prog.erase_flash_page(FLASH_SIZE),
+            Err(ProgError::InvalidOffset)
+        );
+    }
+
+    #[test]
+    fn write_reports_nvm_error() {
+        let mut prog = TinyProgrammer::new(MockTarget::tiny_failing());
+        prog.enter().unwrap();
+        prog.erase_flash_page(0).unwrap();
+        assert_eq!(prog.write_flash(0, &[0x11, 0x22]), Err(ProgError::NvmError));
     }
 }

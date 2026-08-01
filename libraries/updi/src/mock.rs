@@ -6,18 +6,35 @@
 //! the bytes a real slave would. It lets the link and programmer layers run
 //! end to end without hardware. It emulates only the instructions this crate
 //! emits.
+//!
+//! The mock supports two NVM controller models. [`MockTarget::new`] emulates
+//! NVMCTRL v2 (AVR Dx): writing a command to CTRLA *arms* it, and a subsequent
+//! data write *triggers* the armed operation. [`MockTarget::tiny`] emulates
+//! NVMCTRL P0 (tinyAVR 0/1-series): writing a command to CTRLA *executes* it
+//! against the address or page buffer already loaded, so data must come first.
 
 use crate::driver::{
-    ACK, OP_KEY, OP_LD, OP_LDCS, OP_LDS, OP_REPEAT, OP_ST, OP_STCS, OP_STS, PTR_INC, PTR_SET,
-    RESET_RELEASE, RESET_REQUEST, SYNCH, cs,
+    cs, ACK, ADDR_16, ADDR_24, OP_KEY, OP_LD, OP_LDCS, OP_LDS, OP_REPEAT, OP_ST, OP_STCS, OP_STS,
+    PTR_INC, PTR_SET, RESET_RELEASE, RESET_REQUEST, SIZE_16, SIZE_24, SYNCH,
 };
 use crate::link::UpdiLink;
-use crate::programmer::{FLASH_BASE, PAGE_SIZE, asi, nvmctrl};
+use crate::programmer::asi;
 
 /// Mask for the opcode field (the high three bits of an instruction byte).
 const OP_MASK: u8 = 0xE0;
 const FLASH_LEN: usize = 1024;
 const RESP_CAP: usize = 512;
+/// Page-buffer capacity (large enough for the biggest page, AVR Dx 512 B).
+const PAGE_BUF_SIZE: usize = 512;
+
+/// Which NVM controller model the mock emulates.
+#[derive(Clone, Copy, PartialEq)]
+enum NvmModel {
+    /// AVR Dx (NVMCTRL v2): arm-then-trigger.
+    AvrDx,
+    /// tinyAVR 0/1-series (NVMCTRL P0): execute-on-write.
+    TinyAvr,
+}
 
 /// Which store a run of address bytes belongs to.
 #[derive(Clone, Copy)]
@@ -46,10 +63,19 @@ enum Parse {
     },
 }
 
-/// An emulated AVR Dx UPDI target: CS/ASI registers, an NVM controller, and a
-/// small flash array. Enough to run the link and programmer layers end to end.
+/// An emulated UPDI target: CS/ASI registers, an NVM controller, and a small
+/// flash array. Enough to run the link and programmer layers end to end.
 pub struct MockTarget {
+    model: NvmModel,
     flash: [u8; FLASH_LEN],
+    /// Page buffer for the P0 model. Unused on v2.
+    page_buf: [u8; PAGE_BUF_SIZE],
+    /// Flash-array index of the page the page buffer / erase targets. P0 only.
+    target_page: usize,
+    /// Flash base in data space (`0x80_0000` for v2, `0x8000` for P0).
+    flash_base: u32,
+    /// Flash page size in bytes.
+    page_size: usize,
     key_status: u8,
     sys_status: u8,
     locked: bool,
@@ -66,11 +92,16 @@ pub struct MockTarget {
 }
 
 impl MockTarget {
-    /// A fresh, unlocked target with erased flash.
+    /// A fresh, unlocked AVR Dx target with erased flash.
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            model: NvmModel::AvrDx,
             flash: [0xFF; FLASH_LEN],
+            page_buf: [0xFF; PAGE_BUF_SIZE],
+            target_page: 0,
+            flash_base: crate::programmer::FLASH_BASE,
+            page_size: crate::programmer::PAGE_SIZE as usize,
             key_status: 0,
             sys_status: 0,
             locked: false,
@@ -87,7 +118,7 @@ impl MockTarget {
         }
     }
 
-    /// A locked target: only a chip erase clears the lock.
+    /// A locked AVR Dx target: only a chip erase clears the lock.
     #[must_use]
     pub const fn locked() -> Self {
         let mut t = Self::new();
@@ -95,10 +126,38 @@ impl MockTarget {
         t
     }
 
-    /// A target whose NVM controller reports an error on every flash write.
+    /// An AVR Dx target whose NVM controller reports an error on every flash
+    /// write.
     #[must_use]
     pub const fn failing() -> Self {
         let mut t = Self::new();
+        t.fail_nvm = true;
+        t
+    }
+
+    /// A fresh, unlocked tinyAVR target (NVMCTRL P0) with erased flash.
+    #[must_use]
+    pub const fn tiny() -> Self {
+        let mut t = Self::new();
+        t.model = NvmModel::TinyAvr;
+        t.flash_base = crate::tiny::FLASH_BASE as u32;
+        t.page_size = crate::tiny::PAGE_SIZE as usize;
+        t
+    }
+
+    /// A locked tinyAVR target.
+    #[must_use]
+    pub const fn tiny_locked() -> Self {
+        let mut t = Self::tiny();
+        t.locked = true;
+        t
+    }
+
+    /// A tinyAVR target whose NVM controller reports a write error on every
+    /// page commit.
+    #[must_use]
+    pub const fn tiny_failing() -> Self {
+        let mut t = Self::tiny();
         t.fail_nvm = true;
         t
     }
@@ -128,50 +187,68 @@ impl MockTarget {
         n
     }
 
-    const fn flash_index(addr: u32) -> Option<usize> {
-        match addr.checked_sub(FLASH_BASE) {
-            Some(delta) => {
-                let idx = delta as usize;
-                if idx < FLASH_LEN { Some(idx) } else { None }
+    fn flash_index(&self, addr: u32) -> Option<usize> {
+        addr.checked_sub(self.flash_base).and_then(|delta| {
+            let idx = delta as usize;
+            if idx < FLASH_LEN {
+                Some(idx)
+            } else {
+                None
             }
-            None => None,
+        })
+    }
+
+    fn ctrl_addr(&self) -> u32 {
+        match self.model {
+            NvmModel::AvrDx => crate::programmer::nvmctrl::CTRLA,
+            NvmModel::TinyAvr => u32::from(crate::tiny::nvmctrl::CTRLA),
+        }
+    }
+
+    fn status_addr(&self) -> u32 {
+        match self.model {
+            NvmModel::AvrDx => crate::programmer::nvmctrl::STATUS,
+            NvmModel::TinyAvr => u32::from(crate::tiny::nvmctrl::STATUS),
         }
     }
 
     fn data_read(&self, addr: u32) -> u8 {
-        if addr == nvmctrl::STATUS {
-            // The STATUS register is latched at write time and never busy here.
-            // A failing target keeps reporting the error until the next command
-            // is armed. This does not depend on which command is armed at read
-            // time, so the mock stays honest if the programmer reorders its
-            // disarm.
+        if addr == self.status_addr() {
             return self.nvm_status;
         }
-        Self::flash_index(addr).map_or(0, |i| self.flash.get(i).copied().unwrap_or(0))
+        self.flash_index(addr)
+            .map_or(0, |i| self.flash.get(i).copied().unwrap_or(0))
     }
 
     fn data_write(&mut self, addr: u32, val: u8) {
-        if addr == nvmctrl::CTRLA {
+        match self.model {
+            NvmModel::AvrDx => self.data_write_v2(addr, val),
+            NvmModel::TinyAvr => self.data_write_p0(addr, val),
+        }
+    }
+
+    /// AVR Dx (NVMCTRL v2): writing CTRLA arms a command; a subsequent data
+    /// write to a flash address triggers the armed operation.
+    fn data_write_v2(&mut self, addr: u32, val: u8) {
+        if addr == self.ctrl_addr() {
             self.nvm_cmd = val;
-            // Arming a new command clears a previously latched write error.
             self.nvm_status = 0;
             return;
         }
-        let Some(idx) = Self::flash_index(addr) else {
+        let Some(idx) = self.flash_index(addr) else {
             return;
         };
+        let page_size = self.page_size;
         match self.nvm_cmd {
-            nvmctrl::CMD_FLPER => {
-                let page = (idx / PAGE_SIZE as usize) * PAGE_SIZE as usize;
-                for cell in self.flash.iter_mut().skip(page).take(PAGE_SIZE as usize) {
+            crate::programmer::nvmctrl::CMD_FLPER => {
+                let page = (idx / page_size) * page_size;
+                for cell in self.flash.iter_mut().skip(page).take(page_size) {
                     *cell = 0xFF;
                 }
             }
-            nvmctrl::CMD_FLWR => {
-                // A failing target latches the error but still commits the byte,
-                // matching a controller that flags the fault after the write.
+            crate::programmer::nvmctrl::CMD_FLWR => {
                 if self.fail_nvm {
-                    self.nvm_status = nvmctrl::STATUS_ERROR_MASK;
+                    self.nvm_status = crate::programmer::nvmctrl::STATUS_ERROR_MASK;
                 }
                 if let Some(slot) = self.flash.get_mut(idx) {
                     *slot = val;
@@ -181,9 +258,51 @@ impl MockTarget {
         }
     }
 
+    /// tinyAVR (NVMCTRL P0): writing CTRLA executes the command against the
+    /// page buffer or target page already loaded. Flash data writes load the
+    /// page buffer and set the target page.
+    fn data_write_p0(&mut self, addr: u32, val: u8) {
+        if addr == self.ctrl_addr() {
+            self.nvm_cmd = val;
+            self.nvm_status = 0;
+            let page_size = self.page_size;
+            match val {
+                crate::tiny::nvmctrl::CMD_ER => {
+                    for cell in self.flash.iter_mut().skip(self.target_page).take(page_size) {
+                        *cell = 0xFF;
+                    }
+                }
+                crate::tiny::nvmctrl::CMD_WP => {
+                    if self.fail_nvm {
+                        self.nvm_status = crate::tiny::nvmctrl::STATUS_WRERROR;
+                    }
+                    let dst = self.flash.iter_mut().skip(self.target_page);
+                    for (i, cell) in dst.take(page_size).enumerate() {
+                        *cell = self.page_buf.get(i).copied().unwrap_or(0xFF);
+                    }
+                }
+                crate::tiny::nvmctrl::CMD_PBC => {
+                    for slot in &mut self.page_buf {
+                        *slot = 0xFF;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        let Some(idx) = self.flash_index(addr) else {
+            return;
+        };
+        let page_size = self.page_size;
+        self.target_page = idx - (idx % page_size);
+        if let Some(slot) = self.page_buf.get_mut(idx % page_size) {
+            *slot = val;
+        }
+    }
+
     const fn cs_read(&self, reg: u8) -> u8 {
         match reg {
-            cs::STATUSA => 0x30, // nonzero: alive, UPDI revision in the high nibble
+            cs::STATUSA => 0x30,
             cs::ASI_KEY_STATUS => self.key_status,
             cs::ASI_SYS_STATUS => {
                 self.sys_status | if self.locked { asi::SYS_LOCKSTATUS } else { 0 }
@@ -194,7 +313,7 @@ impl MockTarget {
 
     const fn cs_write(&mut self, reg: u8, val: u8) {
         if reg != cs::ASI_RESET_REQ {
-            return; // CTRLA guard time and others: ignore
+            return;
         }
         if val == RESET_REQUEST {
             self.reset_pending = true;
@@ -207,18 +326,17 @@ impl MockTarget {
     const fn apply_reset(&mut self) {
         if self.key_status & asi::KEYSTAT_CHIPERASE != 0 {
             self.flash = [0xFF; FLASH_LEN];
+            self.page_buf = [0xFF; PAGE_BUF_SIZE];
             self.locked = false;
             self.key_status = 0;
             self.sys_status = 0;
             self.nvm_status = 0;
         } else if self.key_status & asi::KEYSTAT_NVMPROG != 0 {
-            // Enters programming mode, but a locked device stays locked.
             self.sys_status |= asi::SYS_NVMPROG;
         }
     }
 
     fn process_key(&mut self, sent: [u8; 8]) {
-        // Keys travel least-significant byte first, so reverse to recover them.
         let mut key = sent;
         key.reverse();
         if &key == b"NVMProg " {
@@ -296,6 +414,24 @@ impl MockTarget {
         };
     }
 
+    /// Extracts the address byte count from an LDS/STS opcode (bits 3:2).
+    const fn lds_sts_addr_len(op: u8) -> u8 {
+        match op & 0x0C {
+            ADDR_16 => 2,
+            ADDR_24 => 3,
+            _ => 0,
+        }
+    }
+
+    /// Extracts the address byte count from a pointer-set ST opcode (bits 1:0).
+    const fn ptr_set_addr_len(op: u8) -> u8 {
+        match op & 0x03 {
+            SIZE_16 => 2,
+            SIZE_24 => 3,
+            _ => 0,
+        }
+    }
+
     fn opcode(&mut self, op: u8) -> Parse {
         match op & OP_MASK {
             OP_LDCS => {
@@ -306,19 +442,19 @@ impl MockTarget {
             OP_STCS => Parse::Stcs(op & 0x0F),
             OP_LDS => Parse::Addr {
                 kind: AddrKind::Load,
-                need: 3,
+                need: Self::lds_sts_addr_len(op),
                 got: 0,
                 acc: 0,
             },
             OP_STS => Parse::Addr {
                 kind: AddrKind::Store,
-                need: 3,
+                need: Self::lds_sts_addr_len(op),
                 got: 0,
                 acc: 0,
             },
             OP_ST if op & 0x0C == PTR_SET => Parse::Addr {
                 kind: AddrKind::SetPointer,
-                need: 3,
+                need: Self::ptr_set_addr_len(op),
                 got: 0,
                 acc: 0,
             },
@@ -370,7 +506,6 @@ impl UpdiLink for MockTarget {
     type Error = ();
 
     fn break_(&mut self) -> Result<(), ()> {
-        // A BREAK resets the comms state machine, not the system state.
         self.state = Parse::Synch;
         self.resp_len = 0;
         self.resp_head = 0;
@@ -388,7 +523,7 @@ impl UpdiLink for MockTarget {
     fn recv(&mut self, buf: &mut [u8]) -> Result<(), ()> {
         for b in buf.iter_mut() {
             if self.resp_head >= self.resp_len {
-                return Err(()); // underflow: the stack read more than was produced
+                return Err(());
             }
             *b = self.resp.get(self.resp_head).copied().ok_or(())?;
             self.resp_head += 1;
