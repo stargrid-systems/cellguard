@@ -41,10 +41,9 @@
 //! - op-amps ([`opamp`])
 //! - zero-cross ([`zcd`])
 //! - signature row ([`sigrow`])
-#![cfg_attr(
-    feature = "_avr128",
-    doc = "- non-volatile memory controller ([`nvmctrl`]) for on-chip EEPROM and USERROW"
-)]
+//! - non-volatile memory controller ([`nvmctrl`]) for on-chip EEPROM and
+//!   USERROW
+//! - reset controller ([`rstctrl`])
 #![no_std]
 #![allow(
     unused_macros,
@@ -60,10 +59,10 @@ pub mod clock;
 pub mod dac;
 pub mod delay;
 pub mod gpio;
-#[cfg(feature = "_avr128")]
 pub mod nvmctrl;
 pub mod opamp;
 pub mod pwm;
+pub mod rstctrl;
 pub mod rtc;
 pub mod sigrow;
 pub mod spi;
