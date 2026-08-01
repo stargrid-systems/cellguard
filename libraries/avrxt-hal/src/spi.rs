@@ -8,13 +8,7 @@
 //! [`OutputPin`]: embedded_hal::digital::OutputPin
 
 use embedded_hal::spi::{self, Mode, SpiBus};
-#[cfg(any(
-    feature = "avr128db48",
-    feature = "avr128db64",
-    feature = "avr128da64",
-    feature = "attiny406",
-    feature = "attiny416",
-))]
+#[cfg(any(feature = "_avr128", feature = "_tinyavr"))]
 use embedded_hal::spi::{Phase, Polarity};
 
 /// SPI clock prescaler (divides `CLK_PER`).
@@ -112,8 +106,6 @@ impl<T: SpiInstance> SpiBus<u8> for Spi<T> {
     }
 }
 
-// Hidden implementation detail. The bodies are identical across the distinct
-// PAC register types. This private macro only emits trait impls, not types.
 macro_rules! impl_spi_instance {
     ($SPI:ty) => {
         impl SpiInstance for $SPI {
@@ -147,18 +139,15 @@ macro_rules! impl_spi_instance {
     };
 }
 
-// One call per device (grouped, so instances never interleave). All three have
-// SPI0 and SPI1.
+// All three AVR128 devices have SPI0 and SPI1.
 macro_rules! impl_spis {
     ($($SPI:ty),+ $(,)?) => {
         $( impl_spi_instance!($SPI); )+
     };
 }
 
-// tinyAVR uses the same SPI IP, but its `PRESC` field is an enum
-// (`CLK_PER_4_2`, `CLK_PER_16_8`, ...) rather than the AVR128 `div4()`
-// accessors. With `CLK2X` left at its reset value of 0 the dividers match
-// `Prescaler` one-for-one.
+// tinyAVR SPI: enum-typed PRESC accessors instead of AVR128's `div4()`.
+// CLK2X left at 0 so dividers match `Prescaler`.
 macro_rules! impl_spi_instance_tiny {
     ($SPI:ty, $flag:ident) => {
         impl SpiInstance for $SPI {
@@ -197,7 +186,7 @@ impl_spis!(avr_device::avr128db48::SPI0, avr_device::avr128db48::SPI1);
 impl_spis!(avr_device::avr128db64::SPI0, avr_device::avr128db64::SPI1);
 #[cfg(feature = "avr128da64")]
 impl_spis!(avr_device::avr128da64::SPI0, avr_device::avr128da64::SPI1);
-// tinyAVR has a single SPI0 with the enum-typed `PRESC` field.
+// tinyAVR has a single SPI0.
 #[cfg(feature = "attiny406")]
 impl_spi_instance_tiny!(avr_device::attiny406::SPI0, if_);
 #[cfg(feature = "attiny416")]
