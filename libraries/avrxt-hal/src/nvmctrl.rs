@@ -17,8 +17,8 @@
 //! NVM operations from an interrupt handler: a store to a mapped region loads
 //! the shared page buffer, which an ISR could corrupt mid-write.
 //!
-//! tinyAVR note (ATtiny416 errata DS80000933 2.6.1): `CTRLA` may read non-zero
-//! after reset. The code always writes the command explicitly.
+//! tinyAVR note (`ATtiny416` errata DS80000933 2.6.1): `CTRLA` may read
+//! non-zero after reset. The code always writes the command explicitly.
 
 use core::mem::MaybeUninit;
 

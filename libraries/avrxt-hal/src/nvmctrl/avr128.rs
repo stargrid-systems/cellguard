@@ -298,7 +298,7 @@ macro_rules! impl_nvm_instance {
             }
             #[inline(always)]
             fn set_flmap(&self, section: u8) {
-                self.ctrlb().modify(|_, w| match section & 0x3 {
+                self.ctrlb().write(|w| match section & 0x3 {
                     0 => w.flmap().section0(),
                     1 => w.flmap().section1(),
                     2 => w.flmap().section2(),
