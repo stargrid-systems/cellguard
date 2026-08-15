@@ -13,22 +13,23 @@
 //! # Features
 //!
 //! - `hal` (off by default): EEPROM-backed panic storage and the
-//!   [`store_and_decide`] policy. Requires `avrxt-hal`.
+//!   `store_and_decide` policy. Requires `avrxt-hal`.
 
 #![no_std]
 
-pub use self::record::{FILE_CAP, PanicRecord, RECORD_FORMAT_VERSION, RECORD_LEN};
+pub use self::record::{PanicRecord, FILE_CAP, RECORD_FORMAT_VERSION, RECORD_LEN};
 #[cfg(feature = "hal")]
-pub use self::store::{Decision, clear, read_panic_record, store_and_decide};
+pub use self::store::{clear, read_panic_record, store_and_decide, Decision};
 
 mod record;
 #[cfg(feature = "hal")]
 mod store;
 
-/// Defines a standard `#[panic_handler]` for a CellGuard firmware crate.
+/// Defines a standard `#[panic_handler]` for a `CellGuard` firmware crate.
 ///
 /// Expands to a handler that disables interrupts, steals the peripherals,
-/// records the panic via [`store_and_decide`], then either resets (under the
+/// records the panic via `store_and_decide` (requires the `hal` feature),
+/// then either resets (under the
 /// crash-loop threshold) or halts. `$steal_peripherals` is the expression that
 /// takes the device peripherals (e.g.
 /// `unsafe { avr_device::avr128da64::Peripherals::steal() }`). `$offset` and

@@ -7,7 +7,7 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use cellguard_protocol::{encode_frame, max_encoded_len, DecodeError, Decoder, Kind, Packet};
+use cellguard_protocol::{DecodeError, Decoder, Kind, Packet, encode_frame, max_encoded_len};
 use serialport::SerialPort;
 
 /// Maximum decoded frame we can receive. The biggest response payload is a
@@ -80,7 +80,7 @@ impl Transport {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "serial read timed out",
-                    ))
+                    ));
                 }
                 Ok(_) => {}
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {

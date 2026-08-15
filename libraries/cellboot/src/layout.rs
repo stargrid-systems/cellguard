@@ -1,4 +1,4 @@
-//! Storage geometry shared by all CellGuard firmware images.
+//! Storage geometry shared by all `CellGuard` firmware images.
 //!
 //! Three independent binaries (cellcore app, cellboot bootloader, cellprog
 //! programmer) read and write the same staging EEPROMs and the same on-chip
