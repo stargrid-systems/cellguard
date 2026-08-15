@@ -18,7 +18,7 @@ use cellguard_protocol::{
     Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len,
 };
 
-use crate::update::command::Command;
+use crate::update::command::{Command, NackReason, Response};
 use crate::update::session::UpdateAgent;
 
 /// Largest response payload: a status reply or a panic record, whichever is
@@ -104,9 +104,17 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         if packet.id != self.id {
             return None;
         }
-        let command = Command::from_packet(packet).ok()?;
+        // A packet whose kind is one of ours but whose payload does not decode
+        // gets an explicit Malformed nack, not silence.
+        let Ok(command) = Command::from_packet(packet) else {
+            return self.encode_response(Response::Nack(NackReason::Malformed));
+        };
         let response = self.agent.handle(command);
+        self.encode_response(response)
+    }
 
+    /// Encodes `response` into the transmit buffer, ready to send on the bus.
+    fn encode_response(&mut self, response: Response) -> Option<&[u8]> {
         let mut raw = [0u8; MAX_RESPONSE_FRAME];
         let raw_len = response.to_packet(self.id, &mut raw).ok()?;
         let wire_len = encode_frame(raw.get(..raw_len)?, &mut self.tx)?;

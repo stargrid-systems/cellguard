@@ -1,18 +1,20 @@
-//! Streaming image verification and host-side signing.
+//! Streaming image verification, plus host-side signing behind the `sign`
+//! feature.
 //!
 //! [`Verifier`] streams the header and payload through a [`Mac`] and a
 //! [`Crc32`], so an image staged in external storage can be checked in chunks
-//! without ever holding it whole in RAM. [`sign`] is the host-side counterpart
-//! that produces a signed header.
+//! without ever holding it whole in RAM. The host-side counterpart (`sign`,
+//! behind the `sign` feature) produces a signed header. A device never signs,
+//! so firmware links none of it.
 //!
 //! Both work on the [`ImageHeader`] format defined in `cellboot`.
 
 use core::fmt;
 
-use cellboot::image::{HEADER_LEN, ImageHeader, MAC_PREFIX_LEN, ParseError};
+use cellboot::image::{ImageHeader, ParseError, HEADER_LEN, MAC_PREFIX_LEN};
 use crc::Crc32;
 
-use crate::update::mac::{Mac, ct_eq};
+use crate::update::mac::{ct_eq, Mac};
 
 /// Signs `payload` and returns the complete header bytes.
 ///
@@ -29,6 +31,7 @@ use crate::update::mac::{Mac, ct_eq};
 ///
 /// Returns [`SignError::PayloadTooLarge`] if the payload does not fit in a
 /// `u32` length field.
+#[cfg(any(test, feature = "sign"))]
 pub fn sign<M: Mac>(
     mut header: ImageHeader,
     mut mac: M,
@@ -44,6 +47,7 @@ pub fn sign<M: Mac>(
 }
 
 /// An error returned when an image cannot be signed.
+#[cfg(any(test, feature = "sign"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SignError {
@@ -51,6 +55,7 @@ pub enum SignError {
     PayloadTooLarge,
 }
 
+#[cfg(any(test, feature = "sign"))]
 impl fmt::Display for SignError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -59,6 +64,7 @@ impl fmt::Display for SignError {
     }
 }
 
+#[cfg(any(test, feature = "sign"))]
 impl core::error::Error for SignError {}
 
 /// The reason an image failed verification.
@@ -159,10 +165,10 @@ impl<M: Mac> Verifier<M> {
 
 #[cfg(test)]
 mod tests {
-    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use cellboot::image::{ImageHeader, ImageKind, Region, HEADER_LEN};
     use hmac_sha256::HMAC;
 
-    use super::{Verifier, VerifyError, sign};
+    use super::{sign, Verifier, VerifyError};
 
     const KEY: &[u8] = b"unit-test-shared-key";
 

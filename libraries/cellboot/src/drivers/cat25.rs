@@ -18,12 +18,6 @@ impl<S, D> Cat25Store<S, D> {
     pub const fn new(driver: Cat25<S, D>) -> Self {
         Self(driver)
     }
-
-    /// Returns the wrapped driver.
-    #[must_use]
-    pub fn into_inner(self) -> Cat25<S, D> {
-        self.0
-    }
 }
 
 impl<S: SpiDevice, D: DelayNs> ImageStore for Cat25Store<S, D> {

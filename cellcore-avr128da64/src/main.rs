@@ -35,11 +35,12 @@ use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState};
-use cellboot::io::NoKeyStore;
+use cellboot::io::{BandedStore, NoKeyStore};
 use cellboot::{layout, state};
+use cellcore::update::command::KEY_LEN;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-use cellcore_runtime::{BandedStore, CoreRuntime};
+use cellcore_runtime::CoreRuntime;
 use cellguard_panic::{clear, read_panic_record};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -63,8 +64,6 @@ const CELLAGENT_TARGET_ID: u16 = 2;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
-/// Fleet HMAC key length in the USERROW.
-const KEY_LEN: usize = 16;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 

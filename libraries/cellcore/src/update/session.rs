@@ -7,7 +7,7 @@
 //! the caller which region is ready, so the caller can hand off to the
 //! programmer.
 
-use cellboot::image::{HEADER_LEN, ImageHeader, Region};
+use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, ImageKind, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellboot::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use cellguard_panic::PanicRecord;
@@ -15,9 +15,6 @@ use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, KEY_LEN, NackReason, Response};
 use crate::update::verify::Verifier;
-
-const HEADER_LEN_U32: u32 = 64;
-const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 
 /// Where one image is staged within an [`ImageStore`].
 ///
@@ -175,12 +172,6 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         }
     }
 
-    /// Returns a shared reference to the staging store.
-    #[must_use]
-    pub const fn store(&self) -> &S {
-        &self.store
-    }
-
     /// Returns the region ready to be programmed after a successful commit.
     ///
     /// The caller uses this to decide when to signal the programmer.
@@ -266,6 +257,21 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let Some(slot) = self.layout.slot(header.region) else {
             return Response::Nack(NackReason::WrongTarget);
         };
+        // The kind must match the region: a bootloader image belongs in the
+        // bootloader slot, an application image in an application slot. An
+        // image signed for the other kind must never be flashed into this
+        // region, whatever its target id says.
+        let kind_matches = match header.kind {
+            ImageKind::Bootloader => header.region == Region::Bootloader,
+            ImageKind::Application => matches!(
+                header.region,
+                Region::ApplicationCode | Region::CellagentApp
+            ),
+            _ => false,
+        };
+        if !kind_matches {
+            return Response::Nack(NackReason::WrongTarget);
+        }
         let needed = HEADER_LEN_U32.saturating_add(header.payload_len);
         if needed > slot.capacity {
             return Response::Nack(NackReason::TooLarge);
@@ -275,6 +281,11 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             return Response::Nack(NackReason::StorageError);
         }
 
+        // A new transfer silently discards a committed image that was never
+        // programmed. Record it as host-aborted so the outcome is honest.
+        if self.state.staged == StagedState::Ready {
+            self.state.last_outcome = UpdateOutcome::Aborted;
+        }
         self.state.staged = StagedState::Receiving;
         self.state.staged_region = Some(header.region);
         self.state.staged_version = header.fw_version;
@@ -363,7 +374,9 @@ mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::{ImageStore, KeyStore, NoKeyStore, StateStore};
     use cellboot::state::{PersistentState, STATE_LEN, StagedState, UpdateOutcome};
-    use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore, SharedStore};
+    use cellboot::testutil::{
+        MemStore as MemStoreImpl, NullStateStore, SharedImageStore, SharedStore,
+    };
     use hmac_sha256::HMAC;
 
     use super::{RegionSlot, StagingLayout, UpdateAgent};
@@ -422,8 +435,8 @@ mod tests {
         core::array::from_fn(|i| i as u8)
     }
 
-    fn run_update<St: StateStore>(
-        agent: &mut UpdateAgent<'_, MemStore, NoKeyStore, St>,
+    fn run_update<S: ImageStore, St: StateStore>(
+        agent: &mut UpdateAgent<'_, S, NoKeyStore, St>,
         header: &[u8; HEADER_LEN],
         payload: &[u8],
     ) -> Response {
@@ -446,8 +459,9 @@ mod tests {
         let payload = ramp300();
         let header = signed_image(&payload);
         let mut key = KEY;
+        let backing = RefCell::new([0u8; CAP]);
         let mut agent = UpdateAgent::new(
-            MemStore::new(),
+            SharedImageStore::new(&backing),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
@@ -468,12 +482,12 @@ mod tests {
         assert_eq!(agent.status().last_outcome, UpdateOutcome::Success);
 
         // The store holds the header then the payload.
-        let store = agent.store();
-        assert_eq!(&store.buf[..HEADER_LEN], &header);
-        assert_eq!(
-            &store.buf[HEADER_LEN..HEADER_LEN + payload.len()],
-            payload.as_slice()
-        );
+        let mut staged = [0u8; HEADER_LEN + 300];
+        SharedImageStore::new(&backing)
+            .read(0, &mut staged)
+            .unwrap();
+        assert_eq!(&staged[..HEADER_LEN], &header);
+        assert_eq!(&staged[HEADER_LEN..HEADER_LEN + payload.len()], &payload);
     }
 
     #[test]
@@ -521,6 +535,69 @@ mod tests {
             agent.handle(Command::Begin { header }),
             Response::Nack(NackReason::WrongTarget)
         );
+    }
+
+    #[test]
+    fn kind_region_mismatch_is_rejected() {
+        let payload = [1u8, 2, 3];
+        // A bootloader-kind image signed for the application region.
+        let header = {
+            let image = ImageHeader {
+                kind: ImageKind::Bootloader,
+                region: Region::ApplicationCode,
+                target_id: TARGET,
+                fw_version: 5,
+                payload_len: 0,
+                payload_crc32: 0,
+                hmac: [0u8; 32],
+            };
+            crate::update::verify::sign(image, HMAC::new(KEY), &payload).unwrap()
+        };
+        let mut key = KEY;
+        let mut agent = UpdateAgent::new(
+            MemStore::new(),
+            layout(),
+            TARGET,
+            CELLAGENT_TARGET,
+            &mut key,
+            NoKeyStore,
+            NullStateStore,
+            PersistentState::new(1),
+        );
+        assert_eq!(
+            agent.handle(Command::Begin { header }),
+            Response::Nack(NackReason::WrongTarget)
+        );
+    }
+
+    #[test]
+    fn new_begin_over_a_ready_image_records_aborted() {
+        let payload = ramp300();
+        let header = signed_image(&payload);
+        let mut key = KEY;
+        let mut agent = UpdateAgent::new(
+            MemStore::new(),
+            layout(),
+            TARGET,
+            CELLAGENT_TARGET,
+            &mut key,
+            NoKeyStore,
+            NullStateStore,
+            PersistentState::new(1),
+        );
+        assert!(matches!(
+            run_update(&mut agent, &header, &payload),
+            Response::Ack { .. }
+        ));
+        assert_eq!(agent.status().last_outcome, UpdateOutcome::Success);
+
+        // A second transfer supersedes the committed image before it was
+        // programmed. The stale commit must not silently stay `Success`.
+        assert!(matches!(
+            agent.handle(Command::Begin { header }),
+            Response::Ack { next_offset: 0 }
+        ));
+        assert_eq!(agent.status().last_outcome, UpdateOutcome::Aborted);
     }
 
     #[test]

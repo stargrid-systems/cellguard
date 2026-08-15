@@ -14,6 +14,15 @@ use core::fmt;
 /// Total length of the image header in bytes.
 pub const HEADER_LEN: usize = 64;
 
+/// [`HEADER_LEN`] as a `u32`, for offset arithmetic on 8-bit targets.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value is the constant 64, which always fits"
+)]
+pub const HEADER_LEN_U32: u32 = HEADER_LEN as u32;
+
+const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
+
 /// Number of leading header bytes covered by the authentication tag.
 ///
 /// The tag is computed over these bytes followed by the payload. It is every

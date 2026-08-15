@@ -34,13 +34,8 @@ const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 /// # Errors
 ///
 /// Returns a [`ProgramError`] if the store or writer fails, the header does not
-/// parse, the staged copy does not match its CRC, or the written flash does not
-/// match its CRC.
-///
-/// # Panics
-///
-/// Panics if `scratch` is empty. The streaming loops use `scratch` to chunk the
-/// transfer, so an empty buffer would never advance and hang the device.
+/// parse, the staged copy does not match its CRC, the written flash does not
+/// match its CRC, or `scratch` is empty.
 pub fn program<S, W>(
     store: &mut S,
     writer: &mut W,
@@ -53,10 +48,10 @@ where
     W: NvmWriter,
 {
     // An empty scratch would make `chunk_len` return 0 and the loops below
-    // would never advance. The supervisor always supplies a 64-byte buffer.
-    // This guard makes misuse of the public API loud rather than hanging the
-    // device.
-    assert!(!scratch.is_empty());
+    // would never advance, hanging the device. Report it instead.
+    if scratch.is_empty() {
+        return Err(ProgramError::EmptyScratch);
+    }
 
     let mut header_bytes = [0u8; HEADER_LEN];
     store
@@ -166,6 +161,8 @@ fn crc_from_flash<W: NvmWriter>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgramError<S, N> {
+    /// The caller passed an empty scratch buffer.
+    EmptyScratch,
     /// Reading the staged image failed.
     Store(S),
     /// A programming operation failed.

@@ -71,6 +71,49 @@ impl<const N: usize> ImageStore for MemStore<N> {
     }
 }
 
+/// An [`ImageStore`] over a shared backing cell, so a test can inspect what an
+/// agent staged while the agent owns the store.
+///
+/// The caller owns the backing [`RefCell`] and passes a reference, so a second
+/// handle constructed over the same cell reads what the first one wrote.
+pub struct SharedImageStore<'a, const N: usize> {
+    backing: &'a RefCell<[u8; N]>,
+}
+
+impl<'a, const N: usize> SharedImageStore<'a, N> {
+    /// Wraps a shared backing cell.
+    #[must_use]
+    pub const fn new(backing: &'a RefCell<[u8; N]>) -> Self {
+        Self { backing }
+    }
+}
+
+impl<const N: usize> ImageStore for SharedImageStore<'_, N> {
+    type Error = OutOfBounds;
+
+    fn capacity(&self) -> u32 {
+        u32::try_from(N).unwrap_or(u32::MAX)
+    }
+
+    fn read(&mut self, offset: u32, buf: &mut [u8]) -> Result<(), OutOfBounds> {
+        let start = usize::try_from(offset).map_err(|_| OutOfBounds)?;
+        let end = start.checked_add(buf.len()).ok_or(OutOfBounds)?;
+        buf.copy_from_slice(self.backing.borrow().get(start..end).ok_or(OutOfBounds)?);
+        Ok(())
+    }
+
+    fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), OutOfBounds> {
+        let start = usize::try_from(offset).map_err(|_| OutOfBounds)?;
+        let end = start.checked_add(data.len()).ok_or(OutOfBounds)?;
+        self.backing
+            .borrow_mut()
+            .get_mut(start..end)
+            .ok_or(OutOfBounds)?
+            .copy_from_slice(data);
+        Ok(())
+    }
+}
+
 /// A [`StateStore`] that always reports an empty load and drops writes.
 ///
 /// Useful for tests that need an agent with no persisted state.

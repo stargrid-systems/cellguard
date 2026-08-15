@@ -16,6 +16,11 @@ crc = { workspace = true }
 hmac-sha256 = { workspace = true }
 cellguard-panic = { workspace = true }
 
+[features]
+# Host-side image signing (`verify::sign`). A device never signs, it only
+# verifies, so this is enabled by host tools (cellguard-cli) and tests only.
+sign = []
+
 [dev-dependencies]
 cellboot = { workspace = true, features = ["testutil"] }
 

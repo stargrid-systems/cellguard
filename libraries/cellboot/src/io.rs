@@ -106,15 +106,6 @@ pub trait StateStore {
     fn store(&mut self, data: &[u8]) -> Result<(), Self::Error>;
 }
 
-/// Control over reset and the watchdog.
-pub trait SystemControl {
-    /// Services the watchdog so a long operation does not trip it.
-    fn service_watchdog(&mut self);
-
-    /// Resets the system. Does not return.
-    fn reset(&mut self) -> !;
-}
-
 /// Persistent storage for the shared authentication key.
 ///
 /// The key normally lives in the AVR128 USERROW, provisioned once at the
@@ -313,4 +304,29 @@ pub fn write_with_page_erase<T: PagedFlash>(
         rest = tail;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::io::{BandedError, BandedStore, ImageStore};
+    use crate::testutil::MemStore;
+
+    #[test]
+    fn banded_store_routes_and_rejects_straddles() {
+        let mut store = BandedStore::new(MemStore::<64>::new(), MemStore::<32>::new());
+        assert_eq!(store.capacity(), 96);
+
+        // Low band write is invisible to the high band and vice versa.
+        store.write(10, &[0xAA; 4]).unwrap();
+        store.write(64, &[0xBB; 4]).unwrap();
+
+        let mut buf = [0u8; 4];
+        store.read(10, &mut buf).unwrap();
+        assert_eq!(buf, [0xAA; 4]);
+        store.read(64, &mut buf).unwrap();
+        assert_eq!(buf, [0xBB; 4]);
+
+        // An access crossing the boundary is refused.
+        assert_eq!(store.write(62, &[0; 4]), Err(BandedError::OutOfBounds));
+    }
 }

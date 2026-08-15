@@ -102,12 +102,6 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
         }
     }
 
-    /// Returns a shared reference to the staging store.
-    #[must_use]
-    pub const fn store(&self) -> &S {
-        &self.store
-    }
-
     /// Feeds one received wire byte from the cellcore link.
     ///
     /// On a complete, valid `ProgProgram` addressed to this node, returns the

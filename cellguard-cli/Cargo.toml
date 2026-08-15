@@ -14,7 +14,7 @@ bench = false
 
 [dependencies]
 cellboot = { path = "../libraries/cellboot" }
-cellcore = { path = "../libraries/cellcore" }
+cellcore = { path = "../libraries/cellcore", features = ["sign"] }
 cellguard-panic = { path = "../libraries/cellguard-panic" }
 cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader"] }
 hmac-sha256 = "1"

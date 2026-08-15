@@ -13,9 +13,6 @@ use hmac_sha256::HMAC;
 /// Implementors accumulate data with [`Mac::update`] and produce a fixed-length
 /// tag with [`Mac::finalize`].
 pub trait Mac {
-    /// Length of the produced tag in bytes.
-    const TAG_LEN: usize;
-
     /// Feeds `data` into the running computation.
     fn update(&mut self, data: &[u8]);
 
@@ -24,8 +21,6 @@ pub trait Mac {
 }
 
 impl Mac for HMAC {
-    const TAG_LEN: usize = 32;
-
     fn update(&mut self, data: &[u8]) {
         Self::update(self, data);
     }
