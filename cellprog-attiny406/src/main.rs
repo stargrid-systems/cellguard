@@ -74,12 +74,13 @@ const APP_CAP: u32 = 128 * 1024;
 /// Cellagent app staging capacity (carved from the end of U104).
 const CELLAGENT_CAP: u32 = 4 * 1024;
 
-/// Boot section size on the AVR128DA64 (FUSE.BOOTSIZE = 8, units of 512 bytes).
+/// Boot section size on the AVR128DA64 (FUSE.BOOTSIZE = 16, units of 512
+/// bytes).
 ///
 /// The bootloader self-programs the application from EEPROM at boot. Cellprog
 /// flashes the bootloader itself over UPDI (rare) and serves as fallback for
 /// catastrophic recovery via the heartbeat watchdog.
-const BOOT_SIZE: u32 = 8 * 512;
+const BOOT_SIZE: u32 = 16 * 512;
 
 /// Boot section starts at flash address 0 on AVR Dx.
 const BOOT_TARGET_BASE: u32 = 0x0000;

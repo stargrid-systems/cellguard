@@ -8,8 +8,8 @@
 //! staged in EEPROM. If so, it self-programs the application flash section and
 //! reboots. Otherwise it jumps straight to the installed application.
 //!
-//! The boot section is 4 KB (FUSE.BOOTSIZE = 8, flash 0x0000-0x0FFF). The
-//! application occupies the remaining 124 KB (flash 0x1000-0x1FFFF).
+//! The boot section is 8 KB (FUSE.BOOTSIZE = 16, flash 0x0000-0x1FFF). The
+//! application occupies the remaining 120 KB (flash 0x2000-0x1FFFF).
 //!
 //! Pin map is from the board schematic (`hardware/boards/cellguard-eval`):
 //! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. App U104 chip-select
@@ -33,8 +33,10 @@ use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 
-/// Core clock frequency, from the external 24 MHz oscillator on PA0/EXTCLK.
-const BASE_FREQ: u32 = 24_000_000;
+/// BRING-UP: internal RC at 4 MHz (Y100 not verified). The app re-configures
+/// its own clock at boot, so the handoff is safe regardless of what this
+/// bootloader picks.
+const F_CPU: HfFreq = HfFreq::Mhz4;
 
 /// On-chip EEPROM slot holding the probe-able agent state.
 const STATE_OFFSET: u16 = 0;
@@ -44,9 +46,9 @@ const PANIC_OFFSET: u16 = STATE_LEN;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 
-/// Flash address where the application begins (right after the 4 KB boot
+/// Flash address where the application begins (right after the 8 KB boot
 /// section).
-const APP_TARGET_BASE: u32 = 0x1000;
+const APP_TARGET_BASE: u32 = 0x2000;
 
 /// Maximum self-program attempts before the bootloader gives up, clears the
 /// staged image, and falls through to the installed app.
@@ -66,8 +68,9 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // Run from the external 24 MHz clock on PA0/EXTCLK.
-    clock::set_extclk(&cpu, &dp.CLKCTRL, HfFreq::Mhz24);
+    // BRING-UP: internal RC until Y100 is verified. Explicit so the clock
+    // state does not depend on the reset path that led here.
+    clock::set_oschf(&cpu, &dp.CLKCTRL, F_CPU);
 
     // On-chip NVM: back the agent state with an EEPROM slot, and later use the
     // same NVMCTRL for flash self-programming.
@@ -89,8 +92,8 @@ fn main() -> ! {
     let cs_boot = porta.p7.into_output_high();
     let app_dev = RefCellDevice::new_no_delay(&spi, cs_app).unwrap_or_else(|_| halt());
     let boot_dev = RefCellDevice::new_no_delay(&spi, cs_boot).unwrap_or_else(|_| halt());
-    let app = Cat25Store::new(Cat25::new(app_dev, CAT25M01, Delay::new(BASE_FREQ)));
-    let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(BASE_FREQ)));
+    let app = Cat25Store::new(Cat25::new(app_dev, CAT25M01, Delay::new(F_CPU.hz())));
+    let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(F_CPU.hz())));
     let mut store = BandedStore::new(app, boot);
 
     // If a verified application image is staged, self-program it into flash.
@@ -156,7 +159,7 @@ fn main() -> ! {
 /// Jumps to the application at [`APP_TARGET_BASE`].
 ///
 /// `APP_TARGET_BASE` is the app's reset vector: the CRT linked at the start of
-/// the app's FLASH region (0x1000), which re-initializes the stack pointer,
+/// the app's FLASH region (0x2000), which re-initializes the stack pointer,
 /// clears `.bss`, copies `.data`, and then calls `main`. So a jump here is
 /// functionally a warm reset into the app, and the bootloader's stack and
 /// state do not leak.
