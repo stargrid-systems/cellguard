@@ -1,0 +1,21 @@
+name: Install Rust toolchain
+description: Installs the toolchain pinned in rust-toolchain.toml.
+inputs:
+  components:
+    description: Space-separated rustup components to add.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        toolchain=$(grep -oP 'channel = "\K[^"]+' rust-toolchain.toml)
+        rustup toolchain install --profile minimal "$toolchain"
+        if [ -n "$COMPONENTS" ]; then
+          # shellcheck disable=SC2086
+          rustup component add --toolchain "$toolchain" $COMPONENTS
+        fi

@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  discover:
+    name: Discover workspaces
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      workspaces: ${{ steps.list.outputs.workspaces }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: List workspace roots
+        id: list
+        run: |
+          # A manifest is a root if it declares a [workspace] table, or if it is
+          # a standalone package with no ancestor workspace to inherit from.
+          roots=()
+          while IFS= read -r manifest; do
+            dir=${manifest%/*}
+            dir=${dir#./}
+            if grep -q '^\[workspace\]' "$manifest"; then
+              roots+=("$dir")
+              continue
+            fi
+            member=0
+            ancestor=$(dirname "$dir")
+            while [ "$ancestor" != "." ]; do
+              if [ -f "$ancestor/Cargo.toml" ] &&
+                grep -q '^\[workspace\]' "$ancestor/Cargo.toml"; then
+                member=1
+                break
+              fi
+              ancestor=$(dirname "$ancestor")
+            done
+            if [ "$member" -eq 0 ]; then
+              roots+=("$dir")
+            fi
+          done < <(find . -name Cargo.toml -not -path '*/target/*' | sort)
+          echo "workspaces=$(printf '%s\n' "${roots[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint (${{ matrix.workspace }})
+    needs: discover
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/install-toolchain
+        with:
+          components: rustfmt clippy rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ matrix.workspace }}
+      - name: rustfmt
+        working-directory: ${{ matrix.workspace }}
+        run: cargo fmt --all --check
+      - name: clippy
+        working-directory: ${{ matrix.workspace }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: rustdoc
+        working-directory: ${{ matrix.workspace }}
+        run: cargo doc --workspace --no-deps --locked
+
+  test:
+    name: Test (${{ matrix.workspace }})
+    if: github.event_name == 'merge_group'
+    needs: discover
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/install-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ matrix.workspace }}
+      - name: Test
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          if grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
+            echo "embedded workspace, no host tests"
+            exit 0
+          fi
+          cargo test --workspace --all-features --locked
+
+  build:
+    name: Build (${{ matrix.workspace }})
+    if: github.event_name == 'merge_group'
+    needs: discover
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/install-toolchain
+        with:
+          components: rust-src
+      - name: Install AVR linker
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          if ! grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
+            echo "host workspace, no AVR linker needed"
+            exit 0
+          fi
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-avr
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ matrix.workspace }}
+      - name: Build
+        working-directory: ${{ matrix.workspace }}
+        run: cargo build --release --locked
+
+  ci-pass:
+    name: ci-pass
+    needs: [lint, test, build]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          for result in "$LINT_RESULT" "$TEST_RESULT" "$BUILD_RESULT"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "upstream job result: $result"
+              exit 1
+            fi
+          done
