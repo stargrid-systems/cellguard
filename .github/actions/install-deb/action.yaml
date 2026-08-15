@@ -1,0 +1,19 @@
+name: Install deb packages
+description: Downloads .deb packages and extracts them into a runner prefix.
+inputs:
+  urls:
+    description: Newline-separated .deb URLs. Lines starting with # are skipped.
+    required: true
+  bin-dir:
+    description: Directory inside the extracted root to add to PATH.
+    required: false
+    default: usr/bin
+runs:
+  using: composite
+  steps:
+    - name: Install
+      shell: bash
+      env:
+        URLS: ${{ inputs.urls }}
+        BIN_DIR: ${{ inputs.bin-dir }}
+      run: bash "${GITHUB_ACTION_PATH}/install-deb.sh"

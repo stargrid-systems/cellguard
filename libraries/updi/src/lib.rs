@@ -41,4 +41,4 @@ mod link;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod programmer;
-pub mod tiny;
+mod tiny;
