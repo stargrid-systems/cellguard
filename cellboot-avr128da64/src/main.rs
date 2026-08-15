@@ -24,12 +24,13 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
-use cat25::{CAT25M01, CAT25128, Cat25};
+use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
 use cellboot::layout;
-use cellcore::update::state::{self, AppHealth, BOOT_HEALTH_THRESHOLD, StagedState};
+use cellboot::programmer::{self, ProgramError};
+use cellboot::state::{self, AppHealth, StagedState, BOOT_HEALTH_THRESHOLD};
 use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -99,13 +100,7 @@ fn main() -> ! {
         let give_up = if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
             let mut writer = FlashNvmWriter::new(&nvm, &cpu);
             let mut scratch = [0u8; 256];
-            match cellprog::programmer::program(
-                &mut store,
-                &mut writer,
-                0,
-                APP_TARGET_BASE,
-                &mut scratch,
-            ) {
+            match programmer::program(&mut store, &mut writer, 0, APP_TARGET_BASE, &mut scratch) {
                 Ok(_header) => {
                     state.mark_programmed(Region::ApplicationCode);
                     let _ = state_store.store(&state.serialize());
@@ -113,8 +108,7 @@ fn main() -> ! {
                     clear(&nvm, &cpu, layout::PANIC_OFFSET);
                     dp.RSTCTRL.software_reset(&cpu);
                 }
-                Err(cellprog::programmer::ProgramError::CorruptSource)
-                | Err(cellprog::programmer::ProgramError::Header(_)) => true,
+                Err(ProgramError::CorruptSource) | Err(ProgramError::Header(_)) => true,
                 Err(_) => {
                     state.program_attempts += 1;
                     let _ = state_store.store(&state.serialize());

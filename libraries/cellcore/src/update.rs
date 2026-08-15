@@ -17,7 +17,7 @@
 //! - [`command`]: the semantic command and response layer.
 //! - [`handoff`]: the request that tells the `cellprog` programmer to flash a
 //!   committed image.
-//! - [`state`]: the probe-able persistent state.
+//! - [`state`](cellboot::state): the probe-able persistent state.
 //! - [`verify`]: streaming image verification and host-side signing.
 //! - [`mac`]: the message-authentication abstraction over HMAC-SHA256.
 //!
@@ -33,5 +33,4 @@ pub mod dispatch;
 pub mod handoff;
 pub mod mac;
 pub mod session;
-pub mod state;
 pub mod verify;

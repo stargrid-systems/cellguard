@@ -5,10 +5,9 @@
 //! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
 
 use cellboot::image::HEADER_LEN;
+use cellboot::state::PersistentState;
 use cellguard_panic::PanicRecord;
 use cellguard_protocol::{Error as PacketError, Kind, Packet};
-
-use crate::update::state::PersistentState;
 
 /// Length of the shared authentication key in bytes.
 pub const KEY_LEN: usize = 16;
@@ -219,10 +218,10 @@ impl core::error::Error for MapError {}
 #[cfg(test)]
 mod tests {
     use cellboot::image::HEADER_LEN;
+    use cellboot::state::PersistentState;
     use cellguard_protocol::{Kind, Packet};
 
     use super::{Command, KEY_LEN, MapError, NackReason, Response, TAG_LEN};
-    use crate::update::state::PersistentState;
 
     fn command_from_bytes<'a>(kind: Kind, payload: &[u8], buf: &'a mut [u8]) -> Command<'a> {
         let n = Packet::write(1, kind, payload, buf).unwrap();

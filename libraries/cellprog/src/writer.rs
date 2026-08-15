@@ -2,7 +2,8 @@
 //!
 //! [`UpdiNvmWriter`] adapts any [`FlashProg`] programmer (AVR Dx or tinyAVR)
 //! to the [`cellboot::io::NvmWriter`] trait, so
-//! [`crate::programmer::program`] drives either target with no change. It
+//! [`program`](cellboot::programmer::program) drives either target with no
+//! change. It
 //! erases each flash page the first time a write touches it, then streams
 //! bytes straight to flash, so a sub-page or page-straddling chunk is handled
 //! without buffering a whole page. The shared erase-and-split loop lives in

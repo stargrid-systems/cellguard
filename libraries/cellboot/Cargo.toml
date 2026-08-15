@@ -20,6 +20,7 @@ testutil = []
 [dependencies]
 avrxt-hal = { workspace = true, optional = true }
 cat25 = { workspace = true, optional = true }
+crc = { workspace = true }
 embedded-hal = { workspace = true, optional = true }
 
 [dev-dependencies]

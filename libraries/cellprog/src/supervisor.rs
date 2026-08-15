@@ -27,12 +27,11 @@
 //! request.
 
 use cellboot::io::{ImageStore, NvmWriter};
+use cellboot::programmer::{ProgramError, program};
 use cellguard_protocol::{
     Decoder, HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
     max_encoded_len,
 };
-
-use crate::programmer::{ProgramError, program};
 
 /// Streaming scratch buffer size the programmer uses.
 const SCRATCH: usize = 64;

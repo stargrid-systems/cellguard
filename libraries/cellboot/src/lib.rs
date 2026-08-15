@@ -2,14 +2,15 @@
 //! firmware-update roles.
 //!
 //! It defines the signed image format ([`image`]), the I/O traits ([`io`]),
-//! and the shared storage geometry ([`layout`]) through which a concrete
-//! target performs all of its input and output. Both roles build on it: the
-//! `cellcore` update agent (runs on the core MCU) and the `cellprog`
-//! programmer (runs on the PROG MCU).
+//! the shared storage geometry ([`layout`]), the persistent updater state
+//! ([`state`]), and the streaming programmer engine ([`programmer`]) through
+//! which a concrete target performs all of its input and output. All roles
+//! build on it: the `cellcore` update agent (runs on the core MCU), the
+//! `cellprog` programmer (runs on the PROG MCU), and the bootloader itself.
 //!
 //! This crate holds no crypto. Signing, streaming verification, and the update
-//! session machinery live in `cellcore`, so the `cellprog` programmer links
-//! none of it.
+//! session machinery live in `cellcore`, so the `cellprog` programmer and the
+//! bootloader link none of it.
 //!
 //! # Features
 //!
@@ -29,5 +30,7 @@ pub mod drivers;
 pub mod image;
 pub mod io;
 pub mod layout;
+pub mod programmer;
+pub mod state;
 #[cfg(feature = "testutil")]
 pub mod testutil;

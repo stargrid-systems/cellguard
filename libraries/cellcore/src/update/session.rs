@@ -9,11 +9,11 @@
 
 use cellboot::image::{HEADER_LEN, ImageHeader, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
+use cellboot::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, KEY_LEN, NackReason, Response};
-use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 
 const HEADER_LEN_U32: u32 = 64;
@@ -100,7 +100,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production to disable key
     /// replacement. `state_store` persists the probe-able state, and `state`
     /// is the state already loaded from it at boot (see
-    /// [`crate::update::state::load`]).
+    /// [`cellboot::state::load`]).
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a distinct, required piece of hardware state"
@@ -144,9 +144,9 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Marks the running application as healthy and clears the boot counter.
     ///
     /// The bootloader bumps `boot_count` on every boot and flips
-    /// `app_health` to [`Bad`](crate::update::state::AppHealth::Bad) once it
+    /// `app_health` to [`Bad`](cellboot::state::AppHealth::Bad) once it
     /// reaches
-    /// [`BOOT_HEALTH_THRESHOLD`](crate::update::state::BOOT_HEALTH_THRESHOLD).
+    /// [`BOOT_HEALTH_THRESHOLD`](cellboot::state::BOOT_HEALTH_THRESHOLD).
     /// A boot only counts against the app while it stays unconfirmed, so the
     /// runtime calls this once the app has proven itself alive (typically
     /// after the first successful field-bus exchange). This persists the new
@@ -348,13 +348,13 @@ mod tests {
 
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::{ImageStore, KeyStore, NoKeyStore, StateStore};
+    use cellboot::state::{PersistentState, STATE_LEN, StagedState, UpdateOutcome};
     use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore, SharedStore};
     use hmac_sha256::HMAC;
 
     use super::{RegionSlot, StagingLayout, UpdateAgent};
     use crate::update::command::{Command, KEY_LEN, NackReason, Response};
     use crate::update::mac::{KEY_REPLACE_DOMAIN, authenticate_key_replace};
-    use crate::update::state::{PersistentState, STATE_LEN, StagedState, UpdateOutcome};
 
     const KEY: [u8; 16] = *b"session-test-key";
     const TARGET: u16 = 0x2A2A;
@@ -731,7 +731,7 @@ mod tests {
         }
 
         // Reset: a fresh agent loads what the first one persisted at commit.
-        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
+        let restored = cellboot::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Ready);
         assert_eq!(restored.staged_region, Some(Region::ApplicationCode));
         assert_eq!(restored.last_outcome, UpdateOutcome::Success);
@@ -758,7 +758,7 @@ mod tests {
             agent.handle(Command::Begin { header });
             agent.handle(Command::Abort);
         }
-        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
+        let restored = cellboot::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::Aborted);
     }
@@ -816,7 +816,7 @@ mod tests {
         // Ready must be cleared so `pending_program` reports nothing.
         {
             let mut key = KEY;
-            let state = crate::update::state::load(&mut SharedStore::new(&backing), 1);
+            let state = cellboot::state::load(&mut SharedStore::new(&backing), 1);
             let mut agent = UpdateAgent::new(
                 FailingStore,
                 layout(),
@@ -837,7 +837,7 @@ mod tests {
         }
 
         // The cleared state survives a reset.
-        let restored = crate::update::state::load(&mut SharedStore::new(&backing), 1);
+        let restored = cellboot::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::StorageFailed);
     }

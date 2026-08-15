@@ -17,9 +17,9 @@
 
 #![no_std]
 
-pub use self::record::{PanicRecord, FILE_CAP, RECORD_FORMAT_VERSION, RECORD_LEN};
+pub use self::record::{FILE_CAP, PanicRecord, RECORD_FORMAT_VERSION, RECORD_LEN};
 #[cfg(feature = "hal")]
-pub use self::store::{clear, read_panic_record, store_and_decide, Decision};
+pub use self::store::{Decision, clear, read_panic_record, store_and_decide};
 
 mod record;
 #[cfg(feature = "hal")]

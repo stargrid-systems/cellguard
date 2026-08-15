@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::{fs, io};
 
 use cellboot::image::{ImageHeader, ImageKind, Region};
-use cellcore::update::state::{PersistentState, STATE_LEN};
+use cellboot::state::{PersistentState, STATE_LEN};
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::Kind;

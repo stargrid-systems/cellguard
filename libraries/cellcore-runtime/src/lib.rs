@@ -234,10 +234,10 @@ where
 mod tests {
     use cellboot::image::Region;
     use cellboot::io::{ImageStore, NoKeyStore};
+    use cellboot::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
     use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore};
     use cellcore::update::dispatch::Dispatcher;
     use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-    use cellcore::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
     use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
 
     use super::CoreRuntime;

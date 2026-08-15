@@ -12,6 +12,7 @@
 
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
+use cellboot::state::STATE_LEN;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
     Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len,
@@ -19,7 +20,6 @@ use cellguard_protocol::{
 
 use crate::update::command::Command;
 use crate::update::session::UpdateAgent;
-use crate::update::state::STATE_LEN;
 
 /// Largest response payload: a status reply or a panic record, whichever is
 /// bigger.
@@ -118,13 +118,13 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
 mod tests {
     use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellboot::io::NoKeyStore;
+    use cellboot::state::{PersistentState, StagedState};
     use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore};
     use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
     use hmac_sha256::HMAC;
 
     use super::Dispatcher;
     use crate::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-    use crate::update::state::{PersistentState, StagedState};
 
     const KEY: [u8; 16] = *b"dispatch-tst-key";
     const TARGET: u16 = 0x33;

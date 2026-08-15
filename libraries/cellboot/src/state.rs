@@ -1,21 +1,25 @@
 //! The persistent, probe-able updater state.
 //!
 //! [`PersistentState`] is the small record the updater keeps in a
-//! [`cellboot::io::StateStore`]. It survives a program-memory rewrite and is
-//! what a `Probe` command reports back, so an operator can ask a device what
-//! firmware it runs, whether that firmware is healthy, and how the last update
-//! went.
+//! [`StateStore`]. It survives a program-memory rewrite
+//! and is what a `Probe` command reports back, so an operator can ask a device
+//! what firmware it runs, whether that firmware is healthy, and how the last
+//! update went.
+//!
+//! Both the bootloader and the cellcore update agent read and write this
+//! record, which is why it lives here rather than in `cellcore`.
 
 use core::fmt;
 
-use cellboot::io::StateStore;
+use crate::image::Region;
+use crate::io::StateStore;
 
 /// Loads the persisted state, falling back to a fresh one on any problem.
 ///
 /// A read error, a wrong length, a bad CRC, or an unknown field all resolve to
 /// [`PersistentState::new`], so a blank or corrupt store never blocks boot.
-/// Call this once at boot and pass the result to
-/// [`UpdateAgent::new`](crate::update::session::UpdateAgent::new).
+/// Call this once at boot and pass the result to the update agent (or use it
+/// directly in the bootloader).
 pub fn load<St: StateStore>(store: &mut St, agent_version: u32) -> PersistentState {
     let mut buf = [0u8; STATE_LEN];
     match store.load(&mut buf) {
@@ -37,10 +41,9 @@ pub const STATE_FORMAT_VERSION: u8 = 1;
 ///
 /// The bootloader increments [`PersistentState::boot_count`] on every boot
 /// that hands control to the app. If the counter reaches this value without
-/// the app calling
-/// [`UpdateAgent::confirm_app_healthy`][crate::update::session::UpdateAgent::confirm_app_healthy],
-/// the bootloader sets [`AppHealth::Bad`]. A device that reboots in a loop
-/// (the app panics before it can confirm) is flagged within this many boots.
+/// the app confirming itself, the bootloader sets [`AppHealth::Bad`]. A device
+/// that reboots in a loop (the app panics before it can confirm) is flagged
+/// within this many boots.
 pub const BOOT_HEALTH_THRESHOLD: u8 = 5;
 
 /// Sentinel region code meaning "no staged image".
@@ -168,7 +171,7 @@ pub struct PersistentState {
     /// State of the staged image.
     pub staged: StagedState,
     /// Region the staged image targets, or `None` when nothing is staged.
-    pub staged_region: Option<cellboot::image::Region>,
+    pub staged_region: Option<Region>,
     /// Result of the most recent update attempt.
     pub last_outcome: UpdateOutcome,
     /// Bootloader self-program attempts for the current staged image.
@@ -203,11 +206,11 @@ impl PersistentState {
     /// `app_version` to the staged version and resets `app_health` and
     /// `boot_count`, so the new app starts from a clean health slate.
     ///
-    /// This is the single transition used by both
-    /// [`UpdateAgent::take_pending_program`](crate::update::session::UpdateAgent::take_pending_program)
-    /// and the bootloader's self-program path, so the two cannot drift.
-    pub fn mark_programmed(&mut self, region: cellboot::image::Region) {
-        if region == cellboot::image::Region::ApplicationCode {
+    /// This is the single transition used by both the update agent's
+    /// handoff path and the bootloader's self-program path, so the two cannot
+    /// drift.
+    pub fn mark_programmed(&mut self, region: Region) {
+        if region == Region::ApplicationCode {
             self.app_version = self.staged_version;
             self.app_health = AppHealth::Unknown;
             self.boot_count = 0;
@@ -237,9 +240,7 @@ impl PersistentState {
         out[1] = self.app_health.to_code();
         out[2] = self.staged.to_code();
         out[3] = self.last_outcome.to_code();
-        out[4] = self
-            .staged_region
-            .map_or(NO_REGION, cellboot::image::Region::to_code);
+        out[4] = self.staged_region.map_or(NO_REGION, Region::to_code);
         out[5] = self.program_attempts;
         out[6..8].copy_from_slice(&self.boot_count.to_le_bytes());
         out[8..12].copy_from_slice(&self.agent_version.to_le_bytes());
@@ -271,7 +272,7 @@ impl PersistentState {
         let staged_region = if bytes[4] == NO_REGION {
             None
         } else {
-            Some(cellboot::image::Region::from_code(bytes[4]).ok_or(StateError::BadField)?)
+            Some(Region::from_code(bytes[4]).ok_or(StateError::BadField)?)
         };
 
         let program_attempts = bytes[5];
@@ -320,9 +321,8 @@ impl core::error::Error for StateError {}
 
 #[cfg(test)]
 mod tests {
-    use cellboot::image::Region;
-
     use super::{AppHealth, PersistentState, STATE_LEN, StagedState, StateError, UpdateOutcome};
+    use crate::image::Region;
 
     fn sample() -> PersistentState {
         PersistentState {

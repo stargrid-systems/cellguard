@@ -8,17 +8,16 @@
 //! image was already authenticated by the main MCU before staging, so there is
 //! no crypto here.
 //!
-//! - [`programmer`] streams a staged image into the target and verifies it.
 //! - [`supervisor`] answers program requests over the local link. The firmware
 //!   also uses it to recover the cellcore when its heartbeat is lost (reset,
 //!   then reflash the staged application).
 //! - [`writer`] is the UPDI-backed [`NvmWriter`](cellboot::io::NvmWriter) the
 //!   programmer writes through, built on the `updi` crate.
 //!
-//! The image format and I/O traits come from the shared [`cellboot`] core.
+//! The image format, I/O traits, and the streaming programmer engine itself
+//! come from the shared [`cellboot`] core.
 #![no_std]
 #![warn(missing_docs)]
 
-pub mod programmer;
 pub mod supervisor;
 pub mod writer;

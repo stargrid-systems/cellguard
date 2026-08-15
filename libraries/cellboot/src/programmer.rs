@@ -1,21 +1,22 @@
-//! The programmer engine that runs on the `cellprog` (`ATtiny406`) side.
+//! The streaming programmer engine.
 //!
 //! [`program`] reads a staged image out of an [`ImageStore`] (the shared
 //! external EEPROM) and writes it into a target's program memory through a
-//! streaming [`NvmWriter`] (UPDI). It is pure logic behind those two traits, so
-//! it fits the 256-byte programmer: nothing larger than the caller's scratch
-//! buffer is ever held in RAM.
+//! streaming [`NvmWriter`] (UPDI self-program or UPDI host). It is pure logic
+//! behind those two traits, so it fits small targets: nothing larger than the
+//! caller's scratch buffer is ever held in RAM.
 //!
-//! The programmer does not check the HMAC. Authenticity was already established
-//! by the AVR128 before staging, and the programmer holds no key. It checks the
-//! payload CRC twice instead: once against the staged copy before erasing the
-//! target (so a corrupt EEPROM never destroys a working target), and once
+//! The engine does not check the HMAC. Authenticity was already established
+//! by the AVR128 before staging, and the programmer holds no key. It checks
+//! the payload CRC twice instead: once against the staged copy before erasing
+//! the target (so a corrupt EEPROM never destroys a working target), and once
 //! against the written flash before letting the target run (so a bad write is
 //! caught).
 
-use cellboot::image::{HEADER_LEN, ImageHeader, ParseError};
-use cellboot::io::{ImageStore, NvmWriter};
 use crc::Crc32;
+
+use crate::image::{HEADER_LEN, ImageHeader, ParseError};
+use crate::io::{ImageStore, NvmWriter};
 
 const HEADER_LEN_U32: u32 = 64;
 const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
@@ -171,10 +172,9 @@ pub enum ProgramError<S, N> {
 
 #[cfg(test)]
 mod tests {
-    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
-    use cellboot::io::{ImageStore, NvmWriter};
-
     use super::{ProgramError, program};
+    use crate::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
+    use crate::io::{ImageStore, NvmWriter};
 
     const STORE_CAP: usize = 1024;
     const FLASH_CAP: usize = 1024;

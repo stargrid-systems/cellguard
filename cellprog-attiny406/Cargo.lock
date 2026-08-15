@@ -103,6 +103,7 @@ name = "cellboot"
 version = "0.1.0"
 dependencies = [
  "cat25",
+ "crc",
  "embedded-hal",
 ]
 

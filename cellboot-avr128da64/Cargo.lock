@@ -104,6 +104,7 @@ version = "0.1.0"
 dependencies = [
  "avrxt-hal",
  "cat25",
+ "crc",
  "embedded-hal",
 ]
 
@@ -115,24 +116,11 @@ dependencies = [
  "avrxt-hal",
  "cat25",
  "cellboot",
- "cellcore",
  "cellguard-panic",
- "cellprog",
  "crc",
  "embedded-hal",
  "embedded-hal-bus",
  "embedded-io",
-]
-
-[[package]]
-name = "cellcore"
-version = "0.1.0"
-dependencies = [
- "cellboot",
- "cellguard-panic",
- "cellguard-protocol",
- "crc",
- "hmac-sha256",
 ]
 
 [[package]]
@@ -141,24 +129,6 @@ version = "0.1.0"
 dependencies = [
  "avrxt-hal",
  "crc",
-]
-
-[[package]]
-name = "cellguard-protocol"
-version = "0.1.0"
-dependencies = [
- "crc",
- "zerocopy",
-]
-
-[[package]]
-name = "cellprog"
-version = "0.1.0"
-dependencies = [
- "cellboot",
- "cellguard-protocol",
- "crc",
- "updi",
 ]
 
 [[package]]
@@ -297,12 +267,6 @@ checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
 ]
-
-[[package]]
-name = "hmac-sha256"
-version = "1.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
 name = "icu_collections"
@@ -834,10 +798,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
-name = "updi"
-version = "0.1.0"
-
-[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -940,26 +900,6 @@ dependencies = [
  "quote",
  "syn 2.0.110",
  "synstructure",
-]
-
-[[package]]
-name = "zerocopy"
-version = "0.8.54"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
-dependencies = [
- "zerocopy-derive",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.8.54"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.110",
 ]
 
 [[package]]

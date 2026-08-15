@@ -15,8 +15,6 @@ bench = false
 avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
 cellboot = { path = "../libraries/cellboot", features = ["avr128", "drivers"] }
-cellcore = { path = "../libraries/cellcore" }
-cellprog = { path = "../libraries/cellprog" }
 cat25 = { path = "../libraries/cat25" }
 crc = { path = "../libraries/crc" }
 embedded-hal = { version = "1", default-features = false }

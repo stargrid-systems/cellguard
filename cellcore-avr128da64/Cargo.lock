@@ -104,6 +104,7 @@ version = "0.1.0"
 dependencies = [
  "avrxt-hal",
  "cat25",
+ "crc",
  "embedded-hal",
 ]
 
