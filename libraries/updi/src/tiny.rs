@@ -13,7 +13,7 @@
 //! subsequent data write triggers it. The erase and write flows below follow
 //! the execute model: set up the address/data first, then write the command.
 
-use crate::driver::{cs, Updi, RESET_RELEASE, RESET_REQUEST};
+use crate::driver::{RESET_RELEASE, RESET_REQUEST, Updi, cs};
 use crate::link::UpdiLink;
 pub use crate::programmer::ProgError;
 
@@ -290,7 +290,7 @@ impl<L: UpdiLink> TinyProgrammer<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProgError, TinyProgrammer, FLASH_SIZE, PAGE_SIZE};
+    use super::{FLASH_SIZE, PAGE_SIZE, ProgError, TinyProgrammer};
     use crate::mock::MockTarget;
 
     fn ramp(n: usize) -> [u8; 600] {
