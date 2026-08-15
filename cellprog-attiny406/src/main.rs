@@ -44,6 +44,7 @@ use avrxt_hal::usart::{Frame, Usart};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::Cat25Store;
 use cellboot::io::BandedStore;
+use cellboot::layout;
 use cellguard_panic::clear;
 use cellguard_protocol::ProgSource;
 use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
@@ -69,24 +70,11 @@ const BAUD: u32 = 115_200;
 /// This node's address on the cellcore link.
 const NODE_ID: u8 = 2;
 
-/// App staging EEPROM capacity (U104, CAT25M01, 128 KB).
-const APP_CAP: u32 = 128 * 1024;
-/// Cellagent app staging capacity (carved from the end of U104).
-const CELLAGENT_CAP: u32 = 4 * 1024;
-
-/// Boot section size on the AVR128DA64 (FUSE.BOOTSIZE = 16, units of 512
-/// bytes).
-///
-/// The bootloader self-programs the application from EEPROM at boot. Cellprog
-/// flashes the bootloader itself over UPDI (rare) and serves as fallback for
-/// catastrophic recovery via the heartbeat watchdog.
-const BOOT_SIZE: u32 = 16 * 512;
-
 /// Boot section starts at flash address 0 on AVR Dx.
 const BOOT_TARGET_BASE: u32 = 0x0000;
 
 /// Application starts right after the boot section.
-const APP_TARGET_BASE: u32 = BOOT_SIZE;
+const APP_TARGET_BASE: u32 = layout::BOOT_SECTION_SIZE;
 
 /// tinyAVR flash offset 0. The data-space base (0x8000) is added internally
 /// by TinyProgrammer.
@@ -153,22 +141,22 @@ fn main() -> ! {
     let store = BandedStore::new(app, boot);
 
     // The boot image sits at the App/Boot band boundary in the store (the boot
-    // EEPROM rebased to offset APP_CAP).
-    let layout = ProgLayout {
+    // EEPROM rebased to offset BOOT_BAND_OFFSET).
+    let prog_layout = ProgLayout {
         app: SourceSlot {
             image_offset: 0,
             target_base: APP_TARGET_BASE,
         },
         bootloader: SourceSlot {
-            image_offset: APP_CAP,
+            image_offset: layout::BOOT_BAND_OFFSET,
             target_base: BOOT_TARGET_BASE,
         },
         cellagent: SourceSlot {
-            image_offset: APP_CAP - CELLAGENT_CAP,
+            image_offset: layout::CELLAGENT_OFFSET,
             target_base: CELLAGENT_TARGET_BASE,
         },
     };
-    let mut supervisor = Supervisor::<_, 128>::new(store, layout, NODE_ID);
+    let mut supervisor = Supervisor::<_, 128>::new(store, prog_layout, NODE_ID);
 
     // USART0 = the shared link. Start it as the 8N1 UART command link on mux
     // channel 0. TxD idle-high, RxD input.

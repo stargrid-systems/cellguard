@@ -33,9 +33,10 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
-use cat25::{CAT25M01, CAT25128, Cat25};
+use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::NoKeyStore;
+use cellboot::layout;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore::update::state;
@@ -65,27 +66,15 @@ const AGENT_VERSION: u32 = 1;
 
 /// Fleet HMAC key length in the USERROW.
 const KEY_LEN: usize = 16;
-/// On-chip EEPROM slot holding the probe-able agent state.
-const STATE_OFFSET: u16 = 0;
-const STATE_LEN: u16 = 64;
-/// On-chip EEPROM offset of the panic record (after the state slot).
-const PANIC_OFFSET: u16 = STATE_LEN;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
-
-/// App staging EEPROM capacity (U104, CAT25M01, 128 KB).
-const APP_CAP: u32 = 128 * 1024;
-/// Boot staging EEPROM capacity (U105, CAT25128, 16 KB).
-const BOOT_CAP: u32 = 16 * 1024;
-/// Cellagent app staging capacity (carved from the end of U104).
-const CELLAGENT_CAP: u32 = 4 * 1024;
 
 /// USART5 receive timeout in ms.
 const BUS_RX_TIMEOUT_MS: u32 = 10;
 
 cellguard_panic::panic_handler!(
     unsafe { pac::Peripherals::steal() },
-    PANIC_OFFSET,
+    layout::PANIC_OFFSET,
     PANIC_THRESHOLD
 );
 
@@ -124,7 +113,7 @@ fn main() -> ! {
     if nvm.read_userrow(0, &mut key).is_err() {
         halt();
     }
-    let mut state_store = EepromState::new(&nvm, &cpu, STATE_OFFSET, STATE_LEN);
+    let mut state_store = EepromState::new(&nvm, &cpu, layout::STATE_OFFSET, layout::STATE_LEN);
     let boot_state = state::load(&mut state_store, AGENT_VERSION);
 
     let porta = Port::new(dp.PORTA).split();
@@ -146,23 +135,23 @@ fn main() -> ! {
     let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(F_CPU.hz())));
     let store = BandedStore::new(app, boot);
 
-    let layout = StagingLayout {
+    let staging = StagingLayout {
         application: RegionSlot {
             offset: 0,
-            capacity: APP_CAP - CELLAGENT_CAP,
+            capacity: layout::CELLAGENT_OFFSET,
         },
         cellagent: RegionSlot {
-            offset: APP_CAP - CELLAGENT_CAP,
-            capacity: CELLAGENT_CAP,
+            offset: layout::CELLAGENT_OFFSET,
+            capacity: layout::CELLAGENT_CAP,
         },
         bootloader: RegionSlot {
-            offset: APP_CAP,
-            capacity: BOOT_CAP,
+            offset: layout::BOOT_BAND_OFFSET,
+            capacity: layout::BOOT_EEPROM_CAP,
         },
     };
     let agent = UpdateAgent::new(
         store,
-        layout,
+        staging,
         TARGET_ID,
         CELLAGENT_TARGET_ID,
         &mut key,
@@ -171,7 +160,7 @@ fn main() -> ! {
         boot_state,
     );
     let mut dispatcher = Dispatcher::<_, _, _, 512>::new(agent, NODE_ID);
-    dispatcher.set_panic_record(read_panic_record(&nvm, PANIC_OFFSET));
+    dispatcher.set_panic_record(read_panic_record(&nvm, layout::PANIC_OFFSET));
 
     // USART3 = link to the PROG programmer on the default PB0/PB1 pins.
     let _prog_tx = portb.p0.into_output_high();
@@ -182,7 +171,7 @@ fn main() -> ! {
 
     // Init completed: this boot is healthy, so any prior panic was transient.
     // Clear the crash-loop counter so unrelated panics do not accumulate.
-    clear(&nvm, &cpu, PANIC_OFFSET);
+    clear(&nvm, &cpu, layout::PANIC_OFFSET);
 
     // BRING-UP: no heartbeat. The I2C write to the TCA9535 expander blocks
     // indefinitely when the chip is unreachable (see test-report.md, bug 3),

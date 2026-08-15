@@ -24,11 +24,12 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
-use cat25::{CAT25M01, CAT25128, Cat25};
+use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
-use cellcore::update::state::{self, AppHealth, BOOT_HEALTH_THRESHOLD, StagedState};
+use cellboot::layout;
+use cellcore::update::state::{self, AppHealth, StagedState, BOOT_HEALTH_THRESHOLD};
 use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -38,17 +39,11 @@ use embedded_hal_bus::spi::RefCellDevice;
 /// bootloader picks.
 const F_CPU: HfFreq = HfFreq::Mhz4;
 
-/// On-chip EEPROM slot holding the probe-able agent state.
-const STATE_OFFSET: u16 = 0;
-const STATE_LEN: u16 = 64;
-/// On-chip EEPROM offset of the panic record (after the state slot).
-const PANIC_OFFSET: u16 = STATE_LEN;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 
-/// Flash address where the application begins (right after the 8 KB boot
-/// section).
-const APP_TARGET_BASE: u32 = 0x2000;
+/// Flash address where the application begins (right after the boot section).
+const APP_TARGET_BASE: u32 = layout::BOOT_SECTION_SIZE;
 
 /// Maximum self-program attempts before the bootloader gives up, clears the
 /// staged image, and falls through to the installed app.
@@ -59,7 +54,7 @@ const AGENT_VERSION: u32 = 1;
 
 cellguard_panic::panic_handler!(
     unsafe { pac::Peripherals::steal() },
-    PANIC_OFFSET,
+    layout::PANIC_OFFSET,
     PANIC_THRESHOLD
 );
 
@@ -75,7 +70,7 @@ fn main() -> ! {
     // On-chip NVM: back the agent state with an EEPROM slot, and later use the
     // same NVMCTRL for flash self-programming.
     let nvm = Nvm::new(dp.NVMCTRL);
-    let mut state_store = EepromState::new(&nvm, &cpu, STATE_OFFSET, STATE_LEN);
+    let mut state_store = EepromState::new(&nvm, &cpu, layout::STATE_OFFSET, layout::STATE_LEN);
     let mut state = state::load(&mut state_store, AGENT_VERSION);
 
     let porta = Port::new(dp.PORTA).split();
@@ -115,7 +110,7 @@ fn main() -> ! {
                     state.mark_programmed(Region::ApplicationCode);
                     let _ = state_store.store(&state.serialize());
                     // Fresh application code gets a fresh crash-loop counter.
-                    clear(&nvm, &cpu, PANIC_OFFSET);
+                    clear(&nvm, &cpu, layout::PANIC_OFFSET);
                     dp.RSTCTRL.software_reset(&cpu);
                 }
                 Err(cellprog::programmer::ProgramError::CorruptSource)

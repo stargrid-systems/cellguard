@@ -1,10 +1,11 @@
 //! `cellboot` is the hardware-independent core shared by the `CellGuard`
 //! firmware-update roles.
 //!
-//! It defines the signed image format ([`image`]) and the I/O traits ([`io`])
-//! through which a concrete target performs all of its input and output. Both
-//! roles build on it: the `cellcore` update agent (runs on the core MCU) and
-//! the `cellprog` programmer (runs on the PROG MCU).
+//! It defines the signed image format ([`image`]), the I/O traits ([`io`]),
+//! and the shared storage geometry ([`layout`]) through which a concrete
+//! target performs all of its input and output. Both roles build on it: the
+//! `cellcore` update agent (runs on the core MCU) and the `cellprog`
+//! programmer (runs on the PROG MCU).
 //!
 //! This crate holds no crypto. Signing, streaming verification, and the update
 //! session machinery live in `cellcore`, so the `cellprog` programmer links
@@ -27,5 +28,6 @@
 pub mod drivers;
 pub mod image;
 pub mod io;
+pub mod layout;
 #[cfg(feature = "testutil")]
 pub mod testutil;
