@@ -11,10 +11,10 @@
 
 use core::fmt;
 
-use cellboot::image::{ImageHeader, ParseError, HEADER_LEN, MAC_PREFIX_LEN};
+use cellboot::image::{HEADER_LEN, ImageHeader, MAC_PREFIX_LEN, ParseError};
 use crc::Crc32;
 
-use crate::update::mac::{ct_eq, Mac};
+use crate::update::mac::{Mac, ct_eq};
 
 /// Signs `payload` and returns the complete header bytes.
 ///
@@ -165,10 +165,10 @@ impl<M: Mac> Verifier<M> {
 
 #[cfg(test)]
 mod tests {
-    use cellboot::image::{ImageHeader, ImageKind, Region, HEADER_LEN};
+    use cellboot::image::{HEADER_LEN, ImageHeader, ImageKind, Region};
     use hmac_sha256::HMAC;
 
-    use super::{sign, Verifier, VerifyError};
+    use super::{Verifier, VerifyError, sign};
 
     const KEY: &[u8] = b"unit-test-shared-key";
 

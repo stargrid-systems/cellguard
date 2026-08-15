@@ -148,10 +148,6 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// runtime calls this once the app has proven itself alive (typically
     /// after the first successful field-bus exchange). This persists the new
     /// state.
-    ///
-    /// Calling this repeatedly is harmless but does re-persist each time, so
-    /// the runtime caches a "confirmed this boot" flag and calls it at most
-    /// once per boot.
     pub fn confirm_app_healthy(&mut self) {
         self.state.app_health = AppHealth::Good;
         self.state.boot_count = 0;
@@ -186,15 +182,15 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Consumes the staged image as it is handed off to the programmer.
     ///
     /// Returns the region to program, or `None` when nothing is staged and
-    /// ready. Programming resets the core: the programmer halts it over UPDI,
-    /// so the core never sees the result and must treat the handoff as
-    /// final. This commits to it. The staged image is cleared, an
-    /// application image advances the recorded `app_version` to the staged
-    /// version (health back to `Unknown` until the new app confirms
-    /// itself), and the outcome is recorded as a success. Persistence is
-    /// best-effort: a state-store write failure is not surfaced here, since
-    /// the in-RAM state still drives the current boot and the host can
-    /// observe a stale persisted record only across a reset.
+    /// ready. Programming resets the core (the programmer halts it over
+    /// UPDI), so the core never sees the result and must treat the handoff
+    /// as final: the staged image is cleared, an application image advances
+    /// the recorded `app_version` to the staged version (health back to
+    /// `Unknown` until the new app confirms itself), and the outcome is
+    /// recorded as a success. Persistence is best-effort: a state-store
+    /// write failure is not surfaced here, since the in-RAM state still
+    /// drives the current boot and the host can observe a stale persisted
+    /// record only across a reset.
     ///
     /// There is no rollback enforcement, so if programming never happens (for
     /// example power is lost first) the still-working old image keeps running.

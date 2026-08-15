@@ -113,10 +113,8 @@ fn chunk_len(capacity: usize, remaining: u32) -> usize {
     usize::try_from(remaining.min(cap)).unwrap_or(capacity)
 }
 
-/// Advances a u32 offset by `n` bytes. `chunk_len` bounds `n` by the payload
-/// length (a u32), so the conversion always succeeds on any realistic target.
-/// The saturating fallback only triggers for the impossible case of a
-/// `usize`-wide chunk on a 64-bit host and simply terminates the loop.
+/// Advances a u32 offset by `n` bytes, saturating on the impossible
+/// `usize`-wider-than-`u32` host.
 fn advance(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }

@@ -325,8 +325,6 @@ mod tests {
         );
         assert_eq!(dispatcher.agent().status().staged, StagedState::Ready);
 
-        // Handing off consumes the staged image so a reboot cannot re-trigger
-        // the same flash.
         assert_eq!(
             dispatcher.take_pending_program(),
             Some(Region::ApplicationCode)

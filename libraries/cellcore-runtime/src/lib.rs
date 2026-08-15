@@ -60,10 +60,9 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, const RX: usize> {
     bus: Bus,
     prog: Prog,
     prog_id: u8,
-    /// Whether the running app has confirmed itself healthy this boot. The
-    /// runtime calls [`UpdateAgent::confirm_app_healthy`] on the first
-    /// successful field-bus exchange, then latches this so it does not
-    /// re-persist on every subsequent byte.
+    /// Whether the app has confirmed itself healthy this boot, so
+    /// [`UpdateAgent::confirm_app_healthy`] is persisted at most once per
+    /// boot.
     app_confirmed: bool,
     /// Set after a handoff frame is written, cleared when a `ProgResult`
     /// reply arrives (or a garbage frame does). While set, each serviced byte
@@ -137,21 +136,16 @@ where
     /// Feeds the byte to the dispatcher, writes any response back to the bus,
     /// and hands a newly committed image off to the programmer. The first
     /// successful exchange in a boot also marks the running application
-    /// healthy (resetting the boot counter the bootloader increments), so a
-    /// device that answers the field bus cannot be flagged as a crash loop.
+    /// healthy, so a device that answers the field bus cannot be flagged as a
+    /// crash loop.
     ///
     /// Link errors are swallowed. A dropped bus response is retried on the
     /// next byte because the dispatcher re-derives it from the decoded
-    /// command. A dropped handoff is not retried: the staged image is
-    /// consumed before signaling (see `hand_off`) to avoid races with the
-    /// bootloader self-program path.
+    /// command. A dropped handoff is not retried (see the crate's
+    /// `# Handoff` section).
     pub fn service(&mut self, byte: u8) {
         if let Some(response) = self.dispatcher.feed(byte) {
             let delivered = self.bus.write_all(response).is_ok();
-            // The first delivered response this boot proves the app is alive
-            // and answering the field bus, so clear the boot counter the
-            // bootloader increments. Latch the flag so we persist at most
-            // once per boot rather than on every subsequent byte.
             if delivered && !self.app_confirmed {
                 self.dispatcher.agent_mut().confirm_app_healthy();
                 self.app_confirmed = true;
@@ -167,18 +161,14 @@ where
 
     /// Signals the programmer to flash the committed `region`.
     ///
-    /// The staged image is consumed and persisted before the frame is written.
-    /// If the write fails the update is lost (the outcome is already `Success`
-    /// and `pending_program` returns `None`). This ordering prevents the
-    /// bootloader from self-programming the same image on the next reboot while
-    /// cellprog is simultaneously flashing it over UPDI.
+    /// Consume-before-signal ordering: see the crate's `# Handoff` section.
+    /// A failed write to the link loses the update, because the staged image
+    /// was already consumed and the outcome is already `Success`.
     fn hand_off(&mut self, region: Region) {
         let mut frame = [0u8; PROGRAM_WIRE];
         let Some(len) = handoff::program_frame(self.prog_id, region, &mut frame) else {
             return;
         };
-        // Consume (and persist) before signaling, so a reset during programming
-        // cannot re-trigger the same handoff on reboot.
         let _ = self.dispatcher.take_pending_program();
         if let Some(bytes) = frame.get(..len)
             && self.prog.write_all(bytes).is_ok()
