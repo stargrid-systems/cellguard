@@ -5,6 +5,10 @@ inputs:
     description: Space-separated rustup components to add.
     required: false
     default: ""
+  avr-linker:
+    description: Download the AVR cross toolchain (avr-gcc) from the Ubuntu archive.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -12,6 +16,7 @@ runs:
       shell: bash
       env:
         COMPONENTS: ${{ inputs.components }}
+        AVR_LINKER: ${{ inputs.avr-linker }}
       run: |
         toolchain=$(grep -oP 'channel = "\K[^"]+' rust-toolchain.toml)
         rustup toolchain install --profile minimal "$toolchain"
@@ -19,3 +24,26 @@ runs:
           # shellcheck disable=SC2086
           rustup component add --toolchain "$toolchain" $COMPONENTS
         fi
+        if [ "$AVR_LINKER" != "true" ]; then
+          exit 0
+        fi
+        # Direct .deb downloads skip the slow apt-get update. Versions pinned
+        # to the resolute (26.04) archive.
+        root="$RUNNER_TEMP/avr-toolchain"
+        mkdir -p "$root"
+        base=http://archive.ubuntu.com/ubuntu
+        debs=(
+          # gcc-avr 1:14.2.0-2build1
+          "$base/pool/universe/g/gcc-avr/gcc-avr_14.2.0-2build1_amd64.deb"
+          # binutils-avr 1:2.43.50.20250108-1build1
+          "$base/pool/universe/b/binutils-avr/binutils-avr_2.43.50.20250108-1build1_amd64.deb"
+          # avr-libc 1:2.2.1-1build1
+          "$base/pool/universe/a/avr-libc/avr-libc_2.2.1-1build1_all.deb"
+        )
+        for url in "${debs[@]}"; do
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/pkg.deb" "$url"
+          ar x "$RUNNER_TEMP/pkg.deb" data.tar.zst
+          tar --use-compress-program=unzstd -xf data.tar.zst -C "$root"
+          rm -f data.tar.zst
+        done
+        echo "$root/usr/bin" >>"$GITHUB_PATH"

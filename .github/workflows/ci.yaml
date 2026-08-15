@@ -15,40 +15,14 @@ defaults:
 jobs:
   discover:
     name: Discover workspaces
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
-      workspaces: ${{ steps.list.outputs.workspaces }}
+      workspaces: ${{ steps.discover.outputs.workspaces }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: List workspace roots
-        id: list
-        run: |
-          # A manifest is a root if it declares a [workspace] table, or if it is
-          # a standalone package with no ancestor workspace to inherit from.
-          roots=()
-          while IFS= read -r manifest; do
-            dir=${manifest%/*}
-            dir=${dir#./}
-            if grep -q '^\[workspace\]' "$manifest"; then
-              roots+=("$dir")
-              continue
-            fi
-            member=0
-            ancestor=$(dirname "$dir")
-            while [ "$ancestor" != "." ]; do
-              if [ -f "$ancestor/Cargo.toml" ] &&
-                grep -q '^\[workspace\]' "$ancestor/Cargo.toml"; then
-                member=1
-                break
-              fi
-              ancestor=$(dirname "$ancestor")
-            done
-            if [ "$member" -eq 0 ]; then
-              roots+=("$dir")
-            fi
-          done < <(find . -name Cargo.toml -not -path '*/target/*' | sort)
-          echo "workspaces=$(printf '%s\n' "${roots[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+      - id: discover
+        uses: ./.github/actions/discover-workspaces
 
   lint:
     name: Lint (${{ matrix.workspace }})
@@ -89,18 +63,23 @@ jobs:
         workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: target
+        name: Detect AVR workspace
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          if grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
+            echo "avr=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "avr=false" >>"$GITHUB_OUTPUT"
+          fi
       - uses: ./.github/actions/install-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ matrix.workspace }}
       - name: Test
+        if: steps.target.outputs.avr == 'false'
         working-directory: ${{ matrix.workspace }}
-        run: |
-          if grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
-            echo "embedded workspace, no host tests"
-            exit 0
-          fi
-          cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked
 
   build:
     name: Build (${{ matrix.workspace }})
@@ -114,18 +93,19 @@ jobs:
         workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: target
+        name: Detect AVR workspace
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          if grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
+            echo "avr=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "avr=false" >>"$GITHUB_OUTPUT"
+          fi
       - uses: ./.github/actions/install-toolchain
         with:
           components: rust-src
-      - name: Install AVR linker
-        working-directory: ${{ matrix.workspace }}
-        run: |
-          if ! grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
-            echo "host workspace, no AVR linker needed"
-            exit 0
-          fi
-          sudo apt-get update -q
-          sudo apt-get install -y -q gcc-avr
+          avr-linker: ${{ steps.target.outputs.avr }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ matrix.workspace }}
@@ -137,7 +117,7 @@ jobs:
     name: ci-pass
     needs: [lint, test, build]
     if: ${{ always() }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Evaluate
