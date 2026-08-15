@@ -36,14 +36,10 @@ pub mod nvmctrl {
     /// Status register.
     pub const STATUS: u16 = super::NVMCTRL_BASE + 0x02;
 
-    /// No command.
-    pub const CMD_NONE: u8 = 0x00;
     /// Write page.
     pub const CMD_WP: u8 = 0x01;
     /// Page erase.
     pub const CMD_ER: u8 = 0x02;
-    /// Erase and write page.
-    pub const CMD_ERWP: u8 = 0x03;
     /// Page buffer clear.
     pub const CMD_PBC: u8 = 0x04;
 
