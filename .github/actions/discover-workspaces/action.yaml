@@ -1,0 +1,12 @@
+name: Discover workspaces
+description: Outputs the reachable workspace roots of the repository as a JSON array.
+outputs:
+  workspaces:
+    description: JSON array of workspace root directories.
+    value: ${{ steps.discover.outputs.workspaces }}
+runs:
+  using: composite
+  steps:
+    - id: discover
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/discover-workspaces.sh"

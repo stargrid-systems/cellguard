@@ -1,0 +1,30 @@
+name: Install Rust toolchain
+description: Installs the toolchain pinned in rust-toolchain.toml.
+inputs:
+  components:
+    description: Space-separated rustup components to add.
+    required: false
+    default: ""
+  avr-linker:
+    description: Download the AVR cross toolchain (avr-gcc) from the Ubuntu archive.
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Install
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      run: bash "${GITHUB_ACTION_PATH}/install-toolchain.sh"
+    - name: Install AVR linker
+      if: ${{ inputs.avr-linker == 'true' }}
+      uses: ./.github/actions/install-deb
+      with:
+        urls: |
+          # gcc-avr 1:14.2.0-2build1
+          http://archive.ubuntu.com/ubuntu/pool/universe/g/gcc-avr/gcc-avr_14.2.0-2build1_amd64.deb
+          # binutils-avr 1:2.43.50.20250108-1build1
+          http://archive.ubuntu.com/ubuntu/pool/universe/b/binutils-avr/binutils-avr_2.43.50.20250108-1build1_amd64.deb
+          # avr-libc 1:2.2.1-1build1
+          http://archive.ubuntu.com/ubuntu/pool/universe/a/avr-libc/avr-libc_2.2.1-1build1_all.deb
