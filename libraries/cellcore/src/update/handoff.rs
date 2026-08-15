@@ -27,6 +27,10 @@ const PROGRAM_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
 /// outbound buffer with this.
 pub const PROGRAM_WIRE: usize = max_encoded_len(PROGRAM_FRAME);
 
+/// Size of a decoded `ProgResult` frame: header, one status byte, and the
+/// payload CRC. Size a receive buffer with this.
+pub const RESULT_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
+
 /// Maps a committed region to the programmer source that flashes it.
 ///
 /// Returns `None` for a region that is not a programmable target (the factory

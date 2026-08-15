@@ -33,7 +33,7 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
-use cat25::{CAT25M01, CAT25128, Cat25};
+use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::NoKeyStore;
 use cellboot::{layout, state};
@@ -70,6 +70,9 @@ const PANIC_THRESHOLD: u8 = 3;
 
 /// USART5 receive timeout in ms.
 const BUS_RX_TIMEOUT_MS: u32 = 10;
+/// USART3 receive timeout in ms. Bounds the per-tick programmer-reply poll
+/// while an in-flight handoff waits for its `ProgResult`.
+const PROG_RX_TIMEOUT_MS: u32 = 5;
 
 cellguard_panic::panic_handler!(
     unsafe { pac::Peripherals::steal() },
@@ -164,7 +167,11 @@ fn main() -> ! {
     // USART3 = link to the PROG programmer on the default PB0/PB1 pins.
     let _prog_tx = portb.p0.into_output_high();
     let _prog_rx = portb.p1.into_input();
-    let prog = build_usart(Usart::builder(dp.USART3, F_CPU.hz()).baud(PROG_BAUD));
+    let prog = build_usart(
+        Usart::builder(dp.USART3, F_CPU.hz())
+            .baud(PROG_BAUD)
+            .rx_timeout_ms(PROG_RX_TIMEOUT_MS),
+    );
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
 

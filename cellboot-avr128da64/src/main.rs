@@ -24,13 +24,12 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
-use cat25::{Cat25, CAT25128, CAT25M01};
+use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
 use cellboot::io::{BandedStore, StateStore};
-use cellboot::layout;
-use cellboot::programmer::{self, ProgramError};
-use cellboot::state::{self, AppHealth, StagedState, BOOT_HEALTH_THRESHOLD};
+use cellboot::state::{self, AppHealth, BOOT_HEALTH_THRESHOLD, StagedState};
+use cellboot::{layout, programmer};
 use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
@@ -94,9 +93,6 @@ fn main() -> ! {
 
     // If a verified application image is staged, self-program it into flash.
     if state.staged == StagedState::Ready && state.staged_region == Some(Region::ApplicationCode) {
-        // A corrupt staged source or an unparseable header will never succeed
-        // by retrying, so they short-circuit straight to giving up. Transient
-        // failures (NVM/store/verify/release) consume a retry attempt and reset.
         let give_up = if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
             let mut writer = FlashNvmWriter::new(&nvm, &cpu);
             let mut scratch = [0u8; 256];
@@ -108,12 +104,12 @@ fn main() -> ! {
                     clear(&nvm, &cpu, layout::PANIC_OFFSET);
                     dp.RSTCTRL.software_reset(&cpu);
                 }
-                Err(ProgramError::CorruptSource) | Err(ProgramError::Header(_)) => true,
-                Err(_) => {
+                Err(err) if programmer::retryable(&err) => {
                     state.program_attempts += 1;
                     let _ = state_store.store(&state.serialize());
                     dp.RSTCTRL.software_reset(&cpu);
                 }
+                Err(_) => true,
             }
         } else {
             true

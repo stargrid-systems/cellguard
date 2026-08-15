@@ -161,6 +161,20 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let _ = self.state_store.store(&self.state.serialize());
     }
 
+    /// Records that the programmer failed to flash a handed-off image.
+    ///
+    /// The handoff consumes the staged image and records `Success` before the
+    /// programmer runs (see [`UpdateAgent::take_pending_program`]). When the
+    /// programmer later reports failure over the local link, this flips the
+    /// persisted outcome to `ProgramFailed`, so a probe does not report a
+    /// flash that never succeeded.
+    pub fn record_program_failure(&mut self) {
+        if self.state.last_outcome != UpdateOutcome::ProgramFailed {
+            self.state.last_outcome = UpdateOutcome::ProgramFailed;
+            let _ = self.state_store.store(&self.state.serialize());
+        }
+    }
+
     /// Returns a shared reference to the staging store.
     #[must_use]
     pub const fn store(&self) -> &S {

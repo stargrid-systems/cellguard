@@ -13,9 +13,9 @@
 //! # Handoff
 //!
 //! When the agent has a committed image ready, the runtime builds the
-//! `cellprog` request and sends it over the programmer link. Programming resets
-//! the core (the programmer halts it over UPDI), so the runtime does not wait
-//! for a reply: it consumes the staged image first (see
+//! `cellprog` request and sends it over the programmer link. Programming an
+//! application or bootloader image resets the core (the programmer halts it
+//! over UPDI), so the runtime consumes the staged image first (see
 //! [`Dispatcher::take_pending_program`]), which persists the new state, then
 //! signals the programmer. A reset mid-programming therefore cannot make the
 //! core re-trigger the same flash on reboot.
@@ -26,6 +26,17 @@
 //! local UART with negligible failure probability, and the alternative
 //! (write-first) would race the bootloader self-program path with the cellprog
 //! UPDI flash if the programmer resets the core before the runtime can consume.
+//!
+//! # Programmer reply
+//!
+//! A cellagent handoff does not reset the core, so the runtime stays alive to
+//! read the programmer's `ProgResult` reply. After sending the request it
+//! polls the programmer link for one bounded read per serviced byte (the link
+//! must therefore have a receive timeout, not block forever). A reported
+//! failure flips the persisted outcome to `ProgramFailed` via
+//! [`UpdateAgent::record_program_failure`]. Application and bootloader
+//! handoffs never see a reply, so their outcome stays `Success`, which is
+//! accurate: the bootloader owns those flash paths and tracks its own attempts.
 
 #![no_std]
 #![warn(missing_docs)]
@@ -36,7 +47,8 @@ extern crate std;
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellcore::update::dispatch::Dispatcher;
-use cellcore::update::handoff::{self, PROGRAM_WIRE};
+use cellcore::update::handoff::{self, PROGRAM_WIRE, RESULT_FRAME};
+use cellguard_protocol::{Decoder, Packet, ProgStatus};
 use embedded_io::{Read, Write};
 
 /// An in-RAM [`ImageStore`] for bring-up and testing.
@@ -125,6 +137,14 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, const RX: usize> {
     /// successful field-bus exchange, then latches this so it does not
     /// re-persist on every subsequent byte.
     app_confirmed: bool,
+    /// Set after a handoff frame is written, cleared when a `ProgResult`
+    /// reply arrives (or a garbage frame does). While set, each serviced byte
+    /// also polls the programmer link for the reply.
+    awaiting_prog_result: bool,
+    /// COBS decoder state for the programmer reply.
+    prog_decoder: Decoder,
+    /// Scratch for one decoded programmer-reply frame.
+    prog_scratch: [u8; RESULT_FRAME],
 }
 
 impl<'k, S, K, St, Bus, Prog, const RX: usize> CoreRuntime<'k, S, K, St, Bus, Prog, RX>
@@ -133,7 +153,7 @@ where
     K: KeyStore,
     St: StateStore,
     Bus: Read + Write,
-    Prog: Write,
+    Prog: Read + Write,
 {
     /// Creates a runtime around `dispatcher`.
     ///
@@ -151,6 +171,9 @@ where
             prog,
             prog_id,
             app_confirmed: false,
+            awaiting_prog_result: false,
+            prog_decoder: Decoder::new(),
+            prog_scratch: [0; RESULT_FRAME],
         }
     }
 
@@ -167,15 +190,17 @@ where
 
     /// Attempts to read and service one bus byte.
     ///
-    /// If no byte arrives within the bus receive timeout, returns immediately.
-    /// Call this from a custom event loop that has other periodic duties, like
-    /// a heartbeat toggle.
+    /// If no byte arrives within the bus receive timeout, returns immediately
+    /// (after polling an in-flight programmer reply). Call this from a custom
+    /// event loop that has other periodic duties, like a heartbeat toggle.
     pub fn try_service(&mut self) {
         let mut buf = [0u8; 1];
         if self.bus.read_exact(&mut buf).is_ok()
             && let Some(&byte) = buf.first()
         {
             self.service(byte);
+        } else if self.awaiting_prog_result {
+            self.poll_prog_result();
         }
     }
 
@@ -207,6 +232,9 @@ where
         if let Some(region) = self.dispatcher.agent().pending_program() {
             self.hand_off(region);
         }
+        if self.awaiting_prog_result {
+            self.poll_prog_result();
+        }
     }
 
     /// Signals the programmer to flash the committed `region`.
@@ -224,8 +252,38 @@ where
         // Consume (and persist) before signaling, so a reset during programming
         // cannot re-trigger the same handoff on reboot.
         let _ = self.dispatcher.take_pending_program();
-        if let Some(bytes) = frame.get(..len) {
-            let _ = self.prog.write_all(bytes);
+        if let Some(bytes) = frame.get(..len)
+            && self.prog.write_all(bytes).is_ok()
+        {
+            self.awaiting_prog_result = true;
+        }
+    }
+
+    /// Polls the programmer link for the `ProgResult` reply of an in-flight
+    /// handoff, one bounded read per call.
+    ///
+    /// A read timeout or link error leaves the poll armed for the next call.
+    /// A completed frame clears it, whatever it contains: a reported failure
+    /// is recorded, `Ok` and anything unparsable are not.
+    fn poll_prog_result(&mut self) {
+        let mut byte = [0u8; 1];
+        if self.prog.read_exact(&mut byte).is_err() {
+            return;
+        }
+        let Ok(Some(n)) = self.prog_decoder.feed(byte[0], &mut self.prog_scratch) else {
+            return;
+        };
+        self.awaiting_prog_result = false;
+        if n == 0 {
+            return;
+        }
+        let status = Packet::parse(self.prog_scratch.get(..n).unwrap_or(&[]))
+            .ok()
+            .and_then(|packet| handoff::parse_result(&packet));
+        if let Some(status) = status
+            && status != ProgStatus::Ok
+        {
+            self.dispatcher.agent_mut().record_program_failure();
         }
     }
 }
@@ -238,7 +296,7 @@ mod tests {
     use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore};
     use cellcore::update::dispatch::Dispatcher;
     use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-    use cellguard_protocol::{Decoder, Encoder, Kind, Packet};
+    use cellguard_protocol::{Decoder, Encoder, Kind, Packet, ProgStatus};
 
     use super::CoreRuntime;
 
@@ -251,10 +309,23 @@ mod tests {
     /// Concrete test store, pinned to the test capacity.
     type MemStore = MemStoreImpl<CAP>;
 
-    /// A link that records everything written and never yields a read byte.
+    /// A link that records everything written and yields scripted read bytes.
     #[derive(Default)]
     struct MockLink {
         written: std::vec::Vec<u8>,
+        readable: std::vec::Vec<u8>,
+    }
+
+    impl MockLink {
+        /// Encodes a packet as a COBS frame and queues it for reading.
+        fn queue_packet(&mut self, kind: Kind, payload: &[u8]) {
+            let mut raw = [0u8; 64];
+            let n = Packet::write(PROG_ID, kind, payload, &mut raw).unwrap();
+            let mut encoder = Encoder::new(&raw[..n]);
+            while let Some(byte) = encoder.pull() {
+                self.readable.push(byte);
+            }
+        }
     }
 
     impl embedded_io::ErrorType for MockLink {
@@ -273,8 +344,11 @@ mod tests {
     }
 
     impl embedded_io::Read for MockLink {
-        fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
-            Ok(0)
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            let n = buf.len().min(self.readable.len());
+            buf[..n].copy_from_slice(&self.readable[..n]);
+            self.readable.drain(..n);
+            Ok(n)
         }
     }
 
@@ -444,5 +518,59 @@ mod tests {
         let sent = runtime.prog.written.len();
         runtime.service(0);
         assert_eq!(runtime.prog.written.len(), sent);
+    }
+
+    #[test]
+    fn programmer_ok_reply_keeps_success_outcome() {
+        let ready = ready_state(Region::CellagentApp);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready);
+        runtime
+            .prog
+            .queue_packet(Kind::ProgResult, &[ProgStatus::Ok.to_code()]);
+
+        // The reply is consumed one byte per loop tick.
+        runtime.service(0);
+        for _ in 0..32 {
+            runtime.try_service();
+        }
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::Success
+        );
+        assert!(!runtime.awaiting_prog_result);
+    }
+
+    #[test]
+    fn programmer_failure_reply_records_program_failed() {
+        let ready = ready_state(Region::CellagentApp);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready);
+        runtime
+            .prog
+            .queue_packet(Kind::ProgResult, &[ProgStatus::OkReleaseFailed.to_code()]);
+
+        runtime.service(0);
+        for _ in 0..32 {
+            runtime.try_service();
+        }
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::ProgramFailed
+        );
+    }
+
+    fn ready_state(region: Region) -> PersistentState {
+        PersistentState {
+            agent_version: 1,
+            app_version: 0,
+            staged_version: 9,
+            app_health: AppHealth::Unknown,
+            staged: StagedState::Ready,
+            staged_region: Some(region),
+            last_outcome: UpdateOutcome::None,
+            program_attempts: 0,
+            boot_count: 0,
+        }
     }
 }

@@ -100,6 +100,17 @@ where
     Ok(header)
 }
 
+/// Whether a failed [`program`] attempt can succeed if retried.
+///
+/// A corrupt staged source or an unparseable header never succeeds by
+/// retrying, so the bootloader gives up on them immediately. All other
+/// failures (store, NVM, verify, release) can be transient and are worth
+/// another attempt.
+#[must_use]
+pub const fn retryable<S, N>(err: &ProgramError<S, N>) -> bool {
+    !matches!(err, ProgramError::CorruptSource | ProgramError::Header(_))
+}
+
 /// The number of bytes to move this step: the smaller of the scratch capacity
 /// and the bytes remaining.
 fn chunk_len(capacity: usize, remaining: u32) -> usize {

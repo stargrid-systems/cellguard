@@ -141,6 +141,7 @@ version = "0.1.0"
 dependencies = [
  "cellboot",
  "cellcore",
+ "cellguard-protocol",
  "embedded-io",
 ]
 

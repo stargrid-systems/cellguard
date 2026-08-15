@@ -12,6 +12,7 @@ rust-version.workspace = true
 [dependencies]
 cellboot = { workspace = true }
 cellcore = { workspace = true }
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
 embedded-io = { workspace = true }
 
 [dev-dependencies]
