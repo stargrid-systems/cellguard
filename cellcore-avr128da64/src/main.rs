@@ -33,7 +33,7 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
-use cat25::{Cat25, CAT25128, CAT25M01};
+use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::{BandedStore, NoKeyStore};
 use cellboot::{layout, state};
