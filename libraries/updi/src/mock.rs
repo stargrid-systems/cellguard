@@ -14,8 +14,8 @@
 //! against the address or page buffer already loaded, so data must come first.
 
 use crate::driver::{
-    cs, ACK, ADDR_16, ADDR_24, OP_KEY, OP_LD, OP_LDCS, OP_LDS, OP_REPEAT, OP_ST, OP_STCS, OP_STS,
-    PTR_INC, PTR_SET, RESET_RELEASE, RESET_REQUEST, SIZE_16, SIZE_24, SYNCH,
+    ACK, ADDR_16, ADDR_24, OP_KEY, OP_LD, OP_LDCS, OP_LDS, OP_REPEAT, OP_ST, OP_STCS, OP_STS,
+    PTR_INC, PTR_SET, RESET_RELEASE, RESET_REQUEST, SIZE_16, SIZE_24, SYNCH, cs,
 };
 use crate::link::UpdiLink;
 use crate::programmer::asi;
@@ -190,11 +190,7 @@ impl MockTarget {
     fn flash_index(&self, addr: u32) -> Option<usize> {
         addr.checked_sub(self.flash_base).and_then(|delta| {
             let idx = delta as usize;
-            if idx < FLASH_LEN {
-                Some(idx)
-            } else {
-                None
-            }
+            if idx < FLASH_LEN { Some(idx) } else { None }
         })
     }
 
