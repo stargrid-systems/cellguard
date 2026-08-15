@@ -203,6 +203,12 @@ fn main() -> ! {
 
     let mut last_level = heartbeat.is_high().unwrap_or(true);
     let mut last_edge = rtc.count();
+    // BRING-UP gate: the cellcore heartbeat is disabled (I2C blocking bug, see
+    // the bring-up test report), so silence must not be read as core death.
+    // Recovery only arms once a heartbeat edge has actually been seen since
+    // programmer boot. Drop this gate once the TWI timeout fix re-enables the
+    // heartbeat.
+    let mut heartbeat_seen = false;
     let mut resets = 0u8;
     let mut reflashes = 0u8;
     // Latched once both recovery tiers are exhausted, so the dead branch does
@@ -245,13 +251,17 @@ fn main() -> ! {
         if level != last_level {
             last_level = level;
             last_edge = rtc.count();
+            heartbeat_seen = true;
             resets = 0;
             reflashes = 0;
             recovery_given_up = false;
         }
 
         // --- Heartbeat lost: tiered recovery ---
-        if !recovery_given_up && rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS {
+        if heartbeat_seen
+            && !recovery_given_up
+            && rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS
+        {
             if resets < MAX_RESETS {
                 // Tier 1: pulse RESET_AVR64 low.
                 let _ = reset_n.set_low();
