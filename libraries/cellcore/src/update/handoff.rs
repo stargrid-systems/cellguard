@@ -6,7 +6,7 @@
 //! the image straight from the shared EEPROM, so only a one-byte [`ProgSource`]
 //! selector crosses the link, never the image bytes.
 //!
-//! [`program_frame`] builds the outbound request; [`parse_result`] reads the
+//! [`program_frame`] builds the outbound request. [`parse_result`] reads the
 //! programmer's reply. The transport (COBS decode, `Packet::parse`) is the
 //! caller's, reusing [`cellguard_protocol`] exactly as the field bus does.
 //!
@@ -14,7 +14,8 @@
 
 use cellboot::image::Region;
 use cellguard_protocol::{
-    HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame, max_encoded_len,
+    HEADER_LEN, Kind, PAYLOAD_CRC_LEN, Packet, ProgSource, ProgStatus, encode_frame,
+    max_encoded_len,
 };
 
 /// Size of a `ProgProgram` frame before COBS: header, one selector byte, and

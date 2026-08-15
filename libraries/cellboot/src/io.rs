@@ -118,7 +118,7 @@ pub trait SystemControl {
 /// Persistent storage for the shared authentication key.
 ///
 /// The key normally lives in the AVR128 USERROW, provisioned once at the
-/// factory. Only development builds provide a writable implementation; see
+/// factory. Only development builds provide a writable implementation. See
 /// [`NoKeyStore`] for the production default.
 pub trait KeyStore {
     /// Error type reported by the store.

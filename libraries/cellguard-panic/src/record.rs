@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn blank_eeprom_fails_to_parse() {
-        // A never-written EEPROM slot reads all `0xFF`; it must fail to parse
+        // A never-written EEPROM slot reads all `0xFF`. It must fail to parse
         // (CRC first, then version) so callers treat it as "no record".
         let bytes = [0xFFu8; RECORD_LEN];
         assert!(PanicRecord::parse(&bytes).is_err());

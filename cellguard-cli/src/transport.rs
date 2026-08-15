@@ -7,13 +7,11 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use cellguard_protocol::{
-    DecodeError, Decoder, Kind, Packet, encode_frame, max_encoded_len,
-};
+use cellguard_protocol::{encode_frame, max_encoded_len, DecodeError, Decoder, Kind, Packet};
 use serialport::SerialPort;
 
 /// Maximum decoded frame we can receive. The biggest response payload is a
-/// `PersistentState` (28 bytes) or a `PanicRecord` (64 bytes); either fits well
+/// `PersistentState` (28 bytes) or a `PanicRecord` (64 bytes). Either fits well
 /// within this bound with room for future growth.
 const RX_BUF: usize = 256;
 
@@ -51,8 +49,8 @@ impl Transport {
     /// Sends a command packet addressed to `id` and blocks for the response.
     ///
     /// Returns the parsed response packet. The response `id` is not checked:
-    /// the device always replies with the sender's `id`, and on a point-to-point
-    /// field-bus link there is exactly one responder.
+    /// the device always replies with the sender's `id`, and on a
+    /// point-to-point field-bus link there is exactly one responder.
     ///
     /// # Errors
     ///
@@ -70,8 +68,7 @@ impl Transport {
         let mut wire = vec![0u8; TX_WIRE];
         let wire_len = encode_frame(&raw[..raw_len], &mut wire)
             .ok_or_else(|| io::Error::other("COBS encode failed: output too small"))?;
-        self.port
-            .write_all(&wire[..wire_len])?;
+        self.port.write_all(&wire[..wire_len])?;
         self.port.flush()
     }
 
@@ -79,10 +76,18 @@ impl Transport {
         let mut byte = [0u8; 1];
         loop {
             match self.port.read(&mut byte) {
-                Ok(0) => return Err(io::Error::new(io::ErrorKind::TimedOut, "serial read timed out")),
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "serial read timed out",
+                    ))
+                }
                 Ok(_) => {}
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "no response within timeout"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "no response within timeout",
+                    ));
                 }
                 Err(e) => return Err(e),
             }
@@ -101,9 +106,7 @@ impl Transport {
                 }
                 Ok(None) => {}
                 Err(DecodeError::BufferTooSmall) => {
-                    return Err(io::Error::other(
-                        "response frame too large for RX buffer",
-                    ));
+                    return Err(io::Error::other("response frame too large for RX buffer"));
                 }
                 Err(DecodeError::InvalidFrame) => {
                     return Err(io::Error::other("malformed COBS frame on bus"));

@@ -54,7 +54,7 @@ where
 ///
 /// The counter is read from the [`PanicRecord`] at EEPROM `offset`. A blank or
 /// corrupt slot counts as zero. The first `threshold` panics reset the device
-/// (counter 1..=`threshold`); the next panic returns [`Decision::Halt`]
+/// (counter 1..=`threshold`). The next panic returns [`Decision::Halt`]
 /// instead. A healthy boot clears the slot so a single transient panic does not
 /// accumulate.
 ///

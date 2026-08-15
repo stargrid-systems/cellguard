@@ -8,8 +8,8 @@
 //! balancer gates (GATE_A, GATE_B) and the emergency gate-off
 //! (OUT_TINY_ALL_OFF), reads the LM61 temperature sensor, and toggles an ALIVE
 //! heartbeat pin. It talks to the cellcore over USART0 using the
-//! `cellguard-protocol`. All protocol logic lives in the `cellagent` library;
-//! this crate only maps it onto the chip.
+//! `cellguard-protocol`. All protocol logic lives in the `cellagent` library.
+//! This crate only maps it onto the chip.
 //!
 //! Pin map (see `scratch/hardware/cellagent-mcu.md`):
 //! - PA3 = GATE_B, PA4 = GATE_A, PA5 = ALIVE.

@@ -1,29 +1,29 @@
 //! Persistent panic record and crash-loop policy for the `CellGuard` firmware.
 //!
-//! A panic handler stores a [`record::PanicRecord`] (the panic location plus
+//! A panic handler stores a [`PanicRecord`] (the panic location plus
 //! the reset-cause flags and a crash-loop counter) in on-chip EEPROM, then
 //! resets the device. A later boot or a field-bus probe reads the record back
 //! to learn where and why the device panicked. After a configurable number of
 //! consecutive panic-resets the policy halts instead of resetting, so a
 //! persistent fault cannot reboot-loop forever.
 //!
-//! The [`record`] module is pure and host-testable. The NVM-backed storage and
+//! The record module is pure and host-testable. The NVM-backed storage and
 //! reset/halt decision live behind the `hal` feature.
 //!
 //! # Features
 //!
 //! - `hal` (off by default): EEPROM-backed panic storage and the
-//!   [`store::store_and_decide`] policy. Requires `avrxt-hal`.
+//!   [`store_and_decide`] policy. Requires `avrxt-hal`.
 
 #![no_std]
 
 pub use self::record::{FILE_CAP, PanicRecord, RECORD_FORMAT_VERSION, RECORD_LEN};
-
-pub mod record;
-#[cfg(feature = "hal")]
-pub mod store;
 #[cfg(feature = "hal")]
 pub use self::store::{Decision, clear, read_panic_record, store_and_decide};
+
+mod record;
+#[cfg(feature = "hal")]
+mod store;
 
 /// Defines a standard `#[panic_handler]` for a CellGuard firmware crate.
 ///
@@ -48,14 +48,7 @@ macro_rules! panic_handler {
             let dp = $steal_peripherals;
             let nvm = avrxt_hal::nvmctrl::Nvm::new(dp.NVMCTRL);
             let flags = avrxt_hal::rstctrl::RstInstance::flags(&dp.RSTCTRL).bits();
-            match $crate::store_and_decide(
-                &nvm,
-                &dp.CPU,
-                $offset,
-                $threshold,
-                flags,
-                info,
-            ) {
+            match $crate::store_and_decide(&nvm, &dp.CPU, $offset, $threshold, flags, info) {
                 $crate::Decision::Reset => {
                     avrxt_hal::rstctrl::RstInstance::software_reset(&dp.RSTCTRL, &dp.CPU)
                 }

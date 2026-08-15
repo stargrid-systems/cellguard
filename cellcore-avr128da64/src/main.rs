@@ -31,7 +31,7 @@ use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::spi::{Prescaler, Spi};
 use avrxt_hal::twi::Twi;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
-use cat25::{CAT25M01, CAT25128, Cat25};
+use cat25::{Cat25, CAT25128, CAT25M01};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::NoKeyStore;
 use cellcore::update::dispatch::Dispatcher;
@@ -96,7 +96,7 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // BRING-UP: USART5 debug UART on PG4/PG5. Default USART5 pins are PG0/PG1;
+    // BRING-UP: USART5 debug UART on PG4/PG5. Default USART5 pins are PG0/PG1.
     // PORTMUX ALT1 routes to PG4/PG5 where the DFRobot adapter is connected.
     // Initialized first so diagnostic output is available for every later step.
     dp.PORTMUX.usartrouteb().modify(|_, w| w.usart5().alt1());

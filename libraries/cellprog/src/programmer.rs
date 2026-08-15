@@ -24,7 +24,7 @@ const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 ///
 /// `image_offset` is where the image (header then payload) begins in `store`.
 /// `target_base` is where the payload is written in the target's program
-/// memory. `scratch` is the streaming buffer; a size that divides the target
+/// memory. `scratch` is the streaming buffer. A size that divides the target
 /// page (for example 64 bytes) works well.
 ///
 /// On success the target has been written, verified, and released to run, and
@@ -52,8 +52,8 @@ where
     W: NvmWriter,
 {
     // An empty scratch would make `chunk_len` return 0 and the loops below
-    // would never advance. The supervisor always supplies a 64-byte buffer;
-    // this guard makes misuse of the public API loud rather than hanging the
+    // would never advance. The supervisor always supplies a 64-byte buffer.
+    // This guard makes misuse of the public API loud rather than hanging the
     // device.
     assert!(!scratch.is_empty());
 
@@ -107,8 +107,8 @@ fn chunk_len(capacity: usize, remaining: u32) -> usize {
 }
 
 /// Advances a u32 offset by `n` bytes. `chunk_len` bounds `n` by the payload
-/// length (a u32), so the conversion always succeeds on any realistic target;
-/// the saturating fallback only triggers for the impossible case of a
+/// length (a u32), so the conversion always succeeds on any realistic target.
+/// The saturating fallback only triggers for the impossible case of a
 /// `usize`-wide chunk on a 64-bit host and simply terminates the loop.
 fn advance(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)

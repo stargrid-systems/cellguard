@@ -12,7 +12,7 @@ use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
-use crate::update::command::{Command, NackReason, Response, KEY_LEN};
+use crate::update::command::{Command, KEY_LEN, NackReason, Response};
 use crate::update::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
 use crate::update::verify::Verifier;
 

@@ -1,8 +1,8 @@
 //! Drives the update agent from the bus.
 //!
 //! [`Dispatcher`] owns an [`UpdateAgent`] plus the COBS decode state and its
-//! receive buffer. Feed it wire bytes one at a time with [`Dispatcher::feed`];
-//! when a complete frame addressed to this node carries a bootloader command,
+//! receive buffer. Feed it wire bytes one at a time with [`Dispatcher::feed`].
+//! When a complete frame addressed to this node carries a bootloader command,
 //! it runs the agent and returns the COBS-encoded response to transmit.
 //!
 //! Frames that fail to decode, fail their CRCs, are addressed to another node,
@@ -13,7 +13,9 @@
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellguard_panic::{PanicRecord, RECORD_LEN};
-use cellguard_protocol::{Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len};
+use cellguard_protocol::{
+    Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len,
+};
 
 use crate::update::command::Command;
 use crate::update::session::UpdateAgent;
@@ -91,7 +93,8 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
     /// Returns `Some(frame)` with the COBS-encoded response to transmit when a
     /// complete, valid, in-scope command was handled, otherwise `None`.
     pub fn feed(&mut self, byte: u8) -> Option<&[u8]> {
-        // `None` mid-frame; `Err` is bus noise the decoder already resynced from.
+        // `None` is a mid-frame feed. `Err` is bus noise the decoder already
+        // resynced from.
         let Ok(Some(len)) = self.decoder.feed(byte, &mut self.rx) else {
             return None;
         };

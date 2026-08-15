@@ -86,8 +86,8 @@ impl<P: FlashProg> NvmWriter for UpdiNvmWriter<P> {
 #[cfg(test)]
 mod tests {
     use cellboot::io::NvmWriter;
-    use updi::mock::MockTarget;
     use updi::Programmer;
+    use updi::mock::MockTarget;
 
     use super::UpdiNvmWriter;
 

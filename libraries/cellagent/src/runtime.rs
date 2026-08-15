@@ -56,8 +56,9 @@ impl CellagentRuntime {
     /// Feeds one received byte.
     ///
     /// When a complete packet is decoded, handles it and writes any response to
-    /// `out`. No response is produced (and nothing is written) for an incomplete
-    /// frame, a frame addressed to another node, or a decode error.
+    /// `out`. No response is produced (and nothing is written) for an
+    /// incomplete frame, a frame addressed to another node, or a decode
+    /// error.
     pub fn service<G, T, W>(&mut self, byte: u8, gates: &mut G, temp: &mut T, out: &mut W)
     where
         G: GateControl,

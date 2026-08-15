@@ -76,7 +76,7 @@ impl ProgLayout {
 
 /// The programmer's bus driver.
 ///
-/// `RX` sizes the receive buffer; program requests are tiny, so it can be
+/// `RX` sizes the receive buffer. Program requests are tiny, so it can be
 /// small. The [`NvmWriter`] is supplied per flash (see [`Supervisor::program`])
 /// so the firmware can share one USART between the command link and UPDI.
 pub struct Supervisor<S, const RX: usize> {

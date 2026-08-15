@@ -142,7 +142,7 @@ fn main() -> ! {
     let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, SpiPrescaler::Div16));
 
     // App and Boot chip-selects (active low, idle high). PC3 also doubles as
-    // the SPI hardware SS; CTRLB.SSD keeps it usable as a GPIO CS.
+    // the SPI hardware SS. CTRLB.SSD keeps it usable as a GPIO CS.
     let cs_app = porta.p2.into_output_high();
     let cs_boot = portc.p3.into_output_high();
     let app_dev = RefCellDevice::new_no_delay(&spi, cs_app).unwrap_or_else(|_| halt());

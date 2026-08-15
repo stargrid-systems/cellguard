@@ -1,4 +1,4 @@
-//! A [`ImageStore`] backed by a CAT25 SPI EEPROM.
+//! An [`ImageStore`] backed by a CAT25 SPI EEPROM.
 
 use cat25::{Cat25, Error};
 use embedded_hal::delay::DelayNs;
@@ -6,7 +6,7 @@ use embedded_hal::spi::SpiDevice;
 
 use crate::io::ImageStore;
 
-/// A [`ImageStore`] backed by a CAT25 SPI EEPROM.
+/// An [`ImageStore`] backed by a CAT25 SPI EEPROM.
 ///
 /// The staged firmware image lives in this EEPROM: the AVR128 writes it and the
 /// PROG MCU reads it back.

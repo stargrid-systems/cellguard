@@ -61,7 +61,7 @@ impl<T: NvmInstance, C: CcpUnlock> StateStore for EepromState<'_, T, C> {
 /// A development-only [`KeyStore`] backed by the AVR128 USERROW.
 ///
 /// Production locks the USERROW and uses [`NoKeyStore`](crate::io::NoKeyStore)
-/// instead; this writable path exists so a key can be replaced over a trusted
+/// instead. This writable path exists so a key can be replaced over a trusted
 /// bus during bring-up. Writing the key erases the whole USERROW page, so the
 /// key must own it (it is written from offset 0).
 pub struct UserRowKeyStore<'a, T: FlashInstance, C: CcpUnlock> {
@@ -122,7 +122,10 @@ impl<T: FlashInstance, C: CcpUnlock> NvmWriter for FlashNvmWriter<'_, T, C> {
     fn write(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
         // `self.nvm`/`self.cpu` (via the adapter) and `self.erased_page` are
         // disjoint fields, so both can be borrowed mutably in the same call.
-        let mut adapter = NvmAdapter { nvm: self.nvm, cpu: self.cpu };
+        let mut adapter = NvmAdapter {
+            nvm: self.nvm,
+            cpu: self.cpu,
+        };
         write_with_page_erase(
             address,
             data,
