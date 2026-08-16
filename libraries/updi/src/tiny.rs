@@ -65,10 +65,13 @@ pub mod asi {
 const KEY_NVMPROG: &[u8; 8] = b"NVMProg ";
 const KEY_CHIPERASE: &[u8; 8] = b"NVMErase";
 const GUARD_TIME: u8 = 0x00;
-/// Poll bound for NVM and mode transitions. Each poll is a full LDCS/LDS
-/// round-trip, so 65535 iterations dwarfs any real NVM timing while staying a
-/// u16 countdown.
-const MAX_POLL: u16 = u16::MAX;
+/// Poll bound for NVM and mode transitions, in round-trips. At 115200 baud
+/// one LDCS/LDS poll is a few hundred microseconds, so 255 polls budgets
+/// roughly 100 ms per wait: an order of magnitude beyond real NVM timings
+/// (page writes are single-digit milliseconds, chip erase tens), and far
+/// inside the firmware watchdog that bounds a whole command anyway. A u16
+/// countdown would cost two registers and compare per iteration.
+const MAX_POLL: u8 = u8::MAX;
 
 /// A UPDI programmer for a tinyAVR 0/1-series target.
 pub struct TinyProgrammer<L> {
@@ -94,8 +97,7 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     ///
     /// See [`ProgError`].
     pub fn enter(&mut self) -> Result<(), ProgError<L::Error>> {
-        self.unlock(Some(GUARD_TIME), KEY_NVMPROG, asi::KEYSTAT_NVMPROG)?;
-        self.wait_prog_mode()
+        self.begin(KEY_NVMPROG, asi::KEYSTAT_NVMPROG, true)
     }
 
     /// Erases the whole chip with the chip-erase key, clearing the lock. Follow
@@ -105,36 +107,61 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     ///
     /// See [`ProgError`].
     pub fn chip_erase(&mut self) -> Result<(), ProgError<L::Error>> {
-        self.unlock(None, KEY_CHIPERASE, asi::KEYSTAT_CHIPERASE)?;
-        self.wait_erase_done()
+        let done = self.begin(KEY_CHIPERASE, asi::KEYSTAT_CHIPERASE, false);
+        done.and_then(|()| self.wait_flash_ready())
     }
 
-    /// Runs the shared key handshake: reset the UPDI state machine, check the
-    /// target is alive, optionally set the guard time, send `key`, confirm
-    /// `accepted` appeared in the key status, then reset the target so it acts
-    /// on the key. Callers wait for the key's effect.
+    /// Runs a key cycle in one sequence: reset the UPDI state machine, check
+    /// the target is alive, set the guard time, send `key`, confirm it was
+    /// accepted, reset the target, then wait for the key's effect
+    /// (`SYS_NVMPROG` set when `prog_mode`, else `SYS_LOCKSTATUS` clear).
+    ///
+    /// One fused body serves both keys. Splitting handshake and wait across
+    /// call sites costs a call, a prologue, and a `Result` handoff more per
+    /// key path, measurably.
+    ///
+    /// Both paths set the guard time. `GUARD_TIME` is the CTRLA reset value,
+    /// so the extra write on the chip-erase path is a no-op that keeps one
+    /// code sequence serving both keys.
     #[expect(
         clippy::trivially_copy_pass_by_ref,
         reason = "a by-value key would stack-copy 8 bytes at each call site"
     )]
-    fn unlock(
+    fn begin(
         &mut self,
-        guard_time: Option<u8>,
         key: &[u8; 8],
         accepted: u8,
+        prog_mode: bool,
     ) -> Result<(), ProgError<L::Error>> {
         self.updi.break_()?;
         if self.updi.ldcs(cs::STATUSA)? == 0 {
             return Err(ProgError::NotAlive);
         }
-        if let Some(guard_time) = guard_time {
-            self.updi.stcs(cs::CTRLA, guard_time)?;
-        }
+        self.updi.stcs(cs::CTRLA, GUARD_TIME)?;
         self.updi.key(key)?;
         if self.updi.ldcs(cs::ASI_KEY_STATUS)? & accepted == 0 {
             return Err(ProgError::KeyRejected);
         }
-        self.reset()
+        self.reset()?;
+        for _ in 0..MAX_POLL {
+            let status = self.updi.ldcs(cs::ASI_SYS_STATUS)?;
+            let lock = status & asi::SYS_LOCKSTATUS;
+            if prog_mode {
+                if lock != 0 {
+                    return Err(ProgError::Locked);
+                }
+                if status & asi::SYS_NVMPROG != 0 {
+                    return Ok(());
+                }
+            } else if lock == 0 {
+                return Ok(());
+            }
+        }
+        Err(if prog_mode {
+            ProgError::EnterTimeout
+        } else {
+            ProgError::EraseTimeout
+        })
     }
 
     /// Erases the flash page starting at `flash_offset`.
@@ -191,15 +218,11 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         let mut offset = flash_offset;
         let mut rest = data;
         while !rest.is_empty() {
-            let page_end = (offset / PAGE_SIZE + 1) * PAGE_SIZE;
-            let to_boundary = usize::from(page_end - offset);
-            if rest.len() <= to_boundary {
-                self.write_page(offset, rest)?;
-                break;
-            }
-            let (segment, tail) = rest.split_at(to_boundary);
+            let page_end = (offset | (PAGE_SIZE - 1)) + 1;
+            let take = rest.len().min(usize::from(page_end - offset));
+            let (segment, tail) = rest.split_at(take);
             self.write_page(offset, segment)?;
-            offset = page_end;
+            offset += u16::try_from(take).unwrap_or(0);
             rest = tail;
         }
         Ok(())
@@ -210,11 +233,17 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// executes.
     fn write_page(&mut self, offset: u16, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
         self.wait_flash_ready()?;
-        self.nvm_command(nvmctrl::CMD_PBC)?;
-        self.wait_flash_ready()?;
+        self.commit(nvmctrl::CMD_PBC)?;
         self.updi.set_pointer_16(FLASH_BASE.wrapping_add(offset))?;
         self.updi.st_inc(segment)?;
-        self.nvm_command(nvmctrl::CMD_WP)?;
+        self.commit(nvmctrl::CMD_WP)
+    }
+
+    /// Executes an NVMCTRL command and waits for the controller to settle.
+    /// Every P0 command sequence ends this way, so one fused helper replaces
+    /// the command/wait call pair at each site.
+    fn commit(&mut self, cmd: u8) -> Result<(), ProgError<L::Error>> {
+        self.nvm_command(cmd)?;
         self.wait_flash_ready()
     }
 
@@ -256,28 +285,6 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         self.updi.stcs(cs::ASI_RESET_REQ, RESET_REQUEST)?;
         self.updi.stcs(cs::ASI_RESET_REQ, RESET_RELEASE)?;
         Ok(())
-    }
-
-    fn wait_prog_mode(&mut self) -> Result<(), ProgError<L::Error>> {
-        for _ in 0..MAX_POLL {
-            let status = self.updi.ldcs(cs::ASI_SYS_STATUS)?;
-            if status & asi::SYS_LOCKSTATUS != 0 {
-                return Err(ProgError::Locked);
-            }
-            if status & asi::SYS_NVMPROG != 0 {
-                return Ok(());
-            }
-        }
-        Err(ProgError::EnterTimeout)
-    }
-
-    fn wait_erase_done(&mut self) -> Result<(), ProgError<L::Error>> {
-        for _ in 0..MAX_POLL {
-            if self.updi.ldcs(cs::ASI_SYS_STATUS)? & asi::SYS_LOCKSTATUS == 0 {
-                return self.wait_flash_ready();
-            }
-        }
-        Err(ProgError::EraseTimeout)
     }
 
     fn nvm_command(&mut self, cmd: u8) -> Result<(), ProgError<L::Error>> {
