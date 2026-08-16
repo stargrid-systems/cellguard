@@ -305,7 +305,7 @@ impl<L: UpdiLink> Updi<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cs, Updi, UpdiError, ACK};
+    use super::{ACK, Updi, UpdiError, cs};
     use crate::link::UpdiLink;
 
     /// A fixed-capacity byte buffer, enough for the short frames these tests
