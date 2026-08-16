@@ -193,7 +193,7 @@ impl SessionHandler {
         let Some(data) = self.tx.get(..len) else {
             return self.status_reply(SessionStatus::InvalidAddr, Some(addr));
         };
-        let result = prog.write_flash(u32::from(addr), data);
+        let result = prog.write_flash(addr, data);
         let status = result.map_or_else(|err| status_of(&err), |()| SessionStatus::Ok);
         self.status_reply(status, Some(addr))
     }
@@ -216,7 +216,7 @@ impl SessionHandler {
         // build the reply frame from it into `tx`.
         let Self { rx, tx, .. } = self;
         let data = rx.get_mut(3..3 + len).unwrap_or(&mut []);
-        let status = match prog.read_flash(u32::from(addr), data) {
+        let status = match prog.read_flash(addr, data) {
             Ok(()) => SessionStatus::Ok,
             Err(err) => status_of(&err),
         };

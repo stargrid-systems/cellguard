@@ -86,19 +86,22 @@ impl<L: UpdiLink> FlashProg for Programmer<L> {
 }
 
 impl<L: UpdiLink> FlashProg for TinyProgrammer<L> {
-    const PAGE_SIZE: u32 = crate::tiny::PAGE_SIZE;
+    const PAGE_SIZE: u32 = crate::tiny::PAGE_SIZE as u32;
     type Error = ProgError<L::Error>;
 
     fn enter(&mut self) -> Result<(), Self::Error> {
         self.enter()
     }
     fn erase_page(&mut self, page_base: u32) -> Result<(), Self::Error> {
+        let page_base = u16::try_from(page_base).map_err(|_| ProgError::InvalidOffset)?;
         self.erase_flash_page(page_base)
     }
     fn write(&mut self, addr: u32, data: &[u8]) -> Result<(), Self::Error> {
+        let addr = u16::try_from(addr).map_err(|_| ProgError::InvalidOffset)?;
         self.write_flash(addr, data)
     }
     fn read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), Self::Error> {
+        let addr = u16::try_from(addr).map_err(|_| ProgError::InvalidOffset)?;
         self.read_flash(addr, buf)
     }
     fn leave(&mut self) -> Result<(), Self::Error> {
