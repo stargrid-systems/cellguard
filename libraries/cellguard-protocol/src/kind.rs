@@ -82,6 +82,32 @@ pub enum Kind {
     /// Response: the panic record, in reply to [`Kind::PanicProbe`]. An empty
     /// payload means no panic is recorded for this session.
     PanicStatus = 22,
+    /// Programmer session request (main MCU to `cellprog`): chip-erase the
+    /// target and enter programming mode. Payload: 1 target byte. See the
+    /// `session` module.
+    #[cfg(feature = "bootloader")]
+    ProgSessionBegin = 23,
+    /// Programmer session request: program up to `PAGE_MAX` bytes at a flash
+    /// address. Payload: 2 address bytes then data.
+    #[cfg(feature = "bootloader")]
+    ProgPageWrite = 24,
+    /// Programmer session request: read back flash. Payload: 2 address bytes
+    /// and 1 length byte.
+    #[cfg(feature = "bootloader")]
+    ProgPageRead = 25,
+    /// Programmer session request: leave programming mode and reset the
+    /// target. Empty payload.
+    #[cfg(feature = "bootloader")]
+    ProgSessionEnd = 26,
+    /// Programmer session response: the outcome of a command. Payload: 1
+    /// status byte, plus the addressed command's 2 address bytes when
+    /// replying to a page command.
+    #[cfg(feature = "bootloader")]
+    ProgSessionStatus = 27,
+    /// Programmer session response: read-back data. Payload: 1 status byte, 2
+    /// address bytes, then the data.
+    #[cfg(feature = "bootloader")]
+    ProgPageData = 28,
 }
 
 impl Kind {

@@ -18,9 +18,17 @@ pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 #[cfg(feature = "bootloader")]
 pub use self::prog::{ProgSource, ProgStatus};
+#[cfg(feature = "bootloader")]
+pub use self::session::{
+    MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, SessionStatus, SessionTarget, decode_begin,
+    decode_page_data, decode_page_status, decode_read, decode_write, encode_begin,
+    encode_page_data, encode_page_status, encode_read, encode_write,
+};
 
 mod cobs;
 mod kind;
 mod packet;
 #[cfg(feature = "bootloader")]
 mod prog;
+#[cfg(feature = "bootloader")]
+mod session;
