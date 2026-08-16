@@ -163,30 +163,26 @@ fn main() -> ! {
             // Traffic from the cellcore proves it is alive: reset the
             // heartbeat baseline so a long session cannot read as death.
             last_edge = last_command;
-            usart.set_frame(Frame::EIGHT_E_2);
-            mux.cellagent_updi();
+            link_to_updi(&mut usart, &mut mux);
             let reply = {
                 let link = UsartUpdiLink::new(&mut usart);
                 let mut prog = TinyProgrammer::new(link);
                 handler.execute(cmd, &mut prog)
             };
-            usart.set_frame(Frame::EIGHT_N_1);
-            mux.cellcore_uart();
+            link_to_uart(&mut usart, &mut mux);
             send_reply(&mut usart, reply);
         }
 
         // --- Session idle timeout ---
         let now = rtc.count();
         if handler.in_session() && now.wrapping_sub(last_command) > SESSION_IDLE_TICKS {
-            usart.set_frame(Frame::EIGHT_E_2);
-            mux.cellagent_updi();
+            link_to_updi(&mut usart, &mut mux);
             {
                 let link = UsartUpdiLink::new(&mut usart);
                 let mut prog = TinyProgrammer::new(link);
                 handler.expire(&mut prog);
             }
-            usart.set_frame(Frame::EIGHT_N_1);
-            mux.cellcore_uart();
+            link_to_uart(&mut usart, &mut mux);
         }
 
         // --- Heartbeat edge detection ---
@@ -217,6 +213,22 @@ fn main() -> ! {
             }
         }
     }
+}
+
+/// Switches the shared USART and U1004 mux to the cellagent UPDI channel.
+/// Out-of-line so both switch sites share one body.
+#[inline(never)]
+fn link_to_updi<T: avrxt_hal::usart::UsartInstance>(usart: &mut Usart<T>, mux: &mut MuxSelect) {
+    usart.set_frame(Frame::EIGHT_E_2);
+    mux.cellagent_updi();
+}
+
+/// Switches the shared USART and U1004 mux back to the cellcore UART channel.
+/// Out-of-line so both switch sites share one body.
+#[inline(never)]
+fn link_to_uart<T: avrxt_hal::usart::UsartInstance>(usart: &mut Usart<T>, mux: &mut MuxSelect) {
+    usart.set_frame(Frame::EIGHT_N_1);
+    mux.cellcore_uart();
 }
 
 /// COBS-encodes a raw reply frame and writes it to the UART link, one byte at

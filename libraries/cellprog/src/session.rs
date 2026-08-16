@@ -112,8 +112,13 @@ impl SessionHandler {
     /// Feeds one received wire byte from the UART link.
     ///
     /// Returns a command when a complete, valid session command was decoded.
-    /// Malformed or corrupt frames produce nothing. The master's reply
+    /// Malformed or corrupt frames produce nothing; the master's reply
     /// timeout drives recovery.
+    ///
+    /// Out-of-line: the firmware feeds this from its event loop, and keeping
+    /// the decode path (COBS decoder plus frame codec) out of the loop body
+    /// relieves register pressure on small targets.
+    #[inline(never)]
     pub fn decode(&mut self, byte: u8) -> Option<Command> {
         let Ok(Some(frame_len)) = self.decoder.feed(byte, &mut self.rx) else {
             return None;
@@ -141,7 +146,7 @@ impl SessionHandler {
     /// COBS-encode onto the link.
     ///
     /// `prog` must be a programmer for the mux-selected target and the link
-    /// must be in UPDI mode. Only the decode path runs in UART mode.
+    /// must be in UPDI mode; only the decode path runs in UART mode.
     #[must_use]
     pub fn execute<L: UpdiLink>(&mut self, cmd: Command, prog: &mut TinyProgrammer<L>) -> &[u8] {
         match cmd {
