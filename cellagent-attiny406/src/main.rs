@@ -11,6 +11,10 @@
 //! `cellguard-protocol`. All protocol logic lives in the `cellagent` library.
 //! This crate only maps it onto the chip.
 //!
+//! The firmware is built to fit the 4 KB flash without panic diagnostics:
+//! panics abort in place and the watchdog turns a hang back into a reset. No
+//! panic records are written, so `PanicProbe` answers empty.
+//!
 //! Pin map (see `scratch/hardware/cellagent-mcu.md`):
 //! - PA3 = GATE_B, PA4 = GATE_A, PA5 = ALIVE.
 //! - PA7 = TEMP (LM61, ADC AIN7).
@@ -21,11 +25,10 @@ use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::gpio::{Output, Port};
-use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
+use avrxt_hal::wdt::{Period, Watchdog};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
-use cellguard_panic::{clear, read_panic_record};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 
 /// Main clock: 20 MHz internal, prescaler off.
@@ -61,17 +64,9 @@ const GATE_A_BIT: u8 = 0x01;
 const GATE_B_BIT: u8 = 0x02;
 const ALL_OFF_BIT: u8 = 0x04;
 
-/// On-chip EEPROM offset of the panic record. The ATtiny406 EEPROM is unused
-/// otherwise, so the record starts at 0.
-const PANIC_OFFSET: u16 = 0;
-/// Consecutive panic-resets before the handler halts instead of resetting.
-const PANIC_THRESHOLD: u8 = 3;
-
-cellguard_panic::panic_handler!(
-    unsafe { pac::Peripherals::steal() },
-    PANIC_OFFSET,
-    PANIC_THRESHOLD
-);
+/// Watchdog period. The main loop must always return within one period, even
+/// during a response burst, so the USART read timeout bounds one iteration.
+const WDT_PERIOD: Period = Period::Clk2k;
 
 #[avr_device::entry]
 fn main() -> ! {
@@ -82,7 +77,9 @@ fn main() -> ! {
     clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
     let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
 
-    let nvm = Nvm::new(dp.NVMCTRL);
+    // Bounds hangs: panics abort in place (no handler runs), so the watchdog
+    // is what restores service after a fault.
+    let mut wdt = Watchdog::start(&cpu, dp.WDT, WDT_PERIOD);
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
@@ -126,14 +123,10 @@ fn main() -> ! {
 
     let mut runtime = CellagentRuntime::new(NODE_ID);
 
-    // Cache the last panic record for the field-bus probe before clearing it.
-    runtime.set_panic_record(read_panic_record(&nvm, PANIC_OFFSET));
-
-    // Init completed: this boot is healthy, so any prior panic was transient.
-    clear(&nvm, &cpu, PANIC_OFFSET);
-
     let mut last_toggle = rtc.count();
     loop {
+        wdt.feed();
+
         if let Ok(byte) = usart.read_byte() {
             runtime.service(byte, &mut gates, &mut temp, &mut usart);
         }

@@ -12,7 +12,6 @@ rust-version.workspace = true
 [dependencies]
 cellguard-protocol.workspace = true
 embedded-io.workspace = true
-cellguard-panic.workspace = true
 
 [lints]
 workspace = true

@@ -95,7 +95,6 @@ dependencies = [
 name = "cellagent"
 version = "0.1.0"
 dependencies = [
- "cellguard-panic",
  "cellguard-protocol",
  "embedded-io",
 ]

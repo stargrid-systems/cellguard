@@ -3,7 +3,6 @@
 //! [`CellagentRuntime`] decodes incoming COBS frames, dispatches requests to
 //! the cellagent hardware, and writes encoded responses back to the bus.
 
-use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{Decoder, Kind, Packet, encode_frame};
 use embedded_io::Write;
 
@@ -12,8 +11,8 @@ use crate::hw::{GateControl, TempSensor};
 /// Size of the receive buffer for COBS decoding.
 const RX_BUF_SIZE: usize = 64;
 
-/// Maximum response payload: a panic record (the temperature reading is 2).
-const MAX_RESPONSE_PAYLOAD: usize = RECORD_LEN;
+/// Maximum response payload: the temperature reading in centi-degrees Celsius.
+const MAX_RESPONSE_PAYLOAD: usize = 2;
 
 /// Maximum raw response frame: header plus payload plus payload CRC.
 const MAX_RESPONSE_RAW: usize =
@@ -31,8 +30,6 @@ pub struct CellagentRuntime {
     decoder: Decoder,
     node_id: u8,
     rx_buf: [u8; RX_BUF_SIZE],
-    /// Cached last panic record, reported on `PanicProbe`.
-    panic_record: Option<PanicRecord>,
 }
 
 impl CellagentRuntime {
@@ -43,14 +40,7 @@ impl CellagentRuntime {
             decoder: Decoder::new(),
             node_id,
             rx_buf: [0; RX_BUF_SIZE],
-            panic_record: None,
         }
-    }
-
-    /// Caches the last panic record so a later `PanicProbe` reports it. Call
-    /// this once at boot after reading the slot from EEPROM.
-    pub const fn set_panic_record(&mut self, record: Option<PanicRecord>) {
-        self.panic_record = record;
     }
 
     /// Feeds one received byte.
@@ -91,10 +81,7 @@ impl CellagentRuntime {
                 }
                 _ => self.write_response(Kind::Nack, &[], out),
             },
-            Kind::PanicProbe => match self.panic_record {
-                Some(record) => self.write_response(Kind::PanicStatus, &record.serialize(), out),
-                None => self.write_response(Kind::PanicStatus, &[], out),
-            },
+            Kind::PanicProbe => self.write_response(Kind::PanicStatus, &[], out),
             _ => self.write_response(Kind::Nack, &[], out),
         }
     }
@@ -235,42 +222,6 @@ mod tests {
         let (kind, payload) = decode_response(&writer.buf);
         assert_eq!(kind, Kind::Temperature);
         assert_eq!(payload, TEMP_CENTI.to_le_bytes());
-    }
-
-    fn sample_record() -> cellguard_panic::PanicRecord {
-        let mut file = [0u8; cellguard_panic::FILE_CAP];
-        file[..3].copy_from_slice(b"app");
-        cellguard_panic::PanicRecord {
-            reset_flags: 0x10,
-            consecutive_panics: 1,
-            file,
-            file_len: 3,
-            line: 7,
-            col: 0,
-        }
-    }
-
-    #[test]
-    fn panic_probe_returns_cached_record() {
-        let mut runtime = CellagentRuntime::new(NODE);
-        runtime.set_panic_record(Some(sample_record()));
-        let mut gates = MockGates { mask: 0 };
-        let mut temp = MockTemp { value: 0 };
-        let mut writer = VecWriter { buf: Vec::new() };
-
-        let wire = encode_request(Kind::PanicProbe, &[]);
-        for &byte in &wire {
-            runtime.service(byte, &mut gates, &mut temp, &mut writer);
-        }
-
-        let (kind, payload) = decode_response(&writer.buf);
-        assert_eq!(kind, Kind::PanicStatus);
-        assert_eq!(payload.len(), cellguard_panic::RECORD_LEN);
-        let bytes: &[u8; cellguard_panic::RECORD_LEN] = payload.as_slice().try_into().unwrap();
-        assert_eq!(
-            cellguard_panic::PanicRecord::parse(bytes).unwrap(),
-            sample_record()
-        );
     }
 
     #[test]
