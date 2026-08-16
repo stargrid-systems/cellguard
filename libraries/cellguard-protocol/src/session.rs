@@ -10,36 +10,47 @@
 //!
 //! A session is:
 //!
-//! 1. [`Kind::ProgSessionBegin`](crate::Kind::ProgSessionBegin): the programmer
-//!    chip-erases the target and resets it into programming mode. Erase first
-//!    means every page write lands on blank flash; a retry of `Begin` simply
-//!    restarts the session from a blank chip.
-//! 2. `ProgPageWrite` x N: the master streams the image, at most [`PAGE_MAX`]
-//!    data bytes per command. Addresses are byte offsets into the target's
-//!    flash (0-based; the programmer maps them into the target's data space).
-//!    Writes are idempotent: a re-sent identical command programs the same
-//!    bytes.
-//! 3. `ProgPageRead` x N: the master reads flash back to verify against its own
-//!    copy of the image.
-//! 4. [`Kind::ProgSessionEnd`](crate::Kind::ProgSessionEnd): the programmer
-//!    resets the target out of programming mode.
+//! 1. [`SessionCmd::Begin`]: the programmer chip-erases the target and resets
+//!    it into programming mode. Erase first means every page write lands on
+//!    blank flash. A retry of `Begin` simply restarts the session from a blank
+//!    chip.
+//! 2. [`SessionCmd::PageWrite`] x N: the master streams the image, at most
+//!    [`PAGE_MAX`] data bytes per command. Addresses are byte offsets into the
+//!    target's flash (0-based, the programmer maps them into the target's data
+//!    space). Writes are idempotent: a re-sent identical command programs the
+//!    same bytes.
+//! 3. [`SessionCmd::PageRead`] x N: the master reads flash back to verify
+//!    against its own copy of the image.
+//! 4. [`SessionCmd::End`]: the programmer resets the target out of programming
+//!    mode.
 //!
 //! Page commands before a successful `Begin` are rejected with
 //! [`SessionStatus::BadState`]: writing un-erased flash corrupts it.
 //!
 //! Exactly one command may be in flight. Commands sent while the mux is on a
 //! UPDI channel are electrically lost, never buffered.
+//!
+//! # Framing
+//!
+//! The link is point-to-point (two endpoints, one wire), so a session frame
+//! is lean: `[cmd][body][crc16]`, COBS-encoded on the wire like every other
+//! frame. There is no node address to route, no central [`Kind`](crate::Kind)
+//! registry to consult, and a single CRC-16 over the whole frame. The
+//! field-bus [`Packet`](crate::Packet) exists for cut-through routing on the
+//! multi-drop bus, where its separate header CRC pays for itself. Carrying
+//! that machinery over this link costs servant flash for no function.
 
 /// Maximum data bytes carried by one page command or reply.
 pub const PAGE_MAX: usize = 64;
 
-/// Worst-case COBS-encoded size of the largest command (`ProgPageWrite`).
-pub const MAX_COMMAND_WIRE: usize =
-    crate::max_encoded_len(crate::HEADER_LEN + 2 + PAGE_MAX + crate::PAYLOAD_CRC_LEN);
+/// Worst-case COBS-encoded size of the largest command (`PageWrite`).
+pub const MAX_COMMAND_WIRE: usize = crate::max_encoded_len(1 + 2 + PAGE_MAX + CRC_LEN);
 
-/// Worst-case COBS-encoded size of the largest reply (`ProgPageData`).
-pub const MAX_REPLY_WIRE: usize =
-    crate::max_encoded_len(crate::HEADER_LEN + 3 + PAGE_MAX + crate::PAYLOAD_CRC_LEN);
+/// Worst-case COBS-encoded size of the largest reply (`PageData`).
+pub const MAX_REPLY_WIRE: usize = crate::max_encoded_len(1 + 3 + PAGE_MAX + CRC_LEN);
+
+/// Length of the frame CRC in bytes.
+const CRC_LEN: usize = 2;
 
 /// Which target a session should program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +146,269 @@ impl SessionStatus {
     }
 }
 
+/// The lean frame type on the session link: one byte, one meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCmd {
+    /// Chip-erase the target and enter programming mode.
+    Begin,
+    /// Program the carried data at the carried address.
+    PageWrite,
+    /// Read back flash at the carried address.
+    PageRead,
+    /// Leave programming mode and reset the target.
+    End,
+    /// Status reply to any command.
+    Status,
+    /// Read-back data reply to `PageRead`.
+    PageData,
+}
+
+impl SessionCmd {
+    /// Returns the wire byte for this command.
+    #[must_use]
+    pub const fn to_code(self) -> u8 {
+        match self {
+            Self::Begin => 1,
+            Self::PageWrite => 2,
+            Self::PageRead => 3,
+            Self::End => 4,
+            Self::Status => 5,
+            Self::PageData => 6,
+        }
+    }
+
+    /// Parses a wire byte into a command.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Begin),
+            2 => Some(Self::PageWrite),
+            3 => Some(Self::PageRead),
+            4 => Some(Self::End),
+            5 => Some(Self::Status),
+            6 => Some(Self::PageData),
+            _ => None,
+        }
+    }
+}
+
+/// A decoded session command, borrowing page data from the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command<'a> {
+    /// Chip-erase the target and enter programming mode.
+    Begin(SessionTarget),
+    /// Program `data` at `addr`. Flash offsets must be even.
+    PageWrite {
+        /// Flash byte offset.
+        addr: u16,
+        /// Data to program.
+        data: &'a [u8],
+    },
+    /// Read back `len` bytes at `addr`.
+    #[cfg(feature = "page-read")]
+    PageRead {
+        /// Flash byte offset.
+        addr: u16,
+        /// Number of bytes to read.
+        len: u8,
+    },
+    /// Leave programming mode and reset the target.
+    End,
+}
+
+/// A session reply, borrowing read-back data from the caller's buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reply<'a> {
+    /// The outcome of a command. `addr` extends the reply for page commands,
+    /// so the master can match it to its request.
+    Status {
+        /// Outcome code.
+        status: SessionStatus,
+        /// The address the status refers to, for page commands.
+        addr: Option<u16>,
+    },
+    /// Read-back data for `PageRead`.
+    #[cfg(feature = "page-read")]
+    PageData {
+        /// Outcome code.
+        status: SessionStatus,
+        /// The address the data was read from.
+        addr: u16,
+        /// The read-back bytes.
+        data: &'a [u8],
+    },
+    /// Keeps the lifetime parameter used when `page-read` is off. Never
+    /// constructed.
+    #[cfg(not(feature = "page-read"))]
+    #[doc(hidden)]
+    Unused(core::marker::PhantomData<&'a [u8]>),
+}
+
+/// Encodes a session command into `out` as a complete frame (command byte,
+/// body, CRC-16), returning its length.
+///
+/// This is the master-side encoder. The result is the pre-COBS frame and the
+/// caller COBS-encodes it onto the wire.
+///
+/// Returns `None` if `out` is too small or the command is malformed (empty or
+/// oversized page data).
+#[must_use]
+pub fn encode_command(cmd: Command<'_>, out: &mut [u8]) -> Option<usize> {
+    let body_len = match cmd {
+        Command::Begin(target) => {
+            *out.first_mut()? = SessionCmd::Begin.to_code();
+            let body = encode_begin(target);
+            write_at(out, 1, &body)?;
+            body.len()
+        }
+        Command::PageWrite { addr, data } => {
+            if data.is_empty() || data.len() > PAGE_MAX {
+                return None;
+            }
+            *out.first_mut()? = SessionCmd::PageWrite.to_code();
+            write_addr_body(out, addr, data)?;
+            2 + data.len()
+        }
+        #[cfg(feature = "page-read")]
+        Command::PageRead { addr, len } => {
+            *out.first_mut()? = SessionCmd::PageRead.to_code();
+            let body = encode_read(addr, len);
+            write_at(out, 1, &body)?;
+            body.len()
+        }
+        Command::End => {
+            *out.first_mut()? = SessionCmd::End.to_code();
+            0
+        }
+    };
+    finish_frame(out, body_len + 1)
+}
+
+/// Decodes a complete session command frame, checking its CRC.
+///
+/// This is the servant-side decoder. `frame` is the COBS-decoded frame.
+///
+/// Returns `None` if the CRC does not match, the command byte is unknown, or
+/// the body is malformed.
+#[must_use]
+pub fn decode_command(frame: &[u8]) -> Option<Command<'_>> {
+    let body = split_frame(frame)?;
+    let (&code, rest) = body.split_first()?;
+    match SessionCmd::from_code(code)? {
+        SessionCmd::Begin => Some(Command::Begin(decode_begin(rest)?)),
+        SessionCmd::PageWrite => {
+            let (addr, data) = decode_write(rest)?;
+            Some(Command::PageWrite { addr, data })
+        }
+        #[cfg(feature = "page-read")]
+        SessionCmd::PageRead => {
+            let (addr, len) = decode_read(rest)?;
+            Some(Command::PageRead { addr, len })
+        }
+        SessionCmd::End if rest.is_empty() => Some(Command::End),
+        _ => None,
+    }
+}
+
+/// Encodes a session reply into `out` as a complete frame, returning its
+/// length. The servant-side encoder and the caller COBS-encodes the result.
+///
+/// Returns `None` if `out` is too small or the reply carries oversized data.
+#[must_use]
+pub fn encode_reply(reply: Reply<'_>, out: &mut [u8]) -> Option<usize> {
+    let body_len = match reply {
+        Reply::Status { status, addr } => {
+            *out.first_mut()? = SessionCmd::Status.to_code();
+            let body = encode_page_status(status, addr.unwrap_or(0));
+            let len = addr.map_or(1, |_| body.len());
+            write_at(out, 1, body.get(..len).unwrap_or(&[]))?;
+            len
+        }
+        #[cfg(feature = "page-read")]
+        Reply::PageData { status, addr, data } => {
+            if data.len() > PAGE_MAX {
+                return None;
+            }
+            *out.first_mut()? = SessionCmd::PageData.to_code();
+            let head = encode_page_status(status, addr);
+            write_at(out, 1, &head)?;
+            write_at(out, 1 + head.len(), data)?;
+            head.len() + data.len()
+        }
+        #[cfg(not(feature = "page-read"))]
+        Reply::Unused(_) => return None,
+    };
+    finish_frame(out, body_len + 1)
+}
+
+/// Decodes a complete session reply frame, checking its CRC. The master-side
+/// decoder.
+///
+/// Returns `None` if the CRC does not match, the command byte is unknown, or
+/// the body is malformed.
+#[must_use]
+pub fn decode_reply(frame: &[u8]) -> Option<Reply<'_>> {
+    let body = split_frame(frame)?;
+    let (&code, rest) = body.split_first()?;
+    match SessionCmd::from_code(code)? {
+        SessionCmd::Status => {
+            let (status, rest) = rest.split_first_chunk::<1>()?;
+            let status = SessionStatus::from_code(status[0])?;
+            let addr = if rest.is_empty() {
+                None
+            } else {
+                let (addr_bytes, _) = rest.split_first_chunk::<2>()?;
+                Some(u16::from_le_bytes(*addr_bytes))
+            };
+            Some(Reply::Status { status, addr })
+        }
+        #[cfg(feature = "page-read")]
+        SessionCmd::PageData => {
+            let (status, addr, data) = decode_page_data(rest)?;
+            Some(Reply::PageData { status, addr, data })
+        }
+        _ => None,
+    }
+}
+
+/// Splits a frame into its CRC-covered body, validating the trailing CRC-16.
+fn split_frame(frame: &[u8]) -> Option<&[u8]> {
+    let split = frame.len().checked_sub(CRC_LEN)?;
+    let (body, crc_bytes) = frame.split_at(split);
+    let expected = u16::from_le_bytes(crc_bytes.try_into().ok()?);
+    if crc::checksum16(body) != expected {
+        return None;
+    }
+    Some(body)
+}
+
+/// Appends the frame CRC after `len` covered bytes.
+fn finish_frame(out: &mut [u8], len: usize) -> Option<usize> {
+    let covered = out.get(..len)?;
+    let crc = crc::checksum16(covered);
+    let tail = out.get_mut(len..len + CRC_LEN)?;
+    tail.copy_from_slice(&crc.to_le_bytes());
+    Some(len + CRC_LEN)
+}
+
+/// Copies `bytes` to `out[at..]`, whole, or not at all.
+fn write_at(out: &mut [u8], at: usize, bytes: &[u8]) -> Option<()> {
+    let slot = out.get_mut(at..at + bytes.len())?;
+    // Byte loop, not `copy_from_slice`: the variable length would link the
+    // generic `memcpy` helper on small targets.
+    for (dst, src) in slot.iter_mut().zip(bytes) {
+        *dst = *src;
+    }
+    Some(())
+}
+
+/// Writes the `PageWrite` body (`addr` then data) after the command byte.
+fn write_addr_body(out: &mut [u8], addr: u16, data: &[u8]) -> Option<()> {
+    let head = out.get_mut(1..3)?;
+    head.copy_from_slice(&addr.to_le_bytes());
+    write_at(out, 3, data)
+}
+
 /// Encodes the payload of a `ProgSessionBegin` command.
 #[must_use]
 pub const fn encode_begin(target: SessionTarget) -> [u8; 1] {
@@ -157,7 +431,11 @@ pub fn encode_write<'a>(addr: u16, data: &[u8], out: &'a mut [u8]) -> Option<&'a
     }
     let (head, rest) = out.split_at_mut(2);
     head.copy_from_slice(&addr.to_le_bytes());
-    rest.get_mut(..data.len())?.copy_from_slice(data);
+    // Byte loop, not `copy_from_slice`: the variable length would link the
+    // generic `memcpy` helper on small targets.
+    for (dst, src) in rest.iter_mut().zip(data) {
+        *dst = *src;
+    }
     out.get(..len)
 }
 
@@ -173,15 +451,17 @@ pub fn decode_write(payload: &[u8]) -> Option<(u16, &[u8])> {
     Some((addr, data))
 }
 
-/// Encodes the payload of a `ProgPageRead` command.
+/// Encodes the payload of a `PageRead` command.
+#[cfg(feature = "page-read")]
 #[must_use]
 pub const fn encode_read(addr: u16, len: u8) -> [u8; 3] {
     let [a0, a1] = addr.to_le_bytes();
     [a0, a1, len]
 }
 
-/// Decodes the payload of a `ProgPageRead` command into the address and the
+/// Decodes the payload of a `PageRead` command into the address and the
 /// requested length.
+#[cfg(feature = "page-read")]
 #[must_use]
 pub fn decode_read(payload: &[u8]) -> Option<(u16, u8)> {
     let (addr_bytes, rest) = payload.split_first_chunk::<2>()?;
@@ -226,7 +506,9 @@ pub fn encode_page_data<'a>(
     }
     let (head, rest) = out.split_at_mut(3);
     head.copy_from_slice(&encode_page_status(status, addr));
-    rest.get_mut(..data.len())?.copy_from_slice(data);
+    for (dst, src) in rest.iter_mut().zip(data) {
+        *dst = *src;
+    }
     out.get(..len)
 }
 
@@ -245,10 +527,13 @@ pub fn decode_page_data(payload: &[u8]) -> Option<(SessionStatus, u16, &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PAGE_MAX, SessionStatus, SessionTarget, decode_begin, decode_page_data, decode_page_status,
-        decode_read, decode_write, encode_begin, encode_page_data, encode_page_status, encode_read,
+        Command, PAGE_MAX, Reply, SessionCmd, SessionStatus, SessionTarget, decode_begin,
+        decode_command, decode_page_data, decode_page_status, decode_reply, decode_write,
+        encode_begin, encode_command, encode_page_data, encode_page_status, encode_reply,
         encode_write,
     };
+    #[cfg(feature = "page-read")]
+    use super::{decode_read, encode_read};
 
     #[test]
     fn target_roundtrips() {
@@ -321,6 +606,7 @@ mod tests {
         assert_eq!(decoded, &data);
     }
 
+    #[cfg(feature = "page-read")]
     #[test]
     fn read_payload_roundtrips() {
         let page_max = u8::try_from(PAGE_MAX).expect("PAGE_MAX fits u8");
@@ -346,6 +632,111 @@ mod tests {
         assert_eq!(status, SessionStatus::Ok);
         assert_eq!(addr, 0x0400);
         assert_eq!(decoded, &data);
+    }
+
+    #[test]
+    fn command_frames_roundtrip() {
+        let mut out = [0u8; 1 + 2 + PAGE_MAX + 2];
+        let commands = [
+            Command::Begin(SessionTarget::Cellagent),
+            Command::Begin(SessionTarget::Cellcore),
+            Command::PageWrite {
+                addr: 0x1234,
+                data: &[0xA5; PAGE_MAX],
+            },
+            Command::PageWrite {
+                addr: 0x0100,
+                data: &[1, 2, 3],
+            },
+            #[cfg(feature = "page-read")]
+            Command::PageRead {
+                addr: 0xBEEF,
+                len: 7,
+            },
+            Command::End,
+        ];
+        for cmd in commands {
+            let n = encode_command(cmd, &mut out).expect("fits");
+            assert_eq!(decode_command(&out[..n]), Some(cmd), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn reply_frames_roundtrip() {
+        let mut out = [0u8; 1 + 3 + PAGE_MAX + 2];
+        let replies = [
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None,
+            },
+            Reply::Status {
+                status: SessionStatus::Busy,
+                addr: Some(0x0400),
+            },
+            #[cfg(feature = "page-read")]
+            Reply::PageData {
+                status: SessionStatus::Ok,
+                addr: 0x0400,
+                data: &[0x5A; PAGE_MAX],
+            },
+        ];
+        for reply in replies {
+            let n = encode_reply(reply, &mut out).expect("fits");
+            assert_eq!(decode_reply(&out[..n]), Some(reply), "{reply:?}");
+        }
+    }
+
+    #[test]
+    fn corrupt_frame_fails_the_crc() {
+        let mut out = [0u8; 32];
+        let n = encode_command(
+            Command::PageWrite {
+                addr: 0x0200,
+                data: &[1, 2, 3, 4],
+            },
+            &mut out,
+        )
+        .expect("fits");
+        out[0] ^= 0x01;
+        assert_eq!(decode_command(&out[..n]), None);
+        out[0] ^= 0x01;
+        assert!(decode_command(&out[..n]).is_some());
+    }
+
+    #[test]
+    fn encode_rejects_malformed_commands() {
+        let mut out = [0u8; 1 + 2 + PAGE_MAX + 2];
+        assert!(
+            encode_command(Command::PageWrite { addr: 0, data: &[] }, &mut out).is_none(),
+            "empty page data"
+        );
+        let oversized = [0u8; PAGE_MAX + 1];
+        assert!(
+            encode_command(
+                Command::PageWrite {
+                    addr: 0,
+                    data: &oversized,
+                },
+                &mut out
+            )
+            .is_none(),
+            "oversized page data"
+        );
+        let mut small = [0u8; 2];
+        assert!(
+            encode_command(Command::End, &mut small).is_none(),
+            "no room"
+        );
+    }
+
+    #[test]
+    fn end_with_a_body_is_rejected() {
+        let body = [SessionCmd::End.to_code(), 0x00];
+        let crc = crc::checksum16(&body);
+        let mut wire = [0u8; 4];
+        wire[..2].copy_from_slice(&body);
+        wire[2..].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(decode_command(&wire), None);
     }
 
     #[test]

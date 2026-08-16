@@ -63,8 +63,12 @@ where
     let payload_len = header.payload_len;
 
     // Pass 1: verify the staged copy before touching the target.
-    let staged_crc =
-        crc_from_store(store, payload_offset, payload_len, scratch).map_err(ProgramError::Store)?;
+    let staged_crc = crc_over(
+        |offset, buf| store.read(offset, buf).map_err(ProgramError::Store),
+        payload_offset,
+        payload_len,
+        scratch,
+    )?;
     if staged_crc != header.payload_crc32 {
         return Err(ProgramError::CorruptSource);
     }
@@ -85,8 +89,12 @@ where
     }
 
     // Pass 3: verify the written flash before releasing the target.
-    let flash_crc =
-        crc_from_flash(writer, target_base, payload_len, scratch).map_err(ProgramError::Nvm)?;
+    let flash_crc = crc_over(
+        |offset, buf| writer.read(offset, buf).map_err(ProgramError::Nvm),
+        target_base,
+        payload_len,
+        scratch,
+    )?;
     if flash_crc != header.payload_crc32 {
         return Err(ProgramError::VerifyFailed);
     }
@@ -119,36 +127,21 @@ fn advance(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-fn crc_from_store<S: ImageStore>(
-    store: &mut S,
-    offset: u32,
-    len: u32,
-    scratch: &mut [u8],
-) -> Result<u32, S::Error> {
-    let mut crc = Crc32::new();
-    let mut done = 0u32;
-    while done < len {
-        let n = chunk_len(scratch.len(), len - done);
-        let (buf, _) = scratch.split_at_mut(n);
-        store.read(offset.saturating_add(done), buf)?;
-        crc.update(buf);
-        done = done.saturating_add(advance(n));
-    }
-    Ok(crc.finalize())
-}
-
-fn crc_from_flash<W: NvmWriter>(
-    writer: &mut W,
+/// CRCs `len` bytes read through `read`, which fills one chunk of `scratch`
+/// per call. The single shared loop serves both the store and flash passes.
+/// Monomorphizing it per source would duplicate the body.
+fn crc_over<E>(
+    mut read: impl FnMut(u32, &mut [u8]) -> Result<(), E>,
     base: u32,
     len: u32,
     scratch: &mut [u8],
-) -> Result<u32, W::Error> {
+) -> Result<u32, E> {
     let mut crc = Crc32::new();
     let mut done = 0u32;
     while done < len {
         let n = chunk_len(scratch.len(), len - done);
         let (buf, _) = scratch.split_at_mut(n);
-        writer.read(base.saturating_add(done), buf)?;
+        read(base.saturating_add(done), buf)?;
         crc.update(buf);
         done = done.saturating_add(advance(n));
     }

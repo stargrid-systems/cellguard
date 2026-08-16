@@ -64,7 +64,10 @@ pub mod asi {
 const KEY_NVMPROG: &[u8; 8] = b"NVMProg ";
 const KEY_CHIPERASE: &[u8; 8] = b"NVMErase";
 const GUARD_TIME: u8 = 0x00;
-const MAX_POLL: u32 = 100_000;
+/// Poll bound for NVM and mode transitions. Each poll is a full LDCS/LDS
+/// round-trip, so 65535 iterations dwarfs any real NVM timing while staying a
+/// u16 countdown.
+const MAX_POLL: u16 = u16::MAX;
 
 /// A UPDI programmer for a tinyAVR 0/1-series target.
 pub struct TinyProgrammer<L> {

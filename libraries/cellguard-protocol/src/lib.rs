@@ -20,10 +20,13 @@ pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 pub use self::prog::{ProgSource, ProgStatus};
 #[cfg(feature = "bootloader")]
 pub use self::session::{
-    MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, SessionStatus, SessionTarget, decode_begin,
-    decode_page_data, decode_page_status, decode_read, decode_write, encode_begin,
-    encode_page_data, encode_page_status, encode_read, encode_write,
+    Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionCmd, SessionStatus,
+    SessionTarget, decode_begin, decode_command, decode_page_data, decode_page_status,
+    decode_reply, decode_write, encode_begin, encode_command, encode_page_data, encode_page_status,
+    encode_reply, encode_write,
 };
+#[cfg(all(feature = "bootloader", feature = "page-read"))]
+pub use self::session::{decode_read, encode_read};
 
 mod cobs;
 mod kind;

@@ -37,4 +37,5 @@ panic = "immediate-abort"
 codegen-units = 1
 debug = true
 lto = true
-opt-level = "s"
+# opt-level "z" measured 582 B smaller than "s" for this binary.
+opt-level = "z"

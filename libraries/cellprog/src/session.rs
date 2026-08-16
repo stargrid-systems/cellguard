@@ -14,22 +14,19 @@
 //! returned [`Command`] must be executed before the next is decoded.
 
 use cellguard_protocol::{
-    Decoder, Kind, Packet, SessionStatus, SessionTarget, decode_begin, decode_read, decode_write,
-    encode_page_status,
+    Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget, decode_command,
+    encode_reply,
 };
 use updi::{ProgError, TinyProgrammer, UpdiLink};
 
-/// Decoded size of the largest command frame (`ProgPageWrite`).
-pub const MAX_COMMAND_FRAME: usize = cellguard_protocol::HEADER_LEN
-    + 2
-    + cellguard_protocol::PAGE_MAX
-    + cellguard_protocol::PAYLOAD_CRC_LEN;
+/// Decoded size of the largest command frame (`PageWrite`).
+pub const MAX_COMMAND_FRAME: usize = 1 + 2 + cellguard_protocol::PAGE_MAX + CRC_LEN;
 
-/// Decoded size of the largest reply frame (`ProgPageData`).
-pub const MAX_REPLY_FRAME: usize = cellguard_protocol::HEADER_LEN
-    + 3
-    + cellguard_protocol::PAGE_MAX
-    + cellguard_protocol::PAYLOAD_CRC_LEN;
+/// Decoded size of the largest reply frame (`PageData`).
+pub const MAX_REPLY_FRAME: usize = 1 + 3 + cellguard_protocol::PAGE_MAX + CRC_LEN;
+
+/// Length of the frame CRC in bytes.
+const CRC_LEN: usize = 2;
 
 const _: () = assert!(
     MAX_COMMAND_FRAME >= 3 + cellguard_protocol::PAGE_MAX,
@@ -46,10 +43,11 @@ pub enum Command {
     PageWrite {
         /// Flash byte offset.
         addr: u16,
-        /// Data length; the bytes live in the handler.
+        /// Data length. The bytes live in the handler.
         len: usize,
     },
     /// Read back `len` bytes at `addr`.
+    #[cfg(feature = "page-read")]
     PageRead {
         /// Flash byte offset.
         addr: u16,
@@ -78,21 +76,26 @@ const fn status_of<E>(err: &ProgError<E>) -> SessionStatus {
 /// Owns the decode buffer, the reply buffer, and the one bit of session
 /// state. See the [module](self) docs for the firmware calling pattern.
 pub struct SessionHandler {
-    id: u8,
     decoder: Decoder,
     in_session: bool,
-    /// Decoded command frames; reused as the page-read staging buffer.
+    /// Decoded command frames, reused as the page-read staging buffer.
     rx: [u8; MAX_COMMAND_FRAME],
-    /// Page-write data and the raw reply frame; never both at once.
+    /// Page-write data and the raw reply frame, never both at once.
     tx: [u8; MAX_REPLY_FRAME],
 }
 
+impl Default for SessionHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionHandler {
-    /// Creates a handler for node `id`.
+    /// Creates a handler. The all-zero initializer lets a `static` handler
+    /// land in `.bss` instead of carrying a flash image in `.data`.
     #[must_use]
-    pub const fn new(id: u8) -> Self {
+    pub const fn new() -> Self {
         Self {
-            id,
             decoder: Decoder::new(),
             in_session: false,
             rx: [0; MAX_COMMAND_FRAME],
@@ -108,32 +111,29 @@ impl SessionHandler {
 
     /// Feeds one received wire byte from the UART link.
     ///
-    /// Returns a command when a complete, valid session command addressed to
-    /// this node was decoded. Malformed or foreign frames produce nothing;
-    /// the master's reply timeout drives recovery.
+    /// Returns a command when a complete, valid session command was decoded.
+    /// Malformed or corrupt frames produce nothing. The master's reply
+    /// timeout drives recovery.
     pub fn decode(&mut self, byte: u8) -> Option<Command> {
         let Ok(Some(frame_len)) = self.decoder.feed(byte, &mut self.rx) else {
             return None;
         };
         let frame = self.rx.get(..frame_len)?;
-        let packet = Packet::parse(frame).ok()?;
-        if packet.id != self.id {
-            return None;
-        }
-        match packet.kind {
-            Kind::ProgSessionBegin => Some(Command::Begin(decode_begin(packet.payload)?)),
-            Kind::ProgPageWrite => {
-                let (addr, data) = decode_write(packet.payload)?;
+        match decode_command(frame)? {
+            WireCommand::Begin(target) => Some(Command::Begin(target)),
+            WireCommand::PageWrite { addr, data } => {
                 let len = data.len();
-                self.tx.get_mut(..len)?.copy_from_slice(data);
+                // Byte loop, not `copy_from_slice`: the variable length would
+                // link the generic `memcpy` helper on small targets.
+                let dst = self.tx.get_mut(..len)?;
+                for (dst, src) in dst.iter_mut().zip(data) {
+                    *dst = *src;
+                }
                 Some(Command::PageWrite { addr, len })
             }
-            Kind::ProgPageRead => {
-                let (addr, len) = decode_read(packet.payload)?;
-                Some(Command::PageRead { addr, len })
-            }
-            Kind::ProgSessionEnd => Some(Command::End),
-            _ => None,
+            #[cfg(feature = "page-read")]
+            WireCommand::PageRead { addr, len } => Some(Command::PageRead { addr, len }),
+            WireCommand::End => Some(Command::End),
         }
     }
 
@@ -141,12 +141,13 @@ impl SessionHandler {
     /// COBS-encode onto the link.
     ///
     /// `prog` must be a programmer for the mux-selected target and the link
-    /// must be in UPDI mode; only the decode path runs in UART mode.
+    /// must be in UPDI mode. Only the decode path runs in UART mode.
     #[must_use]
     pub fn execute<L: UpdiLink>(&mut self, cmd: Command, prog: &mut TinyProgrammer<L>) -> &[u8] {
         match cmd {
             Command::Begin(target) => self.begin(target, prog),
             Command::PageWrite { addr, len } => self.page_write(addr, len, prog),
+            #[cfg(feature = "page-read")]
             Command::PageRead { addr, len } => self.page_read(addr, len, prog),
             Command::End => self.end(prog),
         }
@@ -164,15 +165,15 @@ impl SessionHandler {
 
     fn begin<L: UpdiLink>(&mut self, target: SessionTarget, prog: &mut TinyProgrammer<L>) -> &[u8] {
         if target != SessionTarget::Cellagent {
-            return self.status_reply(SessionStatus::NotSupported);
+            return self.status_reply(SessionStatus::NotSupported, None);
         }
         let result = prog.chip_erase().and_then(|()| prog.enter());
         match result {
             Ok(()) => {
                 self.in_session = true;
-                self.status_reply(SessionStatus::Ok)
+                self.status_reply(SessionStatus::Ok, None)
             }
-            Err(err) => self.status_reply(status_of(&err)),
+            Err(err) => self.status_reply(status_of(&err), None),
         }
     }
     fn page_write<L: UpdiLink>(
@@ -182,16 +183,17 @@ impl SessionHandler {
         prog: &mut TinyProgrammer<L>,
     ) -> &[u8] {
         if !self.in_session {
-            return self.page_status_reply(SessionStatus::BadState, addr);
+            return self.status_reply(SessionStatus::BadState, Some(addr));
         }
         let Some(data) = self.tx.get(..len) else {
-            return self.page_status_reply(SessionStatus::InvalidAddr, addr);
+            return self.status_reply(SessionStatus::InvalidAddr, Some(addr));
         };
         let result = prog.write_flash(u32::from(addr), data);
         let status = result.map_or_else(|err| status_of(&err), |()| SessionStatus::Ok);
-        self.page_status_reply(status, addr)
+        self.status_reply(status, Some(addr))
     }
 
+    #[cfg(feature = "page-read")]
     fn page_read<L: UpdiLink>(
         &mut self,
         addr: u16,
@@ -200,27 +202,20 @@ impl SessionHandler {
     ) -> &[u8] {
         let len = usize::from(len);
         if !self.in_session {
-            return self.page_status_reply(SessionStatus::BadState, addr);
+            return self.status_reply(SessionStatus::BadState, Some(addr));
         }
         if len == 0 || len > cellguard_protocol::PAGE_MAX {
-            return self.page_status_reply(SessionStatus::InvalidAddr, addr);
+            return self.status_reply(SessionStatus::InvalidAddr, Some(addr));
         }
-        // The command frame in `rx` is consumed; stage [status, addr, data]
-        // there and build the reply packet from it into `tx`.
-        let payload_len = 3 + len;
-        if payload_len > MAX_COMMAND_FRAME {
-            // Static buffer sizes make this unreachable.
-            return self.page_status_reply(SessionStatus::InvalidAddr, addr);
-        }
-        let Self { id, rx, tx, .. } = self;
-        let (payload, _) = rx.split_at_mut(payload_len);
-        let (head, data) = payload.split_at_mut(3);
+        // The command frame in `rx` is consumed. Stage the data there and
+        // build the reply frame from it into `tx`.
+        let Self { rx, tx, .. } = self;
+        let data = rx.get_mut(3..3 + len).unwrap_or(&mut []);
         let status = match prog.read_flash(u32::from(addr), data) {
             Ok(()) => SessionStatus::Ok,
             Err(err) => status_of(&err),
         };
-        head.copy_from_slice(&encode_page_status(status, addr));
-        write_reply(*id, Kind::ProgPageData, payload, tx)
+        write_reply(Reply::PageData { status, addr, data }, tx)
     }
 
     fn end<L: UpdiLink>(&mut self, prog: &mut TinyProgrammer<L>) -> &[u8] {
@@ -231,31 +226,21 @@ impl SessionHandler {
         } else {
             SessionStatus::Ok
         };
-        self.status_reply(status)
+        self.status_reply(status, None)
     }
 
-    /// Builds a `ProgSessionStatus` reply with a status byte only.
-    fn status_reply(&mut self, status: SessionStatus) -> &[u8] {
-        let payload = [status.to_code()];
-        write_reply(self.id, Kind::ProgSessionStatus, &payload, &mut self.tx)
-    }
-
-    /// Builds a `ProgSessionStatus` reply to a page command.
-    fn page_status_reply(&mut self, status: SessionStatus, addr: u16) -> &[u8] {
-        let payload = encode_page_status(status, addr);
-        write_reply(self.id, Kind::ProgSessionStatus, &payload, &mut self.tx)
+    /// Builds a status reply. `addr` extends the payload with the address the
+    /// status refers to, so the master can match the reply to its page
+    /// command.
+    fn status_reply(&mut self, status: SessionStatus, addr: Option<u16>) -> &[u8] {
+        write_reply(Reply::Status { status, addr }, &mut self.tx)
     }
 }
 
-/// Builds a raw reply frame for `id` in `tx`. Sizes are static (see the
-/// buffer consts), so this always succeeds; the fallback slice is empty.
-fn write_reply<'t>(
-    id: u8,
-    kind: Kind,
-    payload: &[u8],
-    tx: &'t mut [u8; MAX_REPLY_FRAME],
-) -> &'t [u8] {
-    let Ok(len) = Packet::write(id, kind, payload, tx) else {
+/// Builds a raw reply frame in `tx`. Buffer sizes are static (see the buffer
+/// consts), so this always succeeds and the fallback slice is empty.
+fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [u8] {
+    let Some(len) = encode_reply(reply, tx) else {
         return &[];
     };
     tx.get(..len).unwrap_or(&[])
@@ -265,15 +250,13 @@ mod tests {
     use std::vec::Vec;
 
     use cellguard_protocol::{
-        Kind, Packet, SessionStatus, SessionTarget, decode_page_data, decode_page_status,
-        encode_begin, encode_frame, encode_read, encode_write,
+        Command as WireCommand, Reply, SessionStatus, SessionTarget, decode_reply, encode_command,
+        encode_frame,
     };
     use updi::TinyProgrammer;
     use updi::mock::MockTarget;
 
     use super::{Command, SessionHandler};
-
-    const NODE: u8 = 5;
 
     struct Rig {
         handler: SessionHandler,
@@ -283,7 +266,7 @@ mod tests {
     impl Rig {
         fn new(target: MockTarget) -> Self {
             Self {
-                handler: SessionHandler::new(NODE),
+                handler: SessionHandler::new(),
                 target: TinyProgrammer::new(target),
             }
         }
@@ -309,45 +292,36 @@ mod tests {
 
     fn begin_raw(target: SessionTarget) -> Vec<u8> {
         let mut raw = Vec::from([0u8; 16]);
-        let n = Packet::write(
-            NODE,
-            Kind::ProgSessionBegin,
-            &encode_begin(target),
-            &mut raw,
-        )
-        .expect("fits");
+        let n = encode_command(WireCommand::Begin(target), &mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
     fn write_raw(addr: u16, data: &[u8]) -> Vec<u8> {
-        let mut payload = [0u8; 2 + cellguard_protocol::PAGE_MAX];
-        let pl = encode_write(addr, data, &mut payload).expect("payload fits");
         let mut raw = Vec::from([0u8; 96]);
-        let n = Packet::write(NODE, Kind::ProgPageWrite, pl, &mut raw).expect("fits");
+        let n = encode_command(WireCommand::PageWrite { addr, data }, &mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
+    #[cfg(feature = "page-read")]
     fn read_raw(addr: u16, len: u8) -> Vec<u8> {
-        let mut raw = Vec::from([0u8; 96]);
-        let n = Packet::write(NODE, Kind::ProgPageRead, &encode_read(addr, len), &mut raw)
-            .expect("fits");
+        let mut raw = Vec::from([0u8; 16]);
+        let n = encode_command(WireCommand::PageRead { addr, len }, &mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
     fn end_raw() -> Vec<u8> {
         let mut raw = Vec::from([0u8; 16]);
-        let n = Packet::write(NODE, Kind::ProgSessionEnd, &[], &mut raw).expect("fits");
+        let n = encode_command(WireCommand::End, &mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
-    /// Decodes a reply frame into (kind, payload).
-    fn parse_reply(raw: &[u8]) -> (Kind, &[u8]) {
-        let packet = Packet::parse(raw).expect("reply parses");
-        (packet.kind, packet.payload)
+    /// Decodes a reply frame into the reply.
+    fn parse_reply(raw: &[u8]) -> Reply<'_> {
+        decode_reply(raw).expect("reply parses")
     }
 
     #[test]
@@ -360,9 +334,13 @@ mod tests {
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
         assert_eq!(cmd, Command::Begin(SessionTarget::Cellagent));
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (kind, payload) = parse_reply(reply);
-        assert_eq!(kind, Kind::ProgSessionStatus);
-        assert_eq!(payload, &[SessionStatus::Ok.to_code()]);
+        assert_eq!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None,
+            }
+        );
         assert!(rig.handler.in_session());
 
         for (i, chunk) in image.chunks(32).enumerate() {
@@ -376,31 +354,42 @@ mod tests {
                 }
             );
             let reply = rig.handler.execute(cmd, &mut rig.target);
-            let (kind, payload) = parse_reply(reply);
-            assert_eq!(kind, Kind::ProgSessionStatus);
-            let (status, echo) = decode_page_status(payload).expect("status payload");
-            assert_eq!(status, SessionStatus::Ok, "page {i} must write");
-            assert_eq!(echo, addr);
+            assert_eq!(
+                parse_reply(reply),
+                Reply::Status {
+                    status: SessionStatus::Ok,
+                    addr: Some(addr),
+                },
+                "page {i} must write"
+            );
         }
 
+        #[cfg(feature = "page-read")]
         for (i, chunk) in image.chunks(32).enumerate() {
             let addr = u16::try_from(i * 32).expect("fits u16");
             let len = chunk.len().try_into().expect("fits u8");
             let cmd = send(&mut rig.handler, &read_raw(addr, len)).expect("page read decodes");
             let reply = rig.handler.execute(cmd, &mut rig.target);
-            let (kind, payload) = parse_reply(reply);
-            assert_eq!(kind, Kind::ProgPageData);
-            let (status, echo, data) = decode_page_data(payload).expect("data payload");
-            assert_eq!(status, SessionStatus::Ok);
-            assert_eq!(echo, addr);
-            assert_eq!(data, chunk, "page {i} must read back");
+            assert_eq!(
+                parse_reply(reply),
+                Reply::PageData {
+                    status: SessionStatus::Ok,
+                    addr,
+                    data: chunk,
+                },
+                "page {i} must read back"
+            );
         }
 
         let cmd = send(&mut rig.handler, &end_raw()).expect("end decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (kind, payload) = parse_reply(reply);
-        assert_eq!(kind, Kind::ProgSessionStatus);
-        assert_eq!(payload, &[SessionStatus::Ok.to_code()]);
+        assert_eq!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None,
+            }
+        );
         assert!(!rig.handler.in_session());
     }
 
@@ -409,8 +398,9 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2, 3, 4])).expect("page write decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (_, payload) = parse_reply(reply);
-        let (status, _) = decode_page_status(payload).expect("status payload");
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
         assert_eq!(status, SessionStatus::BadState);
         let target = rig.target();
         for off in 0..64 {
@@ -423,14 +413,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "page-read")]
     fn page_read_before_begin_is_rejected() {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &read_raw(0, 4)).expect("page read decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (kind, payload) = parse_reply(reply);
-        assert_eq!(kind, Kind::ProgSessionStatus, "error replies are short");
-        let (status, _) = decode_page_status(payload).expect("status payload");
-        assert_eq!(status, SessionStatus::BadState);
+        let Reply::Status { status, addr } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
+        assert_eq!(status, SessionStatus::BadState, "error replies are short");
+        assert_eq!(addr, Some(0));
     }
 
     #[test]
@@ -438,8 +430,13 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &end_raw()).expect("end decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (_, payload) = parse_reply(reply);
-        assert_eq!(payload, &[SessionStatus::Ok.to_code()]);
+        assert!(matches!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None
+            }
+        ));
     }
 
     #[test]
@@ -454,8 +451,13 @@ mod tests {
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (_, payload) = parse_reply(reply);
-        assert_eq!(payload, &[SessionStatus::Ok.to_code()]);
+        assert!(matches!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None
+            }
+        ));
 
         let target = rig.target();
         for off in 0..64 {
@@ -473,8 +475,13 @@ mod tests {
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (_, payload) = parse_reply(reply);
-        assert_eq!(payload, &[SessionStatus::Ok.to_code()]);
+        assert!(matches!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::Ok,
+                addr: None
+            }
+        ));
         assert!(rig.handler.in_session());
     }
 
@@ -484,8 +491,13 @@ mod tests {
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellcore)).expect("begin decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (_, payload) = parse_reply(reply);
-        assert_eq!(payload, &[SessionStatus::NotSupported.to_code()]);
+        assert!(matches!(
+            parse_reply(reply),
+            Reply::Status {
+                status: SessionStatus::NotSupported,
+                addr: None
+            }
+        ));
         assert!(!rig.handler.in_session());
     }
 
@@ -498,17 +510,22 @@ mod tests {
 
         let cmd = send(&mut rig.handler, &write_raw(3, &[1, 2])).expect("page write decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (status, _) = decode_page_status(parse_reply(reply).1).expect("status payload");
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
         assert_eq!(status, SessionStatus::InvalidAddr);
 
         // 4094 + 4 overflows the 4 KiB flash.
         let cmd = send(&mut rig.handler, &write_raw(4094, &[1, 2, 3, 4])).expect("decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (status, _) = decode_page_status(parse_reply(reply).1).expect("status payload");
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
         assert_eq!(status, SessionStatus::InvalidAddr);
     }
 
     #[test]
+    #[cfg(feature = "page-read")]
     fn zero_and_oversized_read_lengths_are_invalid() {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
@@ -519,7 +536,9 @@ mod tests {
         for bad in [0u8, oversized] {
             let cmd = send(&mut rig.handler, &read_raw(0, bad)).expect("decodes");
             let reply = rig.handler.execute(cmd, &mut rig.target);
-            let (status, _) = decode_page_status(parse_reply(reply).1).expect("status");
+            let Reply::Status { status, .. } = parse_reply(reply) else {
+                panic!("expected status reply")
+            };
             assert_eq!(status, SessionStatus::InvalidAddr);
         }
     }
@@ -532,29 +551,27 @@ mod tests {
         let _ = rig.handler.execute(cmd, &mut rig.target);
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("page write decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (status, _) = decode_page_status(parse_reply(reply).1).expect("status payload");
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
         assert_eq!(status, SessionStatus::NvmError);
     }
 
     #[test]
-    fn foreign_node_and_malformed_frames_are_ignored() {
+    fn corrupt_and_malformed_frames_are_ignored() {
         let mut rig = Rig::new(MockTarget::tiny());
-        // Addressed to another node.
-        let mut foreign = Vec::from([0u8; 16]);
-        let n = Packet::write(
-            9,
-            Kind::ProgSessionBegin,
-            &encode_begin(SessionTarget::Cellagent),
-            &mut foreign,
-        )
-        .expect("fits");
-        foreign.truncate(n);
-        assert!(send(&mut rig.handler, &foreign).is_none());
+        // A flipped body byte fails the frame CRC.
+        let mut corrupt = begin_raw(SessionTarget::Cellagent);
+        corrupt[0] ^= 0x01;
+        assert!(send(&mut rig.handler, &corrupt).is_none());
         // PageWrite with empty data cannot decode.
-        let mut malformed = Vec::from([0u8; 96]);
-        let n =
-            Packet::write(NODE, Kind::ProgPageWrite, &[0x00, 0x10], &mut malformed).expect("fits");
-        malformed.truncate(n);
+        let mut malformed = Vec::from([
+            cellguard_protocol::SessionCmd::PageWrite.to_code(),
+            0x00,
+            0x10,
+        ]);
+        let body_crc = crc::checksum16(&malformed);
+        malformed.extend_from_slice(&body_crc.to_le_bytes());
         assert!(send(&mut rig.handler, &malformed).is_none());
         assert!(!rig.handler.in_session());
     }
@@ -574,7 +591,9 @@ mod tests {
         // After expiry page commands are rejected again.
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("page write decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
-        let (status, _) = decode_page_status(parse_reply(reply).1).expect("status payload");
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
         assert_eq!(status, SessionStatus::BadState);
     }
 
@@ -582,17 +601,11 @@ mod tests {
     fn buffers_are_sized_for_the_worst_case() {
         assert_eq!(
             super::MAX_COMMAND_FRAME,
-            cellguard_protocol::HEADER_LEN
-                + 2
-                + cellguard_protocol::PAGE_MAX
-                + cellguard_protocol::PAYLOAD_CRC_LEN
+            1 + 2 + cellguard_protocol::PAGE_MAX + 2
         );
         assert_eq!(
             super::MAX_REPLY_FRAME,
-            cellguard_protocol::HEADER_LEN
-                + 3
-                + cellguard_protocol::PAGE_MAX
-                + cellguard_protocol::PAYLOAD_CRC_LEN
+            1 + 3 + cellguard_protocol::PAGE_MAX + 2
         );
     }
 }

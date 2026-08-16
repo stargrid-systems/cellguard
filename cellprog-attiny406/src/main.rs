@@ -5,56 +5,47 @@
 //! CellGuard programmer firmware for the ATtiny406 (U1003), the on-board
 //! `cellprog` MCU.
 //!
-//! This MCU reflashes the cellcore (AVR128) over UPDI, reading staged images
-//! from the shared SPI EEPROM. The cellcore is the sole orchestrator for field
-//! updates: it stages images, then sends a `ProgProgram` packet over its
-//! USART3, which reaches this MCU's USART0 through the U1004 analog mux
-//! (channel 0).
+//! The programmer is a servant: it executes one transactional session command
+//! at a time (see `cellguard_protocol::session`). The cellcore app is the sole
+//! orchestrator. It stages images in the shared EEPROM and drives the session
+//! that reflashes the cellagent over UPDI (mux channel 3).
+//!
+//! The programmer's single USART reaches the outside world only through the
+//! U1004 analog mux, so while it talks UPDI its UART link to the cellcore is
+//! physically disconnected. Each command is therefore one transaction: decode
+//! a complete command on channel 0 (8N1), switch the mux and frame to UPDI
+//! (8E2), run one operation, switch back, reply. Exactly one command may be
+//! in flight. Commands sent while the mux is away are electrically lost.
 //!
 //! The programmer also watches the cellcore heartbeat (`AVR64_TO_PROG` on PB4,
 //! toggled by the cellcore via the U103 GPIO expander). If the heartbeat goes
-//! silent the programmer recovers the cellcore autonomously: first a reset
-//! (PB0 / `RESET_AVR64`), then, if that fails, a reflash of the staged
-//! application over UPDI. After a few failed attempts it gives up and keeps
-//! listening. There is no automatic recovery for the cellagent.
+//! silent the programmer pulses reset (`RESET_AVR64` on PB0) a bounded number
+//! of times, then latches given-up and keeps listening. There is no
+//! autonomous reflash tier: the cellcore owns its own recovery through the
+//! bootloader, and cellcore boot-section updates are bench-only.
 //!
-//! USART0 is shared between the UART command link (mux channel 0, 8N1) and the
-//! UPDI link (mux channel 1, 8E2). The firmware listens on channel 0, and on a
-//! `ProgProgram` (or a recovery reflash) it switches USART0 to 8E2 and the mux
-//! to channel 1, flashes the staged image, then switches back.
+//! The firmware is built to fit the 4 KB flash without panic diagnostics:
+//! panics abort in place and the watchdog turns a hang back into a reset. No
+//! panic records are written.
 //!
 //! Pin map (verified, see `scratch/hardware/cellprog-mcu.md`):
 //! - USART0 PB2/PB3 -> U1004 mux.
 //! - PA3/PA4 = U1004 select A1/A0.
 //! - PB4 = `AVR64_TO_PROG` heartbeat input (from U103 P12).
 //! - PB0 = `RESET_AVR64` (active-low, via U107 NAND + Q100 to cellcore reset).
-//! - SPI0_ALT (PC0 SCK, PC1 MISO, PC2 MOSI). App EEPROM U104 CS = PA2, Boot
-//!   EEPROM U105 CS = PC3.
-
-use core::cell::RefCell;
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::{Output, Port};
-use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
-use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
 use avrxt_hal::usart::{Frame, Usart};
-use cat25::{CAT25M01, CAT25128, Cat25};
-use cellboot::drivers::Cat25Store;
-use cellboot::io::BandedStore;
-use cellboot::layout;
-use cellguard_panic::clear;
-use cellguard_protocol::ProgSource;
-use cellprog::supervisor::{ProgLayout, SourceSlot, Supervisor};
-use cellprog::writer::UpdiNvmWriter;
+use avrxt_hal::wdt::{Period, Watchdog};
+use cellguard_protocol::Encoder;
+use cellprog::SessionHandler;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
-use embedded_hal::spi::MODE_0;
-use embedded_hal_bus::spi::RefCellDevice;
-use embedded_io::Write;
-use updi::{Programmer, TinyProgrammer};
+use updi::TinyProgrammer;
 
 use self::updi_link::UsartUpdiLink;
 
@@ -67,46 +58,30 @@ const PRESCALER: Option<ClkPrescaler> = None;
 /// Baud on both the UART command link and the UPDI link.
 const BAUD: u32 = 115_200;
 
-/// This node's address on the cellcore link.
-const NODE_ID: u8 = 2;
-
-/// Boot section starts at flash address 0 on AVR Dx.
-const BOOT_TARGET_BASE: u32 = 0x0000;
-
-/// Application starts right after the boot section.
-const APP_TARGET_BASE: u32 = layout::BOOT_SECTION_SIZE;
-
-/// tinyAVR flash offset 0. The data-space base (0x8000) is added internally
-/// by TinyProgrammer.
-const CELLAGENT_TARGET_BASE: u32 = 0x0000;
-
-/// USART receive timeout. Short enough that the heartbeat is sampled often.
+/// USART receive timeout. Short enough that the heartbeat is sampled often
+/// between commands.
 const RX_TIMEOUT_MS: u32 = 50;
 
 /// Heartbeat-loss threshold in RTC ticks. The RTC runs at ~1.024 kHz
 /// (Internal1k, prescaler /1), so 2048 ticks is roughly 2 s.
 const HEARTBEAT_TIMEOUT_TICKS: u16 = 2048;
 
-/// Reset attempts before escalating to a reflash.
+/// Reset attempts before giving up.
 const MAX_RESETS: u8 = 2;
-
-/// Reflash attempts before giving up.
-const MAX_REFLASHES: u8 = 2;
 
 /// Reset pulse width (PB0 held low), in microseconds.
 const RESET_PULSE_US: u32 = 1000;
 
-/// On-chip EEPROM offset of the panic record. The ATtiny406 EEPROM is unused
-/// otherwise, so the record starts at 0.
-const PANIC_OFFSET: u16 = 0;
-/// Consecutive panic-resets before the handler halts instead of resetting.
-const PANIC_THRESHOLD: u8 = 3;
+/// Session idle timeout in RTC ticks (~1.024 kHz): roughly 500 ms. An
+/// abandoned session (cellcore reset or power blip mid-session) leaves the
+/// cellagent in programming mode. This timeout resets it out so a wedged
+/// target cannot stay halted forever.
+const SESSION_IDLE_TICKS: u16 = 512;
 
-cellguard_panic::panic_handler!(
-    unsafe { pac::Peripherals::steal() },
-    PANIC_OFFSET,
-    PANIC_THRESHOLD
-);
+/// Watchdog period. Bounds a hung UPDI operation: a wedged target can stall
+/// one command for seconds, so the period must exceed the worst command while
+/// still turning a wedged programmer into a reset.
+const WDT_PERIOD: Period = Period::Clk8k;
 
 #[avr_device::entry]
 fn main() -> ! {
@@ -117,46 +92,12 @@ fn main() -> ! {
     clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
     let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
 
-    let nvm = Nvm::new(dp.NVMCTRL);
+    // Bounds hangs: panics abort in place (no handler runs), so the watchdog
+    // is what restores service after a fault.
+    let mut wdt = Watchdog::start(&cpu, dp.WDT, WDT_PERIOD);
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
-    let portc = Port::new(dp.PORTC).split();
-
-    // SPI0 on its alternate (PORTC) pins: PC0 SCK, PC1 MISO, PC2 MOSI.
-    dp.PORTMUX.ctrlb().write(|w| w.spi0().set_bit());
-    let _sck = portc.p0.into_output();
-    let _miso = portc.p1.into_input();
-    let _mosi = portc.p2.into_output();
-    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, SpiPrescaler::Div16));
-
-    // App and Boot chip-selects (active low, idle high). PC3 also doubles as
-    // the SPI hardware SS. CTRLB.SSD keeps it usable as a GPIO CS.
-    let cs_app = porta.p2.into_output_high();
-    let cs_boot = portc.p3.into_output_high();
-    let app_dev = RefCellDevice::new_no_delay(&spi, cs_app).unwrap_or_else(|_| halt());
-    let boot_dev = RefCellDevice::new_no_delay(&spi, cs_boot).unwrap_or_else(|_| halt());
-    let app = Cat25Store::new(Cat25::new(app_dev, CAT25M01, Delay::new(f_cpu)));
-    let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(f_cpu)));
-    let store = BandedStore::new(app, boot);
-
-    // The boot image sits at the App/Boot band boundary in the store (the boot
-    // EEPROM rebased to offset BOOT_BAND_OFFSET).
-    let prog_layout = ProgLayout {
-        app: SourceSlot {
-            image_offset: 0,
-            target_base: APP_TARGET_BASE,
-        },
-        bootloader: SourceSlot {
-            image_offset: layout::BOOT_BAND_OFFSET,
-            target_base: BOOT_TARGET_BASE,
-        },
-        cellagent: SourceSlot {
-            image_offset: layout::CELLAGENT_OFFSET,
-            target_base: CELLAGENT_TARGET_BASE,
-        },
-    };
-    let mut supervisor = Supervisor::<_, 128>::new(store, prog_layout, NODE_ID);
 
     // USART0 = the shared link. Start it as the 8N1 UART command link on mux
     // channel 0. TxD idle-high, RxD input.
@@ -189,6 +130,12 @@ fn main() -> ! {
 
     let mut delay = Delay::new(f_cpu);
 
+    // .bss storage: a zero initializer keeps the whole handler out of .data
+    // (no flash image), and the startup runtime zeroes it instead of an
+    // unrolled copy loop in main's prologue.
+    static mut HANDLER: SessionHandler = SessionHandler::new();
+    let handler = unsafe { &mut *core::ptr::addr_of_mut!(HANDLER) };
+
     let mut last_level = heartbeat.is_high().unwrap_or(true);
     let mut last_edge = rtc.count();
     // BRING-UP gate: the cellcore heartbeat is disabled (I2C blocking bug, see
@@ -198,40 +145,48 @@ fn main() -> ! {
     // heartbeat.
     let mut heartbeat_seen = false;
     let mut resets = 0u8;
-    let mut reflashes = 0u8;
-    // Latched once both recovery tiers are exhausted, so the dead branch does
-    // not re-evaluate the timeout every loop iteration. Cleared by any
-    // heartbeat edge, which means the cellcore came back.
+    // Latched once reset escalation is exhausted, so the dead branch does not
+    // re-evaluate the timeout every loop iteration. Cleared by any heartbeat
+    // edge, which means the cellcore came back.
     let mut recovery_given_up = false;
 
-    // Init completed: this boot is healthy, so any prior panic was transient.
-    clear(&nvm, &cpu, PANIC_OFFSET);
+    let mut last_command = rtc.count();
 
     loop {
+        wdt.feed();
+
         // --- UART command link (returns within ~RX_TIMEOUT_MS) ---
         if let Ok(byte) = usart.read_byte()
-            && let Some(source) = supervisor.decode(byte)
+            && let Some(cmd) = handler.decode(byte)
         {
+            last_command = rtc.count();
+            // Traffic from the cellcore proves it is alive: reset the
+            // heartbeat baseline so a long session cannot read as death.
+            last_edge = last_command;
             usart.set_frame(Frame::EIGHT_E_2);
-            let status = match source {
-                ProgSource::CellagentAppStaged => {
-                    mux.cellagent_updi();
-                    let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(TinyProgrammer::new(link));
-                    supervisor.program(source, &mut writer)
-                }
-                _ => {
-                    mux.cellcore_updi();
-                    let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(Programmer::new(link));
-                    supervisor.program(source, &mut writer)
-                }
+            mux.cellagent_updi();
+            let reply = {
+                let link = UsartUpdiLink::new(&mut usart);
+                let mut prog = TinyProgrammer::new(link);
+                handler.execute(cmd, &mut prog)
             };
             usart.set_frame(Frame::EIGHT_N_1);
             mux.cellcore_uart();
-            if let Some(reply) = supervisor.reply(status) {
-                let _ = usart.write_all(reply);
+            send_reply(&mut usart, reply);
+        }
+
+        // --- Session idle timeout ---
+        let now = rtc.count();
+        if handler.in_session() && now.wrapping_sub(last_command) > SESSION_IDLE_TICKS {
+            usart.set_frame(Frame::EIGHT_E_2);
+            mux.cellagent_updi();
+            {
+                let link = UsartUpdiLink::new(&mut usart);
+                let mut prog = TinyProgrammer::new(link);
+                handler.expire(&mut prog);
             }
+            usart.set_frame(Frame::EIGHT_N_1);
+            mux.cellcore_uart();
         }
 
         // --- Heartbeat edge detection ---
@@ -241,42 +196,35 @@ fn main() -> ! {
             last_edge = rtc.count();
             heartbeat_seen = true;
             resets = 0;
-            reflashes = 0;
             recovery_given_up = false;
         }
 
-        // --- Heartbeat lost: tiered recovery ---
+        // --- Heartbeat lost: bounded reset escalation ---
         if heartbeat_seen
             && !recovery_given_up
             && rtc.count().wrapping_sub(last_edge) > HEARTBEAT_TIMEOUT_TICKS
         {
             if resets < MAX_RESETS {
-                // Tier 1: pulse RESET_AVR64 low.
                 let _ = reset_n.set_low();
                 delay.delay_us(RESET_PULSE_US);
                 let _ = reset_n.set_high();
                 resets += 1;
                 last_edge = rtc.count();
-            } else if reflashes < MAX_REFLASHES {
-                // Tier 2: reflash the staged application.
-                usart.set_frame(Frame::EIGHT_E_2);
-                mux.cellcore_updi();
-                let _ = {
-                    let link = UsartUpdiLink::new(&mut usart);
-                    let mut writer = UpdiNvmWriter::new(Programmer::new(link));
-                    supervisor.program(ProgSource::AppStaged, &mut writer)
-                };
-                usart.set_frame(Frame::EIGHT_N_1);
-                mux.cellcore_uart();
-                reflashes += 1;
-                last_edge = rtc.count();
-                resets = 0;
             } else {
                 // Exhausted: keep listening, stop recovering. Latch so this
                 // branch does not re-evaluate the timeout every iteration.
                 recovery_given_up = true;
             }
         }
+    }
+}
+
+/// COBS-encodes a raw reply frame and writes it to the UART link, one byte at
+/// a time. No wire buffer: the reply borrows the handler's frame buffer.
+fn send_reply<T: avrxt_hal::usart::UsartInstance>(usart: &mut Usart<T>, raw: &[u8]) {
+    let mut encoder = Encoder::new(raw);
+    while let Some(byte) = encoder.pull() {
+        usart.write_byte(byte);
     }
 }
 
@@ -292,11 +240,6 @@ impl MuxSelect {
         let _ = self.a1.set_low();
         let _ = self.a0.set_low();
     }
-    /// Channel 1: cellcore UPDI (8E2).
-    fn cellcore_updi(&mut self) {
-        let _ = self.a1.set_low();
-        let _ = self.a0.set_high();
-    }
     /// Channel 3: cellagent UPDI (8E2).
     fn cellagent_updi(&mut self) {
         let _ = self.a1.set_high();
@@ -307,6 +250,16 @@ impl MuxSelect {
 /// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
-    #[expect(clippy::empty_loop)]
+    #[expect(
+        clippy::empty_loop,
+        reason = "nothing left to do after a fatal init error"
+    )]
     loop {}
 }
+
+// Keep the compile-time check that the servant's session-command buffer
+// covers the worst-case command wire size, next to the buffers themselves.
+const _: () = assert!(
+    cellguard_protocol::MAX_COMMAND_WIRE >= cellprog::session::MAX_COMMAND_FRAME,
+    "decoder buffer must cover the worst-case command frame"
+);

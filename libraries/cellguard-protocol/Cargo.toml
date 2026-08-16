@@ -12,6 +12,11 @@ rust-version.workspace = true
 [features]
 # Adds the bootloader message kinds to the central registry. Additive.
 bootloader = []
+# Adds the flash read-back path to the session protocol (`PageRead` and
+# `PageData`). Measured 722 B on the ATtiny406 servant, so the smallest
+# builds leave it out and the master trusts write status instead of
+# verifying by read-back. Additive.
+page-read = []
 
 [dependencies]
 crc = { workspace = true }

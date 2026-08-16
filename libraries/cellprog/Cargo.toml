@@ -9,6 +9,11 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Flash read-back over the session protocol. Off for the ATtiny406 servant,
+# where it does not fit; see `cellguard-protocol`'s `page-read`.
+page-read = ["cellguard-protocol/page-read"]
+
 [dependencies]
 cellboot.workspace = true
 cellguard-protocol = { workspace = true, features = ["bootloader"] }

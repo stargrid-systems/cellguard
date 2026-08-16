@@ -51,6 +51,13 @@ pub const CAT25M01: Model = Model {
     addr_bits: 17,
 };
 
+// `PageChunks` replaces the page modulo with a mask, so every model's page
+// size must be a power of two.
+const _: () = {
+    assert!(CAT25128.page_size.is_power_of_two());
+    assert!(CAT25M01.page_size.is_power_of_two());
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
