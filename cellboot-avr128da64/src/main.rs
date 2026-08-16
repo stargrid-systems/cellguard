@@ -9,7 +9,15 @@
 //! reboots. Otherwise it jumps straight to the installed application.
 //!
 //! The boot section is 8 KB (FUSE.BOOTSIZE = 16, flash 0x0000-0x1FFF). The
-//! application occupies the remaining 120 KB (flash 0x2000-0x1FFFF).
+//! application occupies the remaining 120 KB (flash 0x2000-0x1FFFF). The link
+//! enforces the bound (`__TEXT_REGION_LENGTH__` defsym in
+//! `.cargo/config.toml`), so an image that outgrows the section fails to build
+//! instead of silently overlapping the app.
+//!
+//! Panic handling is `immediate-abort` (see the release profile) to keep the
+//! `core::fmt` machinery out of the 8 KB section. The bootloader therefore
+//! writes no panic records; a panic or hang is bounded by the watchdog instead.
+//! The application keeps full panic recording.
 //!
 //! Pin map is from the board schematic (`hardware/boards/cellguard-eval`):
 //! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. App U104 chip-select
@@ -24,6 +32,7 @@ use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rstctrl::RstInstance;
 use avrxt_hal::spi::{Prescaler, Spi};
+use avrxt_hal::wdt::{Period, Watchdog};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState, FlashNvmWriter};
 use cellboot::image::Region;
@@ -39,8 +48,10 @@ use embedded_hal_bus::spi::RefCellDevice;
 /// bootloader picks.
 const F_CPU: HfFreq = HfFreq::Mhz4;
 
-/// Consecutive panic-resets before the handler halts instead of resetting.
-const PANIC_THRESHOLD: u8 = 3;
+/// Watchdog period for the boot path. Long enough to cover self-programming a
+/// full 120 KB image from the staging EEPROM (roughly 6 s at 250 kbit/s SPI
+/// plus flash row writes) with margin, short enough to bound a hung boot.
+const WDT_PERIOD: Period = Period::Clk8k;
 
 /// Flash address where the application begins (right after the boot section).
 const APP_TARGET_BASE: u32 = layout::BOOT_SECTION_SIZE;
@@ -52,12 +63,6 @@ const MAX_PROGRAM_ATTEMPTS: u8 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
-cellguard_panic::panic_handler!(
-    unsafe { pac::Peripherals::steal() },
-    layout::PANIC_OFFSET,
-    PANIC_THRESHOLD
-);
-
 #[avr_device::entry]
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
@@ -66,6 +71,11 @@ fn main() -> ! {
     // BRING-UP: internal RC until Y100 is verified. Explicit so the clock
     // state does not depend on the reset path that led here.
     clock::set_oschf(&cpu, &dp.CLKCTRL, F_CPU);
+
+    // Bounds the whole boot path. Panics abort immediately (no panic records,
+    // see the profile), so the watchdog is what turns a hung boot back into a
+    // reset instead of a silent halt.
+    let mut wdt = Watchdog::start(&cpu, dp.WDT, WDT_PERIOD);
 
     // On-chip NVM: back the agent state with an EEPROM slot, and later use the
     // same NVMCTRL for flash self-programming.
@@ -94,6 +104,7 @@ fn main() -> ! {
     // If a verified application image is staged, self-program it into flash.
     if state.staged == StagedState::Ready && state.staged_region == Some(Region::ApplicationCode) {
         let give_up = if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
+            wdt.feed();
             let mut writer = FlashNvmWriter::new(&nvm, &cpu);
             let mut scratch = [0u8; 256];
             match programmer::program(&mut store, &mut writer, 0, APP_TARGET_BASE, &mut scratch) {
@@ -136,6 +147,9 @@ fn main() -> ! {
         state.app_health = AppHealth::Bad;
     }
     let _ = state_store.store(&state.serialize());
+
+    // The app does not expect an armed watchdog, so hand over with it stopped.
+    wdt.stop(&cpu);
 
     // No pending update: jump to the installed application.
     unsafe { jump_to_app() }

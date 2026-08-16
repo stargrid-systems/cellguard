@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "cellboot-avr128da64"
 version = "0.1.0"
@@ -26,12 +28,12 @@ cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
 
 [profile.dev]
-panic = "abort"
+panic = "immediate-abort"
 lto = true
 opt-level = "s"
 
 [profile.release]
-panic = "abort"
+panic = "immediate-abort"
 codegen-units = 1
 debug = true
 lto = true
