@@ -32,7 +32,18 @@ pub const PTR_SET: u8 = 2 << 2;
 pub const SIZE_24: u8 = 2;
 pub const SIZE_16: u8 = 1;
 /// Largest block one `REPEAT` can cover (count is a single byte, so 256).
-const REPEAT_MAX: usize = 256;
+/// `st_inc`/`ld_inc` move at most this much per call.
+pub const REPEAT_MAX: usize = 256;
+
+/// Converts a block length (1..=256, per the `st_inc`/`ld_inc` contract)
+/// into the iteration count a `REPEAT` needs. Length 256 wraps to 0, which
+/// `repeat` maps back to 256 on the wire.
+fn len_as_rpt(len: usize) -> u8 {
+    debug_assert!(len > 0 && len <= REPEAT_MAX);
+    #[expect(clippy::cast_possible_truncation, reason = "bounded by the assert")]
+    let rpt = len as u8;
+    rpt
+}
 
 /// UPDI control- and status-register addresses (the `CS` space).
 pub mod cs {
@@ -179,39 +190,36 @@ impl<L: UpdiLink> Updi<L> {
         self.expect_ack()
     }
 
-    /// Reads `buf.len()` bytes from the pointer, post-incrementing.
-    ///
-    /// A `REPEAT` blocks the load so all bytes arrive under one opcode. `buf`
-    /// must not be empty.
+    /// Reads `buf.len()` bytes from the pointer, post-incrementing, under one
+    /// `REPEAT` block. `buf` must not be empty nor longer than
+    /// [`REPEAT_MAX`]. Callers with larger buffers (AVR Dx 512-byte pages)
+    /// split into blocks themselves.
     ///
     /// # Errors
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn ld_inc(&mut self, buf: &mut [u8]) -> Result<(), UpdiError<L::Error>> {
-        for chunk in buf.chunks_mut(REPEAT_MAX) {
-            self.repeat(chunk.len())?;
-            self.instr2(OP_LD | PTR_INC)?;
-            self.link.recv(chunk)?;
-        }
-        Ok(())
+        debug_assert!(!buf.is_empty() && buf.len() <= REPEAT_MAX);
+        self.repeat(len_as_rpt(buf.len()))?;
+        self.instr2(OP_LD | PTR_INC)?;
+        self.link.recv(buf).map_err(UpdiError::Link)
     }
 
-    /// Writes `data` to the pointer, post-incrementing, acknowledged per byte.
-    ///
-    /// A `REPEAT` blocks the store so the block streams under one opcode.
-    /// `data` must not be empty.
+    /// Writes `data` to the pointer, post-incrementing, acknowledged per
+    /// byte, under one `REPEAT` block. `data` must not be empty nor longer
+    /// than [`REPEAT_MAX`]. Callers with larger buffers split into blocks
+    /// themselves.
     ///
     /// # Errors
     ///
     /// Returns [`UpdiError::NoAck`] if a byte is not acknowledged, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn st_inc(&mut self, data: &[u8]) -> Result<(), UpdiError<L::Error>> {
-        for chunk in data.chunks(REPEAT_MAX) {
-            self.repeat(chunk.len())?;
-            self.instr2(OP_ST | PTR_INC)?;
-            for &byte in chunk {
-                self.send_acked(byte)?;
-            }
+        debug_assert!(!data.is_empty() && data.len() <= REPEAT_MAX);
+        self.repeat(len_as_rpt(data.len()))?;
+        self.instr2(OP_ST | PTR_INC)?;
+        for &byte in data {
+            self.send_acked(byte)?;
         }
         Ok(())
     }
@@ -243,13 +251,12 @@ impl<L: UpdiLink> Updi<L> {
         self.expect_ack()
     }
 
-    /// Emits a `REPEAT` so the next instruction runs `count` times. `count`
-    /// must be at least one.
-    fn repeat(&mut self, count: usize) -> Result<(), UpdiError<L::Error>> {
-        // REPEAT takes count-1: the next instruction runs (count-1)+1 times. A
-        // single byte bounds a page-sized block to 256, which is enough here.
-        let rpt = u8::try_from(count.saturating_sub(1)).unwrap_or(u8::MAX);
-        self.instr3(OP_REPEAT, rpt)
+    /// Emits a `REPEAT` so the next instruction runs `rpt` times. REPEAT
+    /// takes count-1 on the wire, so the next instruction runs `rpt`
+    /// iterations. Callers hold the block-length contract of
+    /// [`Self::st_inc`]/[`Self::ld_inc`], which bounds `rpt` to 256.
+    fn repeat(&mut self, rpt: u8) -> Result<(), UpdiError<L::Error>> {
+        self.instr3(OP_REPEAT, rpt.wrapping_sub(1))
     }
 
     /// Sends `SYNCH` plus an opcode through one shared out-of-line body.
@@ -286,6 +293,7 @@ impl<L: UpdiLink> Updi<L> {
         self.link.send_byte(a2).map_err(UpdiError::Link)
     }
 
+    #[inline]
     fn expect_ack(&mut self) -> Result<(), UpdiError<L::Error>> {
         if self.link.recv_byte()? == ACK {
             Ok(())
@@ -297,7 +305,7 @@ impl<L: UpdiLink> Updi<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACK, Updi, UpdiError, cs};
+    use super::{cs, Updi, UpdiError, ACK};
     use crate::link::UpdiLink;
 
     /// A fixed-capacity byte buffer, enough for the short frames these tests
