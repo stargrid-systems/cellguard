@@ -1,23 +1,27 @@
 //! `cellprog` is the hardware-independent programmer logic for the `CellGuard`
 //! PROG MCU (the on-board `ATtiny406`).
 //!
-//! The PROG MCU never touches the field bus or the shared key. It reads a
-//! staged image from the external EEPROM
-//! ([`ImageStore`](cellboot::io::ImageStore)), CRC-checks it, and writes it
-//! into the main MCU over UPDI ([`NvmWriter`](cellboot::io::NvmWriter)). The
-//! image was already authenticated by the main MCU before staging, so there is
-//! no crypto here.
+//! The PROG MCU never touches the field bus or the shared key. It executes
+//! one transactional programming command at a time against a UPDI target
+//! ([`session`]); the cellcore orchestrates what to program. The image was
+//! already authenticated by the cellcore before staging, so there is no
+//! crypto here.
 //!
-//! - [`supervisor`] answers program requests over the local link. The firmware
-//!   also uses it to recover the cellcore when its heartbeat is lost (reset,
-//!   then reflash the staged application).
-//! - [`writer`] is the UPDI-backed [`NvmWriter`](cellboot::io::NvmWriter) the
-//!   programmer writes through, built on the `updi` crate.
-//!
-//! The image format, I/O traits, and the streaming programmer engine itself
-//! come from the shared [`cellboot`] core.
+//! - [`session`] answers session commands over the local link: begin, page
+//!   write, page read, end. It is the whole servant protocol in one
+//!   host-testable state machine.
+//! - [`supervisor`] answers whole-image program requests over the local link.
+//!   Legacy, superseded by [`session`].
+//! - [`writer`] is the UPDI-backed [`NvmWriter`](cellboot::io::NvmWriter)
+//!   behind [`supervisor`].
 #![no_std]
 #![warn(missing_docs)]
 
+#[cfg(test)]
+extern crate std;
+
+pub mod session;
 pub mod supervisor;
 pub mod writer;
+
+pub use self::session::{Command, SessionHandler};
