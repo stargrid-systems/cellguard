@@ -61,6 +61,8 @@ const PROG_ID: u8 = 2;
 const TARGET_ID: u16 = 1;
 /// The cellagent's image target_id. Placeholder until provisioned.
 const CELLAGENT_TARGET_ID: u16 = 2;
+/// The cellagent's node address on its control link.
+const CELLAGENT_ID: u8 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -72,6 +74,9 @@ const BUS_RX_TIMEOUT_MS: u32 = 10;
 /// USART3 receive timeout in ms. Bounds the per-tick programmer-reply poll
 /// while an in-flight handoff waits for its `ProgResult`.
 const PROG_RX_TIMEOUT_MS: u32 = 5;
+/// USART4 receive timeout in ms. One bounded read while waiting for a
+/// forwarded cellagent reply (40 reads total, see `cellcore-runtime`).
+const AGENT_RX_TIMEOUT_MS: u32 = 2;
 
 cellguard_panic::panic_handler!(
     unsafe { pac::Peripherals::steal() },
@@ -172,7 +177,18 @@ fn main() -> ! {
             .rx_timeout_ms(PROG_RX_TIMEOUT_MS),
     );
 
-    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID);
+    // USART4 (PE4 TxD / PE5 RxD) = control link to the cellagent. Frames
+    // addressed to CELLAGENT_ID on the bus are routed over this link.
+    let porte = Port::new(dp.PORTE).split();
+    let _agent_tx = porte.p4.into_output_high();
+    let _agent_rx = porte.p5.into_input();
+    let agent = build_usart(
+        Usart::builder(dp.USART4, F_CPU.hz())
+            .baud(PROG_BAUD)
+            .rx_timeout_ms(AGENT_RX_TIMEOUT_MS),
+    );
+
+    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID, agent, CELLAGENT_ID);
 
     // Init completed: this boot is healthy, so any prior panic was transient.
     // Clear the crash-loop counter so unrelated panics do not accumulate.

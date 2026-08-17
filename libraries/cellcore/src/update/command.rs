@@ -159,6 +159,8 @@ pub enum NackReason {
     VerifyFailed,
     /// A key-replacement request failed authentication.
     Unauthorized,
+    /// A routed command reached a node that did not answer in time.
+    RouteTimeout,
 }
 
 impl NackReason {
@@ -174,6 +176,7 @@ impl NackReason {
             Self::StorageError => 5,
             Self::VerifyFailed => 6,
             Self::Unauthorized => 7,
+            Self::RouteTimeout => 8,
         }
     }
 
@@ -189,6 +192,7 @@ impl NackReason {
             5 => Some(Self::StorageError),
             6 => Some(Self::VerifyFailed),
             7 => Some(Self::Unauthorized),
+            8 => Some(Self::RouteTimeout),
             _ => None,
         }
     }
