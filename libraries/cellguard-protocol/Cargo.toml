@@ -17,6 +17,9 @@ bootloader = []
 # builds leave it out and the master trusts write status instead of
 # verifying by read-back. Additive.
 page-read = []
+# Adds the balancing-test telemetry kinds and payload codecs. Only nodes
+# that serve balancing telemetry pay for it. Additive.
+telemetry = []
 
 [dependencies]
 crc = { workspace = true }
