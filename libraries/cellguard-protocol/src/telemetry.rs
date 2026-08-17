@@ -6,8 +6,7 @@
 //!
 //! - Cell voltages (ADC A ch0-3): `V_cell = code / 2^23 * VREF / 0.0330` with
 //!   the 820k:28k divider (÷30.29) and the ADS131M08 internal reference (1.2 V,
-//!   gain 128 by default → see `ads131m08::Gain`). Reading is valid only while
-//!   `POWER_ON` is asserted.
+//!   gain 1 by default). Reading is valid only while `POWER_ON` is asserted.
 //! - Balance currents (ADC B ch0-3, IR mux position 0): INA190A1 over a 47 mΩ
 //!   shunt, gain 25 → `I = V_out / (1.175 V/A)`. `V_out = code / 2^23 * VREF /
 //!   1` per the same frontend. Mind the `INA_REF` switch `S501`: at GND the
