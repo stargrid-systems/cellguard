@@ -16,12 +16,14 @@ bench = false
 avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
 cellboot = { path = "../libraries/cellboot", features = ["avr128", "drivers"] }
-cellcore = { path = "../libraries/cellcore" }
+cellcore = { path = "../libraries/cellcore", features = ["telemetry"] }
 cellcore-runtime = { path = "../libraries/cellcore-runtime" }
 cat25 = { path = "../libraries/cat25" }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-bus = { version = "0.3", default-features = false }
 cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
+cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader", "telemetry"] }
+p3t1755 = { path = "../libraries/p3t1755" }
 tca9535 = { path = "../libraries/tca9535" }
 
 [patch.crates-io]

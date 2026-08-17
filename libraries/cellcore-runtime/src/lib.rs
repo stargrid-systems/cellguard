@@ -115,6 +115,10 @@ pub trait TelemetryHandler {
     /// Observes a frame routed to the downstream node, after it was written
     /// to the agent link. The default ignores it.
     fn note_forwarded(&mut self, _kind: Kind, _payload: &[u8]) {}
+
+    /// Called once per [`CoreRuntime::tick`], so the handler can run
+    /// time-based duties like a heartbeat cadence. The default ignores it.
+    fn on_tick(&mut self, _now: u32) {}
 }
 
 /// Hosts the update agent on a pair of byte links.
@@ -210,8 +214,11 @@ where
     /// Advances the runtime's tick, passed to telemetry handlers to stamp
     /// their refresh windows. Call from the event loop with the real time
     /// base.
-    pub const fn tick(&mut self, now: u32) {
+    pub fn tick(&mut self, now: u32) {
         self.now = now;
+        if let Some(handler) = self.telemetry.as_deref_mut() {
+            handler.on_tick(now);
+        }
     }
 
     /// Runs the agent forever.

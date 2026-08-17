@@ -93,6 +93,12 @@ impl<H: BalancingHw> Balancing<H> {
         }
     }
 
+    /// Mutable access to the hardware, for duties the layer does not model
+    /// (like the heartbeat cadence).
+    pub const fn hw_mut(&mut self) -> &mut H {
+        &mut self.hw
+    }
+
     /// Releases the hardware, consuming the layer.
     #[must_use]
     pub fn free(self) -> H {

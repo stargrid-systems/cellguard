@@ -130,8 +130,10 @@ dependencies = [
  "cellcore",
  "cellcore-runtime",
  "cellguard-panic",
+ "cellguard-protocol",
  "embedded-hal",
  "embedded-hal-bus",
+ "p3t1755",
  "tca9535",
 ]
 
@@ -464,6 +466,13 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "p3t1755"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal",
+]
 
 [[package]]
 name = "percent-encoding"

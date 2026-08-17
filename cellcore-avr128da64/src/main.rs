@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(abi_avr_interrupt)]
 
 //! CellGuard core firmware for the AVR128DA64, the MCU populated on the board.
 //!
@@ -16,13 +17,19 @@
 //! - USART5 (PG4/PG5 via PORTMUX ALT1) is the debug UART, used as the field bus
 //!   for bring-up. The production RS485 field bus on USART1 is untested.
 //! - USART3 (PB0/PB1) is the local link to the ATtiny406 PROG programmer.
+//! - USART4 (PE4/PE5) is the control link to the cellagent. Bus frames
+//!   addressed to it are routed there.
+//! - I2C1 (PB2/PB3) carries the expanders (U103 power, U1100 bleed) and the
+//!   U908 temperature sensor.
+//! - The balancing-test hardware (rail mux, `INA_EN`, gate-off, ALIVE inputs)
+//!   lives in `board`.
 //!
 //! The application is linked at 0x2000, after the 8 KB boot section
 //! (FUSE.BOOTSIZE = 16).
 //!
-//! BRING-UP STATE: runs on the 4 MHz internal RC (Y100 not verified), field
-//! bus on the USART5 debug UART at 9600 baud, heartbeat disabled (I2C
-//! blocking bug). See `scratch/bring-up/test-report.md` for details.
+//! The clock is the 24 MHz external oscillator Y100 on PA0. The heartbeat to
+//! the cellprog (U103 P12) toggles every 250 ms; TWI has a bounded timeout,
+//! so a wedged expander can stall one toggle but not the main loop.
 
 use core::cell::RefCell;
 
@@ -31,38 +38,46 @@ use avrxt_hal::clock::{self, HfFreq};
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
-use avrxt_hal::spi::{Prescaler, Spi};
+use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
+use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
+use avrxt_hal::twi::Twi;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::io::{BandedStore, NoKeyStore};
 use cellboot::{layout, state};
+use cellcore::balancing::Balancing;
 use cellcore::update::command::KEY_LEN;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-use cellcore_runtime::CoreRuntime;
+use cellcore_runtime::{CoreRuntime, TelemetryHandler};
 use cellguard_panic::{clear, read_panic_record};
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 
-/// BRING-UP: internal RC at 4 MHz (Y100 not verified).
-const F_CPU: HfFreq = HfFreq::Mhz4;
+use self::board::Board;
+
+mod board;
+
+/// Y100 external oscillator on PA0, per the verified netlist.
+const F_CPU: HfFreq = HfFreq::Mhz24;
 
 /// Debug UART baud (USART5, bring-up).
 const BUS_BAUD: u32 = 9_600;
-/// Baud on the local link to the PROG programmer (USART3).
+/// Baud on the local links to the PROG programmer (USART3) and the
+/// cellagent (USART4).
 const PROG_BAUD: u32 = 115_200;
 
 /// This node's address on the field bus. Placeholder until provisioned.
 const NODE_ID: u8 = 1;
 /// The programmer's node address on the local link. Placeholder.
 const PROG_ID: u8 = 2;
+/// The cellagent's node address on its control link.
+const CELLAGENT_ID: u8 = 3;
 /// The image `target_id` this device accepts. Placeholder until provisioned.
 const TARGET_ID: u16 = 1;
 /// The cellagent's image target_id. Placeholder until provisioned.
 const CELLAGENT_TARGET_ID: u16 = 2;
-/// The cellagent's node address on its control link.
-const CELLAGENT_ID: u8 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -78,6 +93,13 @@ const PROG_RX_TIMEOUT_MS: u32 = 5;
 /// forwarded cellagent reply (40 reads total, see `cellcore-runtime`).
 const AGENT_RX_TIMEOUT_MS: u32 = 2;
 
+/// I2C1 bus speed.
+const SCL_HZ: u32 = 100_000;
+
+/// TWI transaction timeout in ms. Bounds a wedged expander: the heartbeat
+/// toggle may miss its cadence but the loop never blocks forever.
+const TWI_TIMEOUT_MS: u32 = 20;
+
 cellguard_panic::panic_handler!(
     unsafe { pac::Peripherals::steal() },
     layout::PANIC_OFFSET,
@@ -89,9 +111,9 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // The app configures its own clock so it never depends on what the
-    // bootloader leaves behind.
-    clock::set_oschf(&cpu, &dp.CLKCTRL, F_CPU);
+    // Y100: external 24 MHz oscillator. The app configures its own clock so
+    // it never depends on what the bootloader leaves behind.
+    clock::set_extclk(&cpu, &dp.CLKCTRL, F_CPU);
 
     // USART5 debug UART on PG4/PG5, used as the field bus for bring-up.
     // Default USART5 pins are PG0/PG1; PORTMUX ALT1 routes to PG4/PG5 where
@@ -124,12 +146,14 @@ fn main() -> ! {
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
+    let portc = Port::new(dp.PORTC).split();
+    let porte = Port::new(dp.PORTE).split();
 
     // SPI0 host bus (PA4 MOSI, PA5 MISO, PA6 SCK), the staging EEPROM bus.
     let _mosi = porta.p4.into_output();
     let _miso = porta.p5.into_input();
     let _sck = porta.p6.into_output();
-    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, Prescaler::Div16));
+    let spi = RefCell::new(Spi::new(dp.SPI0, MODE_0, SpiPrescaler::Div16));
 
     // App and Boot chip-selects (active low, idle high).
     let cs_app = portg.p6.into_output_high();
@@ -177,29 +201,54 @@ fn main() -> ! {
             .rx_timeout_ms(PROG_RX_TIMEOUT_MS),
     );
 
-    // USART4 (PE4 TxD / PE5 RxD) = control link to the cellagent. Frames
-    // addressed to CELLAGENT_ID on the bus are routed over this link.
-    let porte = Port::new(dp.PORTE).split();
+    // USART4 (PE4 TxD / PE5 RxD) = control link to the cellagent.
     let _agent_tx = porte.p4.into_output_high();
     let _agent_rx = porte.p5.into_input();
-    let agent = build_usart(
+    let agent_link = build_usart(
         Usart::builder(dp.USART4, F_CPU.hz())
             .baud(PROG_BAUD)
             .rx_timeout_ms(AGENT_RX_TIMEOUT_MS),
     );
 
-    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID, agent, CELLAGENT_ID);
+    // I2C1 (PB2/PB3): expanders and the temperature sensor. The TWI
+    // peripheral takes the pins once enabled; internal pull-ups hold the bus
+    // between transactions.
+    let _sda = portb.p2.into_input_pullup();
+    let _scl = portb.p3.into_input_pullup();
+    let twi = Twi::with_timeout_ms(dp.TWI1, F_CPU.hz(), SCL_HZ, TWI_TIMEOUT_MS);
+
+    // Balancing-test hardware. Rail mux PE0-PE2, INA_EN PF5, gate-off PB5,
+    // TINY_ALL_OFF readback PC7, cellagent ALIVE PG0.
+    let portf = Port::new(dp.PORTF).split();
+    let board = Board::new(
+        twi,
+        dp.VREF,
+        dp.ADC0,
+        porte.p0.into_output(),
+        porte.p1.into_output(),
+        porte.p2.into_output(),
+        portf.p5.into_output(),
+        portb.p5.into_output(),
+        portc.p7.into_input(),
+        portg.p0.into_input(),
+    );
+    let mut balancing = BoardBalancing::new(board);
+
+    // The runtime ties everything together: bus, programmer link, cellagent
+    // link, and the balancing telemetry handler.
+    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID, agent_link, CELLAGENT_ID)
+        .with_telemetry(&mut balancing, NODE_ID);
 
     // Init completed: this boot is healthy, so any prior panic was transient.
     // Clear the crash-loop counter so unrelated panics do not accumulate.
     clear(&nvm, &cpu, layout::PANIC_OFFSET);
 
-    // BRING-UP: no heartbeat. The I2C write to the TCA9535 expander blocks
-    // indefinitely when the chip is unreachable (see test-report.md, bug 3),
-    // so the expander is not brought up at all. The cellprog watchdog must
-    // therefore stay passive while no heartbeat is ever sent. Re-enable both
-    // once the TWI driver has a bounded timeout.
+    // RTC as the free-running time base (~1.024 kHz). The heartbeat cadence
+    // lives in the telemetry handler's on_tick.
+    let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, Prescaler::Div1, u16::MAX);
+
     loop {
+        runtime.tick(u32::from(rtc.count()));
         runtime.try_service();
     }
 }
@@ -218,5 +267,46 @@ fn halt() -> ! {
     avr_device::interrupt::disable();
     loop {
         core::hint::spin_loop();
+    }
+}
+
+/// Local newtype so the orphan rule lets this crate implement the runtime's
+/// telemetry handler for the balancing layer over this board.
+struct BoardBalancing {
+    inner: Balancing<Board>,
+}
+
+impl BoardBalancing {
+    fn new(board: Board) -> Self {
+        Self {
+            inner: Balancing::new(board),
+        }
+    }
+}
+
+impl TelemetryHandler for BoardBalancing {
+    fn handle(
+        &mut self,
+        now: u32,
+        kind: cellguard_protocol::Kind,
+        payload: &[u8],
+        out: &mut [u8],
+    ) -> Option<(cellguard_protocol::Kind, usize)> {
+        Balancing::handle(&mut self.inner, now, kind, payload, out)
+    }
+
+    fn note_forwarded(&mut self, kind: cellguard_protocol::Kind, payload: &[u8]) {
+        if kind == cellguard_protocol::Kind::SetBalancer
+            && let Some(&mask) = payload.first()
+        {
+            self.inner.note_gate_mask(mask);
+        }
+    }
+
+    fn on_tick(&mut self, now: u32) {
+        self.inner.tick(now);
+        if let Ok(now) = u16::try_from(now) {
+            self.inner.hw_mut().heartbeat(now);
+        }
     }
 }
