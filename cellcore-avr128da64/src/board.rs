@@ -3,7 +3,7 @@
 //! [`Board`] owns the I2C1 expanders (U103 power/heartbeat, U1100 bleed
 //! enables), the rail ADC with its U100/U101 mux, the cellagent-liveness
 //! inputs, and the emergency gate-off pin, and implements
-//! [`BalancingHw`](cellcore::balancing::BalancingHw) over them. See
+//! [`BalancingHw`] over them. See
 //! `scratch/hardware/balancing.md` for the netlist facts.
 //!
 //! The I2C devices share one TWI through transient borrows: each operation
