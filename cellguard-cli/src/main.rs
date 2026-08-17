@@ -16,7 +16,9 @@ use cellboot::image::{ImageHeader, ImageKind, Region};
 use cellboot::state::{PersistentState, STATE_LEN};
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
-use cellguard_protocol::Kind;
+use cellguard_protocol::{
+    BalancerStatus, Kind, RAIL_ORDER, RailSnapshot, Snapshot, TEMP_ORDER, decode_temps,
+};
 use clap::{Parser, Subcommand};
 use hmac_sha256::HMAC;
 
@@ -94,6 +96,123 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_BAUD)]
         baud: u32,
     },
+    /// Read the cell-voltage snapshot (raw codes plus millivolts).
+    Cells {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Read the balance-current snapshot (raw codes plus amperes).
+    Currents {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Read the supply rails.
+    Rails {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Read the temperature sensors.
+    Temps {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Read the full balancing status frame.
+    Balance {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Set the bleed-leg enable masks (`en_3r6`, `en_36r5`).
+    SetBleed {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+        /// Leg-A (2.0 R) enable mask, bit x = cell x+1.
+        #[arg(long)]
+        en_3r6: u8,
+        /// Leg-B (7.2 R) enable mask, bit x = cell x+1.
+        #[arg(long)]
+        en_36r5: u8,
+    },
+    /// Set the bleed PWM duty in 1/65536 units. Static on this board
+    /// revision: 0 = off, nonzero = fully on.
+    SetBleedPwm {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+        #[arg(long)]
+        duty: u16,
+    },
+    /// Set power-enable flags (bits: 1=`ACTIVE_BALANCER_ON`, 2=`EN_ALL`,
+    /// 4=`POWER_ON`).
+    SetPower {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+        #[arg(long)]
+        flags: u8,
+    },
+    /// Assert (1) or release (0) the hardware gate-off.
+    GateOff {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+        #[arg(long)]
+        on: u8,
+    },
+    /// Command the cellagent balancer gates (routed through the cellcore).
+    SetBalancer {
+        #[arg(long)]
+        port: String,
+        /// Cellagent node address (the cellcore routes it downstream).
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+        /// Gate mask: bit 0 `GATE_A`, bit 1 `GATE_B`, bit 2 `ALL_OFF`.
+        #[arg(long)]
+        mask: u8,
+    },
+    /// Read the cellagent's last commanded gate mask (routed).
+    GateState {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -163,6 +282,47 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         ),
         Command::Probe { port, node, baud } => probe(&port, node, baud),
         Command::PanicProbe { port, node, baud } => panic_probe(&port, node, baud),
+        Command::Cells { port, node, baud } => {
+            read_snapshot(&port, node, baud, SnapshotKind::Cells)
+        }
+        Command::Currents { port, node, baud } => {
+            read_snapshot(&port, node, baud, SnapshotKind::Currents)
+        }
+        Command::Rails { port, node, baud } => rails(&port, node, baud),
+        Command::Temps { port, node, baud } => temps(&port, node, baud),
+        Command::Balance { port, node, baud } => balance_status(&port, node, baud),
+        Command::SetBleed {
+            port,
+            node,
+            baud,
+            en_3r6,
+            en_36r5,
+        } => ack(&port, node, baud, Kind::SetBleed, &[en_3r6, en_36r5]),
+        Command::SetBleedPwm {
+            port,
+            node,
+            baud,
+            duty,
+        } => ack(&port, node, baud, Kind::SetBleedPwm, &duty.to_le_bytes()),
+        Command::SetPower {
+            port,
+            node,
+            baud,
+            flags,
+        } => ack(&port, node, baud, Kind::SetPower, &[flags]),
+        Command::GateOff {
+            port,
+            node,
+            baud,
+            on,
+        } => ack(&port, node, baud, Kind::GateOff, &[on]),
+        Command::SetBalancer {
+            port,
+            node,
+            baud,
+            mask,
+        } => ack(&port, node, baud, Kind::SetBalancer, &[mask]),
+        Command::GateState { port, node, baud } => gate_state(&port, node, baud),
     }
 }
 
@@ -374,4 +534,133 @@ fn hex_val(c: u8) -> Result<u8, Box<dyn Error>> {
         b'A'..=b'F' => Ok(c - b'A' + 10),
         _ => Err(format!("invalid hex char: {}", char::from(c)).into()),
     }
+}
+
+/// Which snapshot a `read_snapshot` call fetches.
+#[derive(Clone, Copy)]
+enum SnapshotKind {
+    Cells,
+    Currents,
+}
+
+/// ADS131M08 internal reference in millivolts and full scale.
+const ADS_VREF_MV: f32 = 1200.0;
+const ADS_FULL_SCALE: f32 = 8_388_608.0;
+/// Cell-voltage divider ratio (820k:28k).
+const CELL_DIVIDER: f32 = 0.0330;
+/// INA190 transfer: volts out per ampere (47 mOhm shunt, gain 25).
+const INA_V_PER_A: f32 = 1.175;
+
+fn read_snapshot(
+    port: &str,
+    node: u8,
+    baud: u32,
+    what: SnapshotKind,
+) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let (kind, label) = match what {
+        SnapshotKind::Cells => (Kind::ReadCellVoltages, "cell"),
+        SnapshotKind::Currents => (Kind::ReadBalanceCurrents, "current"),
+    };
+    let reply = transport.exchange(node, kind, &[])?;
+    let expected = match what {
+        SnapshotKind::Cells => Kind::CellVoltages,
+        SnapshotKind::Currents => Kind::BalanceCurrents,
+    };
+    if reply.kind != expected {
+        return Err(format!("expected {expected:?}, got {:?}", reply.kind).into());
+    }
+    let snap = Snapshot::decode(&reply.payload).ok_or("snapshot payload has the wrong shape")?;
+    println!("seq {}", snap.seq);
+    for (i, code) in snap.codes.iter().enumerate() {
+        #[expect(clippy::cast_precision_loss, reason = "24-bit codes fit f32 exactly")]
+        let volts = *code as f32 / ADS_FULL_SCALE * ADS_VREF_MV / 1000.0;
+        match what {
+            SnapshotKind::Cells => {
+                let cell_mv = volts / CELL_DIVIDER * 1000.0;
+                println!("cell {}: raw {code}, {:.1} mV", i + 1, cell_mv);
+            }
+            SnapshotKind::Currents => {
+                let amps = volts / INA_V_PER_A;
+                println!("cell {}: raw {code}, {amps:.3} A", i + 1);
+            }
+        }
+    }
+    let _ = label;
+    Ok(())
+}
+
+fn rails(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let reply = transport.exchange(node, Kind::ReadRails, &[])?;
+    if reply.kind != Kind::Rails {
+        return Err(format!("expected Rails, got {:?}", reply.kind).into());
+    }
+    let snap = RailSnapshot::decode(&reply.payload).ok_or("rails payload has the wrong shape")?;
+    for (name, code) in RAIL_ORDER.iter().zip(snap.codes) {
+        println!("{name}: {code}");
+    }
+    Ok(())
+}
+
+fn temps(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let reply = transport.exchange(node, Kind::ReadTemperatures, &[])?;
+    if reply.kind != Kind::Temperatures {
+        return Err(format!("expected Temperatures, got {:?}", reply.kind).into());
+    }
+    let temps = decode_temps(&reply.payload).ok_or("temps payload has the wrong shape")?;
+    for (name, centi) in TEMP_ORDER.iter().zip(temps) {
+        if centi == cellguard_protocol::TEMP_INVALID {
+            println!("{name}: unavailable");
+        } else {
+            println!("{name}: {}.{:02} C", centi / 100, centi % 100);
+        }
+    }
+    Ok(())
+}
+
+fn balance_status(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let reply = transport.exchange(node, Kind::ReadBalancerStatus, &[])?;
+    if reply.kind != Kind::BalancerStatus {
+        return Err(format!("expected BalancerStatus, got {:?}", reply.kind).into());
+    }
+    let status =
+        BalancerStatus::decode(&reply.payload).ok_or("status payload has the wrong shape")?;
+    println!("en_3r6 mask: {:#04x}", status.en_3r6);
+    println!("en_36r5 mask: {:#04x}", status.en_36r5);
+    println!(
+        "pwm duty: {} ({:.2}%)",
+        status.pwm_duty,
+        f32::from(status.pwm_duty) / 655.36
+    );
+    println!("gate mask: {:#04x}", status.gate_mask);
+    println!("tiny_all_off: {}", status.tiny_all_off);
+    println!("emergency_gate_off: {}", status.emergency_gate_off);
+    println!("active_balancer_on: {}", status.active_balancer_on);
+    println!("en_all: {}", status.en_all);
+    println!("cellagent_alive: {}", status.cellagent_alive);
+    Ok(())
+}
+
+fn ack(port: &str, node: u8, baud: u32, kind: Kind, payload: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let reply = transport.exchange(node, kind, payload)?;
+    match reply.kind {
+        Kind::Ack => Ok(()),
+        Kind::Nack => Err(format!("nacked: {:?}", reply.payload).into()),
+        other => Err(format!("expected Ack, got {other:?}").into()),
+    }
+}
+
+fn gate_state(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let reply = transport.exchange(node, Kind::ReadBalancerGateState, &[])?;
+    if reply.kind != Kind::BalancerGateState {
+        return Err(format!("expected BalancerGateState, got {:?}", reply.kind).into());
+    }
+    let mask = reply.payload.first().copied().unwrap_or(0);
+    println!("gate mask: {mask:#04x}");
+    Ok(())
 }

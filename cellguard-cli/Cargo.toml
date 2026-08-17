@@ -16,7 +16,7 @@ bench = false
 cellboot = { path = "../libraries/cellboot" }
 cellcore = { path = "../libraries/cellcore", features = ["sign"] }
 cellguard-panic = { path = "../libraries/cellguard-panic" }
-cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader"] }
+cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader", "telemetry"] }
 hmac-sha256 = "1"
 serialport = { version = "4", default-features = false }
 clap = { version = "4", features = ["derive"] }
