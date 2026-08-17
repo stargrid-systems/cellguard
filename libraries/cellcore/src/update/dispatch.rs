@@ -18,7 +18,7 @@ use cellguard_protocol::{
     Decoder, HEADER_LEN, PAYLOAD_CRC_LEN, Packet, encode_frame, max_encoded_len,
 };
 
-use crate::update::command::{Command, NackReason, Response};
+use crate::update::command::{Command, MapError, NackReason, Response};
 use crate::update::session::UpdateAgent;
 
 /// Largest response payload: a status reply or a panic record, whichever is
@@ -105,9 +105,15 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
             return None;
         }
         // A packet whose kind is one of ours but whose payload does not decode
-        // gets an explicit Malformed nack, not silence.
-        let Ok(command) = Command::from_packet(packet) else {
-            return self.encode_response(Response::Nack(NackReason::Malformed));
+        // gets an explicit Malformed nack, not silence. A kind outside the
+        // update protocol is not ours to judge: it stays silent so another
+        // handler (or another node) can own it.
+        let command = match Command::from_packet(packet) {
+            Ok(command) => command,
+            Err(MapError::BadPayload) => {
+                return self.encode_response(Response::Nack(NackReason::Malformed));
+            }
+            Err(MapError::NotBootCommand(_)) => return None,
         };
         let response = self.agent.handle(command);
         self.encode_response(response)

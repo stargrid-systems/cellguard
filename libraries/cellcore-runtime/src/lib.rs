@@ -61,7 +61,7 @@ use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellcore::update::command::NackReason;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::handoff::{self, PROGRAM_WIRE, RESULT_FRAME};
-use cellguard_protocol::{Decoder, Header, Packet, ProgStatus};
+use cellguard_protocol::{Decoder, Header, Kind, Packet, ProgStatus};
 use embedded_io::{Read, Write};
 
 /// Receive budget for one forwarded agent frame. Agent-bound commands are
@@ -77,6 +77,46 @@ const AGENT_REPLY_BUDGET: usize = 40;
 /// `RouteTimeout` reply payload.
 const ROUTE_TIMEOUT_PAYLOAD: [u8; 1] = [NackReason::RouteTimeout.to_code()];
 
+/// Largest telemetry reply payload this runtime can build (the cell snapshot
+/// is 1 seq byte plus 4 codes).
+const TELEMETRY_PAYLOAD_MAX: usize = 17;
+
+/// What `route` does with a completed frame.
+enum RouteAction {
+    /// Forward to the agent link (carries the frame length).
+    Forward(usize),
+    /// Offer to the telemetry handler (carries the request kind and length).
+    Telemetry(Kind, usize),
+}
+
+/// A side handler for node-local request kinds the update agent does not
+/// own, such as the balancing-test telemetry. Implemented by the firmware
+/// over the `cellcore` crate's subsystems.
+///
+/// `handle` receives the request kind and payload plus the runtime's current
+/// tick (see [`CoreRuntime::tick`]), writes the reply payload into `out`, and
+/// returns the reply kind and payload length. Returning `None` leaves the
+/// frame unanswered.
+pub trait TelemetryHandler {
+    /// Serves one request. See the trait docs.
+    ///
+    /// # Errors
+    ///
+    /// None: a handler that cannot serve a request returns `None`, and the
+    /// frame stays unanswered.
+    fn handle(
+        &mut self,
+        now: u32,
+        kind: Kind,
+        payload: &[u8],
+        out: &mut [u8],
+    ) -> Option<(Kind, usize)>;
+
+    /// Observes a frame routed to the downstream node, after it was written
+    /// to the agent link. The default ignores it.
+    fn note_forwarded(&mut self, _kind: Kind, _payload: &[u8]) {}
+}
+
 /// Hosts the update agent on a pair of byte links.
 ///
 /// `Bus` is the field bus the host talks on. `Prog` is the local link to the
@@ -88,6 +128,7 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     agent: Agent,
     agent_id: u8,
     prog_id: u8,
+    node_id: u8,
     /// Whether the app has confirmed itself healthy this boot, so
     /// [`UpdateAgent::confirm_app_healthy`] is persisted at most once per
     /// boot.
@@ -106,6 +147,10 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     route_scratch: [u8; AGENT_RX],
     /// Decoder for the agent's reply frame.
     reply_decoder: Decoder,
+    /// Side handler for node-local telemetry kinds, if installed.
+    telemetry: Option<&'k mut dyn TelemetryHandler>,
+    /// Current tick, advanced by [`CoreRuntime::tick`].
+    now: u32,
 }
 
 impl<'k, S, K, St, Bus, Prog, Agent, const RX: usize>
@@ -139,6 +184,7 @@ where
             agent,
             agent_id,
             prog_id,
+            node_id: 0,
             app_confirmed: false,
             awaiting_prog_result: false,
             prog_decoder: Decoder::new(),
@@ -146,7 +192,26 @@ where
             route_decoder: Decoder::new(),
             route_scratch: [0; AGENT_RX],
             reply_decoder: Decoder::new(),
+            telemetry: None,
+            now: 0,
         }
+    }
+
+    /// Installs a telemetry handler and this node's bus address. Frames
+    /// addressed to `node_id` whose kind the handler owns are answered by it;
+    /// the update agent answers its own kinds as before.
+    #[must_use]
+    pub fn with_telemetry(mut self, handler: &'k mut dyn TelemetryHandler, node_id: u8) -> Self {
+        self.telemetry = Some(handler);
+        self.node_id = node_id;
+        self
+    }
+
+    /// Advances the runtime's tick, passed to telemetry handlers to stamp
+    /// their refresh windows. Call from the event loop with the real time
+    /// base.
+    pub const fn tick(&mut self, now: u32) {
+        self.now = now;
     }
 
     /// Runs the agent forever.
@@ -214,7 +279,7 @@ where
     /// section).
     fn route(&mut self, byte: u8) {
         let mut frame_buf = [0u8; AGENT_RX];
-        let frame_len = {
+        let action = {
             let Ok(Some(len)) = self.route_decoder.feed(byte, &mut self.route_scratch) else {
                 return;
             };
@@ -224,17 +289,84 @@ where
             let Ok((header, _)) = Header::parse(frame) else {
                 return;
             };
-            if header.id != self.agent_id {
+            if header.id == self.agent_id {
+                let Some(slot) = frame_buf.get_mut(..len) else {
+                    return;
+                };
+                slot.copy_from_slice(frame);
+                RouteAction::Forward(len)
+            } else if header.id == self.node_id {
+                // Parse the full packet for the telemetry handler; a frame
+                // that does not parse is not ours to answer.
+                match Packet::parse(frame) {
+                    Ok(packet) => {
+                        let Some(slot) = frame_buf.get_mut(..len) else {
+                            return;
+                        };
+                        slot.copy_from_slice(frame);
+                        RouteAction::Telemetry(packet.kind, len)
+                    }
+                    Err(_) => return,
+                }
+            } else {
                 return;
             }
-            let Some(slot) = frame_buf.get_mut(..len) else {
-                return;
-            };
-            slot.copy_from_slice(frame);
-            len
         };
-        if let Some(frame) = frame_buf.get(..frame_len) {
-            self.forward(frame);
+        match action {
+            RouteAction::Forward(len) => {
+                let Some(frame) = frame_buf.get(..len) else {
+                    return;
+                };
+                let mut payload_buf = [0u8; AGENT_RX];
+                let noted = Packet::parse(frame).ok().map(|packet| {
+                    let payload = payload_buf.get_mut(..packet.payload.len())?;
+                    payload.copy_from_slice(packet.payload);
+                    Some((packet.kind, payload.len()))
+                });
+                self.forward(frame);
+                if let (Some(handler), Some(Some((kind, payload_len)))) =
+                    (self.telemetry.as_deref_mut(), noted)
+                {
+                    handler.note_forwarded(kind, payload_buf.get(..payload_len).unwrap_or(&[]));
+                }
+            }
+            RouteAction::Telemetry(kind, len) => {
+                let Some(frame) = frame_buf.get(..len) else {
+                    return;
+                };
+                self.serve_telemetry(kind, frame);
+            }
+        }
+    }
+
+    /// Answers a node-local frame through the telemetry handler, if the
+    /// handler owns its kind.
+    fn serve_telemetry(&mut self, kind: Kind, frame: &[u8]) {
+        let Some(handler) = self.telemetry.as_deref_mut() else {
+            return;
+        };
+        let payload = Packet::parse(frame).map_or(&[] as &[u8], |packet| packet.payload);
+        let mut out = [0u8; TELEMETRY_PAYLOAD_MAX];
+        let Some((kind, len)) = handler.handle(self.now, kind, payload, &mut out) else {
+            return;
+        };
+        let mut raw = [0u8; TELEMETRY_PAYLOAD_MAX
+            + cellguard_protocol::HEADER_LEN
+            + cellguard_protocol::PAYLOAD_CRC_LEN];
+        if let Ok(raw_len) =
+            Packet::write(self.node_id, kind, out.get(..len).unwrap_or(&[]), &mut raw)
+            && let Some(raw_slice) = raw.get(..raw_len)
+        {
+            let mut wire = [0u8; cellguard_protocol::max_encoded_len(
+                TELEMETRY_PAYLOAD_MAX
+                    + cellguard_protocol::HEADER_LEN
+                    + cellguard_protocol::PAYLOAD_CRC_LEN,
+            )];
+            if let Some(wire_len) = cellguard_protocol::encode_frame(raw_slice, &mut wire)
+                && let Some(bytes) = wire.get(..wire_len)
+            {
+                let _ = self.bus.write_all(bytes);
+            }
         }
     }
 
@@ -678,5 +810,74 @@ mod tests {
 
         assert_eq!(decode_kind(&runtime.bus.written), Kind::BootStatus);
         assert!(runtime.agent.written.is_empty());
+    }
+
+    /// A telemetry handler that answers `ReadRails` and records forwarded
+    /// kinds.
+    struct EchoHandler {
+        noted: std::vec::Vec<(Kind, u8)>,
+    }
+
+    impl super::TelemetryHandler for EchoHandler {
+        fn handle(
+            &mut self,
+            _now: u32,
+            kind: Kind,
+            _payload: &[u8],
+            out: &mut [u8],
+        ) -> Option<(Kind, usize)> {
+            match kind {
+                Kind::ReadRails => {
+                    out[0] = 1;
+                    out[1] = 2;
+                    Some((Kind::Rails, 2))
+                }
+                _ => None,
+            }
+        }
+
+        fn note_forwarded(&mut self, kind: Kind, payload: &[u8]) {
+            if let Some(&mask) = payload.first() {
+                self.noted.push((kind, mask));
+            }
+        }
+    }
+
+    #[test]
+    fn telemetry_kinds_are_answered_by_the_side_handler() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+        };
+        let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+        feed_command(runtime, Kind::ReadRails, &[]);
+        assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+    }
+
+    #[test]
+    fn boot_kinds_still_reach_the_update_agent_alongside_telemetry() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+        };
+        let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+        feed_command(runtime, Kind::BootProbe, &[]);
+        assert_eq!(decode_kind(&runtime.bus.written), Kind::BootStatus);
+    }
+
+    #[test]
+    fn forwarded_set_balancer_notifies_the_handler() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+        };
+        {
+            let mut runtime = runtime.with_telemetry(&mut handler, NODE);
+            feed_from(&mut runtime, AGENT_ID, Kind::SetBalancer, &[0x03]);
+        }
+        assert_eq!(handler.noted, std::vec![(Kind::SetBalancer, 0x03)]);
     }
 }
