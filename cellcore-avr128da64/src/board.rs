@@ -7,25 +7,68 @@
 //! `scratch/hardware/balancing.md` for the netlist facts.
 //!
 //! The I2C devices share one TWI through transient borrows: each operation
-//! wraps `&mut Twi` in a driver, runs one transaction, and drops it.
-//!
-//! Cell-voltage and balance-current snapshots are stubs in this revision:
-//! the sequence advances per poll and the codes read zero. The ADS131M08
-//! bring-up fills them.
+//! wraps `&mut Twi` in a driver, runs one transaction, and drops it. The two
+//! ADS131M08s share SPI1 the same way, through an init-once static cell.
 
+use core::cell::RefCell;
+
+use ads131m08::{Ads131m08, Config, Ready};
 use avr_device::avr128da64 as pac;
-use avrxt_hal::adc::{Adc, Avr128Resolution, Prescaler as AdcPrescaler};
+use avrxt_hal::adc::{Adc as McuAdc, Avr128Resolution, Prescaler as AdcPrescaler};
+use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::{Input, Output};
+use avrxt_hal::spi::Spi;
 use avrxt_hal::twi::Twi;
 use avrxt_hal::vref::{Reference, Vref};
 use cellcore::balancing::BalancingHw;
+use cellguard_protocol::{RailSnapshot, Snapshot, TEMP_INVALID, TempSnapshot};
+use embedded_hal::digital::{InputPin, OutputPin, StatefulOutputPin};
+use embedded_hal::spi::SpiDevice;
+use embedded_hal_bus::spi::{NoDelay, RefCellDevice};
+
+/// One ADS131M08 over the shared SPI1 bus with its chip-select.
+type Adc = Ads131m08<RefCellDevice<'static, Spi<pac::SPI1>, Output, NoDelay>, Ready>;
+use p3t1755::P3t1755;
+use tca9535::{Address, Configuration, Output as ExpanderOut, PinIndex as Pin, Tca9535};
 
 /// Heartbeat cadence in RTC ticks (~1.024 kHz): 256 ticks is about 250 ms.
 const HEARTBEAT_TICKS: u16 = 256;
-use cellguard_protocol::{RailSnapshot, Snapshot, TEMP_INVALID, TempSnapshot};
-use embedded_hal::digital::{InputPin, OutputPin, StatefulOutputPin};
-use p3t1755::P3t1755;
-use tca9535::{Address, Configuration, Output as ExpanderOut, PinIndex as Pin, Tca9535};
+
+/// The ADS131M08's internal reference, in millivolts.
+const ADS_VREF_MV: i32 = 1200;
+/// 24-bit two's-complement full scale.
+const ADS_FULL_SCALE: i32 = 1 << 23;
+/// LM61 transfer bias in millivolts (10 mV/degC above this).
+const LM61_BIAS_MV: i32 = 600;
+
+/// The shared SPI1 ADC bus. Written once at boot, read afterwards. The
+/// firmware is single-threaded and never enables interrupts, so the raw
+/// access cannot race.
+static mut ADC_SPI: Option<RefCell<Spi<pac::SPI1>>> = None;
+
+/// The static ADC-bus reference, for `RefCellDevice` construction.
+///
+/// # Panics
+///
+/// Panics if called before [`Board::new`] initialized the bus. Only
+/// [`Board`] calls it, after initialization.
+fn adc_bus() -> &'static RefCell<Spi<pac::SPI1>> {
+    // SAFETY: `ADC_SPI` is written exactly once (in `Board::new`) before
+    // any call, and no interrupt or second thread exists to race the read.
+    let ptr = core::ptr::addr_of!(ADC_SPI);
+    // SAFETY: the pointer is always valid; see the SAFETY note above.
+    unsafe { (*ptr).as_ref().expect("ADC bus initialized") }
+}
+
+/// Configures one ADS131M08 over its `SpiDevice`, or `None` when the chip
+/// does not answer (missing/miswired), leaving the rest of the board alive.
+fn bring_up_adc<S: SpiDevice>(device: Ads131m08<S>) -> Option<Ads131m08<S, Ready>> {
+    let mut device = device.configure(Config::default()).ok()?;
+    device.wakeup().ok()?;
+    let mut channels = [0i32; 8];
+    device.read_data_after_pause(&mut channels).ok()?;
+    Some(device)
+}
 
 /// U103 (I2C1 @0x20): power and heartbeat expander.
 mod u103 {
@@ -63,7 +106,7 @@ pub struct Board {
     bleed_out: ExpanderOut,
     /// U908's strapped address, once probed.
     temp_addr: Option<p3t1755::Address>,
-    adc: Adc<pac::ADC0>,
+    adc: McuAdc<pac::ADC0>,
     /// U100/U101 rail-mux select pins. The scan uses A1 only (both scanned
     /// positions have A0 low) and leaves the mux enabled.
     _mux_a0: Output,
@@ -77,9 +120,16 @@ pub struct Board {
     alive: Input,
     last_alive: bool,
     alive_edge_seen: bool,
-    cell_seq: u8,
-    current_seq: u8,
     last_heartbeat: u16,
+    /// ADC A (U800): cell voltages on ch0-3, LM61 on ch4.
+    adc_a: Option<Adc>,
+    /// ADC B (U801): balance currents on ch0-3 (IR mux position 0).
+    adc_b: Option<Adc>,
+    drdy_a: Input,
+    drdy_b: Input,
+    cells: Snapshot,
+    currents: Snapshot,
+    lm61_centi: i16,
 }
 
 impl Board {
@@ -90,6 +140,13 @@ impl Board {
         mut twi: Twi<pac::TWI1>,
         vref: pac::VREF,
         adc0: pac::ADC0,
+        delay: &mut Delay,
+        spi1: Spi<pac::SPI1>,
+        mut adc_sync: Output,
+        mut cs_adc_a: Output,
+        mut cs_adc_b: Output,
+        mut ir_a0: Output,
+        mut ir_a1: Output,
         mut _mux_a0: Output,
         mut mux_a1: Output,
         mut _mux_en: Output,
@@ -97,10 +154,12 @@ impl Board {
         gate_off: Output,
         tiny_all_off: Input,
         alive: Input,
+        drdy_a: Input,
+        drdy_b: Input,
     ) -> Self {
         let mut vref = Vref::new(vref);
         vref.set_adc0(Reference::External);
-        let adc = Adc::new(adc0, AdcPrescaler::Div64, Avr128Resolution::Bits10);
+        let adc = McuAdc::new(adc0, AdcPrescaler::Div64, Avr128Resolution::Bits10);
 
         // Rail mux parked on the 5V0/3V3 position, enabled (active low).
         let _ = _mux_a0.set_low();
@@ -108,6 +167,27 @@ impl Board {
         let _ = _mux_en.set_low();
         // INA190 current-sense chain and the per-cell U204 muxes on.
         let _ = ina_en.set_high();
+        // IR mux at position 00: INA190 balance currents on ADC B ch0-3.
+        let _ = ir_a0.set_low();
+        let _ = ir_a1.set_low();
+
+        // Both ADS131M08s on SPI1, mode 1, sharing one bus through the
+        // static cell. A shared SYNC/RESET pulse (PF3) realigns them; a chip
+        // that does not answer parks as None and the rest of the board
+        // still serves.
+        let _ = cs_adc_a.set_high();
+        let _ = cs_adc_b.set_high();
+        {
+            // SAFETY: written exactly once, before any `adc_bus()` call.
+            unsafe {
+                *core::ptr::addr_of_mut!(ADC_SPI) = Some(RefCell::new(spi1));
+            }
+        }
+        let _ = ads131m08::pulse_reset(&mut adc_sync, delay);
+        let dev_a = RefCellDevice::new_no_delay(adc_bus(), cs_adc_a).unwrap_or_else(|_| halt());
+        let dev_b = RefCellDevice::new_no_delay(adc_bus(), cs_adc_b).unwrap_or_else(|_| halt());
+        let adc_a = bring_up_adc(Ads131m08::new(dev_a));
+        let adc_b = bring_up_adc(Ads131m08::new(dev_b));
 
         // Safe power-up: EEPROMs write-protected, enables off, isolated
         // temp power on, heartbeat low.
@@ -160,9 +240,20 @@ impl Board {
             alive,
             last_alive: false,
             alive_edge_seen: false,
-            cell_seq: 0,
-            current_seq: 0,
             last_heartbeat: 0,
+            adc_a,
+            adc_b,
+            drdy_a,
+            drdy_b,
+            cells: Snapshot {
+                seq: 0,
+                codes: [0; 4],
+            },
+            currents: Snapshot {
+                seq: 0,
+                codes: [0; 4],
+            },
+            lm61_centi: TEMP_INVALID,
         }
     }
 
@@ -180,6 +271,36 @@ impl Board {
     /// The current heartbeat level.
     pub const fn heartbeat_state(&self) -> bool {
         self.power_out.0 & u103::HEARTBEAT.mask() != 0
+    }
+
+    /// Polls both ADS131M08 data-ready lines and, when a sample waits,
+    /// reads it into the snapshot buffers. Call every loop iteration; a read
+    /// takes one SPI frame (~100 us at 3 MHz).
+    pub fn poll_adcs(&mut self) {
+        if self.drdy_a.is_low().unwrap_or(false)
+            && let Some(adc) = self.adc_a.as_mut()
+        {
+            let mut channels = [0i32; 8];
+            if adc.read_data(&mut channels).is_ok() {
+                self.cells.seq = self.cells.seq.wrapping_add(1);
+                for (slot, code) in self.cells.codes.iter_mut().zip(channels) {
+                    *slot = code;
+                }
+                // LM61 board temperature rides ch4-7 (tied together).
+                self.lm61_centi = lm61_centi(channels[4]);
+            }
+        }
+        if self.drdy_b.is_low().unwrap_or(false)
+            && let Some(adc) = self.adc_b.as_mut()
+        {
+            let mut channels = [0i32; 8];
+            if adc.read_data(&mut channels).is_ok() {
+                self.currents.seq = self.currents.seq.wrapping_add(1);
+                for (slot, code) in self.currents.codes.iter_mut().zip(channels) {
+                    *slot = code;
+                }
+            }
+        }
     }
 
     /// Samples the cellagent ALIVE pin and records edges.
@@ -263,16 +384,11 @@ impl BalancingHw for Board {
     }
 
     fn cell_snapshot(&mut self, out: &mut Snapshot) {
-        self.cell_seq = self.cell_seq.wrapping_add(1);
-        out.seq = self.cell_seq;
-        // ADS131M08 bring-up fills these; zeros until then.
-        out.codes = [0; 4];
+        *out = self.cells;
     }
 
     fn current_snapshot(&mut self, out: &mut Snapshot) {
-        self.current_seq = self.current_seq.wrapping_add(1);
-        out.seq = self.current_seq;
-        out.codes = [0; 4];
+        *out = self.currents;
     }
 
     fn rails(&mut self, out: &mut RailSnapshot) {
@@ -304,8 +420,9 @@ impl BalancingHw for Board {
                 out[0] = temp.centi_degrees_celsius();
             }
         }
-        // Slots 1 (ADC LM61) and 2 (routed cellagent LM61) fill in the
-        // ADS131M08 and routed-query revisions.
+        out[1] = self.lm61_centi;
+        // Slot 2 (routed cellagent LM61) fills in a later revision; the
+        // test tooling polls it through the routed `ReadTemperature`.
     }
 
     fn tiny_all_off(&mut self) -> bool {
@@ -319,5 +436,20 @@ impl BalancingHw for Board {
     fn cellagent_alive(&mut self) -> bool {
         self.poll_alive();
         self.alive_edge_seen
+    }
+}
+
+/// Converts an ADS131M08 word from the LM61 (10 mV/degC, 600 mV bias) to
+/// centi-degrees Celsius. Gain is 1, reference 1.2 V.
+fn lm61_centi(code: i32) -> i16 {
+    let mv = code.saturating_mul(ADS_VREF_MV) / ADS_FULL_SCALE;
+    i16::try_from(mv.saturating_sub(LM61_BIAS_MV).saturating_mul(10)).unwrap_or(TEMP_INVALID)
+}
+
+/// Halts with interrupts disabled; unrecoverable board wiring failure.
+fn halt() -> ! {
+    avr_device::interrupt::disable();
+    loop {
+        core::hint::spin_loop();
     }
 }

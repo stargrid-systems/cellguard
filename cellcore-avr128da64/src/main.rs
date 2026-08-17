@@ -52,7 +52,7 @@ use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
 use cellcore_runtime::{CoreRuntime, TelemetryHandler};
 use cellguard_panic::{clear, read_panic_record};
-use embedded_hal::spi::MODE_0;
+use embedded_hal::spi::{MODE_0, MODE_1};
 use embedded_hal_bus::spi::RefCellDevice;
 
 use self::board::Board;
@@ -218,12 +218,23 @@ fn main() -> ! {
     let twi = Twi::with_timeout_ms(dp.TWI1, F_CPU.hz(), SCL_HZ, TWI_TIMEOUT_MS);
 
     // Balancing-test hardware. Rail mux PE0-PE2, INA_EN PF5, gate-off PB5,
-    // TINY_ALL_OFF readback PC7, cellagent ALIVE PG0.
+    // TINY_ALL_OFF readback PC7, cellagent ALIVE PG0, ADS131M08s on SPI1
+    // (CS A PC3, CS B PB6, DRDY A/B PE6/PE7, shared SYNC/RESET PF3) and the
+    // IR mux PE3/PF4 parked on the current-sense position.
     let portf = Port::new(dp.PORTF).split();
+    let mut delay = Delay::new(F_CPU.hz());
+    let spi1 = Spi::new(dp.SPI1, MODE_1, SpiPrescaler::Div16);
     let board = Board::new(
         twi,
         dp.VREF,
         dp.ADC0,
+        &mut delay,
+        spi1,
+        portf.p3.into_output_high(),
+        portc.p3.into_output_high(),
+        portb.p6.into_output_high(),
+        porte.p3.into_output(),
+        portf.p4.into_output(),
         porte.p0.into_output(),
         porte.p1.into_output(),
         porte.p2.into_output(),
@@ -231,6 +242,8 @@ fn main() -> ! {
         portb.p5.into_output(),
         portc.p7.into_input(),
         portg.p0.into_input(),
+        porte.p6.into_input(),
+        porte.p7.into_input(),
     );
     let mut balancing = BoardBalancing::new(board);
 
@@ -304,6 +317,7 @@ impl TelemetryHandler for BoardBalancing {
     }
 
     fn on_tick(&mut self, now: u32) {
+        self.inner.hw_mut().poll_adcs();
         self.inner.tick(now);
         if let Ok(now) = u16::try_from(now) {
             self.inner.hw_mut().heartbeat(now);
