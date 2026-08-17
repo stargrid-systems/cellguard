@@ -7,7 +7,9 @@ macro_rules! impl_adc_instance {
         impl AdcInstance for $ADC {
             type Resolution = Avr128Resolution;
             fn configure(&self, prescaler: Prescaler, resolution: Avr128Resolution) {
-                self.ctrlc().write(|w| match prescaler {
+                // `modify`, not `write`: CTRLC also holds REFSEL, which the
+                // application may have selected before constructing the Adc.
+                self.ctrlc().modify(|_, w| match prescaler {
                     Prescaler::Div2 => w.presc().div2(),
                     Prescaler::Div4 => w.presc().div4(),
                     Prescaler::Div8 => w.presc().div8(),
