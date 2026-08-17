@@ -11,8 +11,8 @@
 //!   any image or key is trusted.
 //! - [`update`]: the field firmware-update agent. Receives a signed image over
 //!   the bus, verifies it, and stages it for the `cellprog` programmer.
-//! - [`balancing`]: the balancing-test telemetry and actuator layer (behind the
-//!   `telemetry` feature).
+//! - balancing (`cellcore::balancing`): the balancing-test telemetry and
+//!   actuator layer, behind the `telemetry` feature.
 //!
 //! # Features
 //!
