@@ -15,7 +15,7 @@
 extern crate std;
 
 pub use self::hw::{GateControl, TempSensor};
-pub use self::runtime::CellagentRuntime;
+pub use self::runtime::{CellagentRuntime, DEFAULT_GATE_TIMEOUT_TICKS, SAFE_GATE_MASK};
 
 mod hw;
 mod runtime;

@@ -123,15 +123,23 @@ fn main() -> ! {
 
     let mut runtime = CellagentRuntime::new(NODE_ID);
 
+    // Gates start in the safe state. A link that never commands anything
+    // must never leave them in an unknown hardware default.
+    gates.set_gates(cellagent::SAFE_GATE_MASK);
+
     let mut last_toggle = rtc.count();
     loop {
         wdt.feed();
 
+        let now = rtc.count();
         if let Ok(byte) = usart.read_byte() {
-            runtime.service(byte, &mut gates, &mut temp, &mut usart);
+            runtime.service(byte, now, &mut gates, &mut temp, &mut usart);
         }
 
-        let now = rtc.count();
+        // Gate refresh timeout: drives the gates safe when the host stops
+        // refreshing SetBalancer. See the runtime docs.
+        runtime.check_timeout(now, &mut gates);
+
         if now.wrapping_sub(last_toggle) >= HEARTBEAT_TICKS {
             let _ = alive.toggle();
             last_toggle = now;
