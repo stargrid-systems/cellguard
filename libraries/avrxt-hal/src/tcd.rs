@@ -11,7 +11,7 @@
 //!
 //! `FAULTCTRL`, which enables the output, is configuration-change
 //! protected. [`TcdPwm::new`] takes the device's `CPU` (see
-//! [`clock::CcpUnlock`]) and does the unlock with interrupts masked.
+//! [`crate::clock::CcpUnlock`]) and does the unlock with interrupts masked.
 
 use crate::clock::CcpUnlock;
 use crate::wait::spin_until;
