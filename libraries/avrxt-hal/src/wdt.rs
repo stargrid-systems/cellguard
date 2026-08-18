@@ -40,7 +40,7 @@ pub trait WdtInstance {
 
 /// The watchdog timer.
 pub struct Watchdog<T: WdtInstance> {
-    _instance: T,
+    instance: T,
 }
 
 impl<T: WdtInstance> Watchdog<T> {
@@ -52,9 +52,7 @@ impl<T: WdtInstance> Watchdog<T> {
             cpu.unlock_ioreg();
             instance.write_period(period);
         });
-        Self {
-            _instance: instance,
-        }
+        Self { instance }
     }
 
     /// Resets the watchdog count (issues `WDR`). Call within the configured
@@ -62,6 +60,15 @@ impl<T: WdtInstance> Watchdog<T> {
     #[inline]
     pub fn feed(&mut self) {
         avr_device::asm::wdr();
+    }
+
+    /// Disables the watchdog. Consumes the handle so the stopped watchdog can
+    /// no longer be fed.
+    pub fn stop<C: CcpUnlock>(self, cpu: &C) {
+        avr_device::interrupt::free(|_| {
+            cpu.unlock_ioreg();
+            self.instance.write_period(Period::Off);
+        });
     }
 }
 
