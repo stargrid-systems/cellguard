@@ -42,6 +42,9 @@ pub fn encode_header(
 
 /// Splits a write into chunks that each stay within a single page.
 ///
+/// `page_size` must be a power of two. The [`crate::Model`] constants enforce
+/// this at compile time.
+///
 /// The CAT25 family wraps within a page instead of advancing past its end, so a
 /// write that crosses a page boundary must be issued as separate page writes.
 /// Each item is the device address of the chunk and its length in bytes.
@@ -69,7 +72,10 @@ impl Iterator for PageChunks {
             return None;
         }
         let address = self.start;
-        let left_in_page = self.page_size - self.start % self.page_size;
+        // Page sizes are powers of two (see `Model`), so a mask replaces the
+        // modulo. AVR has no divide instruction: the modulo would link the
+        // 1 KiB software divider.
+        let left_in_page = self.page_size - (self.start & (self.page_size - 1));
         let chunk_end = self.end.min(self.start.saturating_add(left_in_page));
         self.start = chunk_end;
         // The chunk spans at most one page, so its length fits in a usize.
