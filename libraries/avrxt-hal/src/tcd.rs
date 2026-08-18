@@ -14,6 +14,7 @@
 //! [`crate::clock::CcpUnlock`]) and does the unlock with interrupts masked.
 
 use crate::clock::CcpUnlock;
+#[cfg(feature = "_avr128")]
 use crate::wait::spin_until;
 
 /// Largest usable `top`. The zero-duty encoding parks `CMPASET` above the
@@ -23,6 +24,7 @@ pub const MAX_TOP: u16 = 0x0FFE;
 /// `CMPASET` value for a constant-low output. Larger than any legal `top`,
 /// so the set event never fires and the ramp-end clear keeps the output
 /// low.
+#[cfg(feature = "_avr128")]
 const ZERO_DUTY_CMP: u16 = 0x0FFF;
 
 /// TCD0 counter-clock prescaler: `CLK_PER` divided by `SYNCPRES` and
