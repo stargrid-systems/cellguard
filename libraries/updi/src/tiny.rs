@@ -23,11 +23,12 @@ const NVMCTRL_BASE: u16 = 0x1000;
 /// Base of program flash in the 16-bit data space.
 pub const FLASH_BASE: u16 = 0x8000;
 
-/// Total flash size for ATtiny406/ATtiny416 (4 KB).
-pub const FLASH_SIZE: u32 = 4096;
+/// Total flash size for ATtiny406/ATtiny416 (4 KB). tinyAVR data space is
+/// 16-bit, so the addressing type is `u16`.
+pub const FLASH_SIZE: u16 = 4096;
 
 /// Flash page size in bytes.
-pub const PAGE_SIZE: u32 = 16;
+pub const PAGE_SIZE: u16 = 16;
 
 /// NVM controller registers, commands, and status flags.
 pub mod nvmctrl {
@@ -145,14 +146,13 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// # Errors
     ///
     /// See [`ProgError`].
-    pub fn erase_flash_page(&mut self, flash_offset: u32) -> Result<(), ProgError<L::Error>> {
+    pub fn erase_flash_page(&mut self, flash_offset: u16) -> Result<(), ProgError<L::Error>> {
         if !flash_offset.is_multiple_of(PAGE_SIZE) || flash_offset >= FLASH_SIZE {
             return Err(ProgError::InvalidOffset);
         }
         self.wait_flash_ready()?;
-        let addr =
-            FLASH_BASE + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
-        self.updi.sts8_16(addr, 0xFF)?;
+        self.updi
+            .sts8_16(FLASH_BASE.wrapping_add(flash_offset), 0xFF)?;
         self.nvm_command(nvmctrl::CMD_ER)?;
         self.wait_flash_ready()
     }
@@ -162,12 +162,15 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// Each page touched must be erased first. Data that spans a page boundary
     /// is programmed one page at a time.
     ///
+    /// tinyAVR data space is 16-bit, so the offset is `u16`; flash is 4 KiB
+    /// and always fits.
+    ///
     /// # Errors
     ///
     /// See [`ProgError`].
     pub fn write_flash(
         &mut self,
-        flash_offset: u32,
+        flash_offset: u16,
         data: &[u8],
     ) -> Result<(), ProgError<L::Error>> {
         if data.is_empty() {
@@ -176,9 +179,10 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         if !flash_offset.is_multiple_of(2) {
             return Err(ProgError::InvalidOffset);
         }
-        let len = u32::try_from(data.len()).map_err(|_| ProgError::InvalidOffset)?;
+        // Both flash_offset and the length are bounded by FLASH_SIZE, so the
+        // end cannot wrap u16.
         let end = flash_offset
-            .checked_add(len)
+            .checked_add(u16::try_from(data.len()).unwrap_or(u16::MAX))
             .ok_or(ProgError::InvalidOffset)?;
         if end > FLASH_SIZE {
             return Err(ProgError::InvalidOffset);
@@ -188,7 +192,7 @@ impl<L: UpdiLink> TinyProgrammer<L> {
         let mut rest = data;
         while !rest.is_empty() {
             let page_end = (offset / PAGE_SIZE + 1) * PAGE_SIZE;
-            let to_boundary = usize::try_from(page_end - offset).unwrap_or(rest.len());
+            let to_boundary = usize::from(page_end - offset);
             if rest.len() <= to_boundary {
                 self.write_page(offset, rest)?;
                 break;
@@ -204,12 +208,11 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// Clears the page buffer, loads it with `segment`, then commits with
     /// `CMD_WP`. On P0 the buffer must be loaded before the write command
     /// executes.
-    fn write_page(&mut self, offset: u32, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
+    fn write_page(&mut self, offset: u16, segment: &[u8]) -> Result<(), ProgError<L::Error>> {
         self.wait_flash_ready()?;
         self.nvm_command(nvmctrl::CMD_PBC)?;
         self.wait_flash_ready()?;
-        let addr = FLASH_BASE + u16::try_from(offset).map_err(|_| ProgError::InvalidOffset)?;
-        self.updi.set_pointer_16(addr)?;
+        self.updi.set_pointer_16(FLASH_BASE.wrapping_add(offset))?;
         self.updi.st_inc(segment)?;
         self.nvm_command(nvmctrl::CMD_WP)?;
         self.wait_flash_ready()
@@ -222,22 +225,20 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// See [`ProgError`].
     pub fn read_flash(
         &mut self,
-        flash_offset: u32,
+        flash_offset: u16,
         buf: &mut [u8],
     ) -> Result<(), ProgError<L::Error>> {
         if buf.is_empty() {
             return Ok(());
         }
-        let len = u32::try_from(buf.len()).map_err(|_| ProgError::InvalidOffset)?;
         let end = flash_offset
-            .checked_add(len)
+            .checked_add(u16::try_from(buf.len()).unwrap_or(u16::MAX))
             .ok_or(ProgError::InvalidOffset)?;
         if end > FLASH_SIZE {
             return Err(ProgError::InvalidOffset);
         }
-        let addr =
-            FLASH_BASE + u16::try_from(flash_offset).map_err(|_| ProgError::InvalidOffset)?;
-        self.updi.set_pointer_16(addr)?;
+        self.updi
+            .set_pointer_16(FLASH_BASE.wrapping_add(flash_offset))?;
         self.updi.ld_inc(buf)?;
         Ok(())
     }

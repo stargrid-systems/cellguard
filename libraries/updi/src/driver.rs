@@ -100,8 +100,7 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn ldcs(&mut self, reg: u8) -> Result<u8, UpdiError<L::Error>> {
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_LDCS | (reg & 0x0F))?;
+        self.instr2(OP_LDCS | (reg & 0x0F))?;
         self.link.recv_byte().map_err(UpdiError::Link)
     }
 
@@ -111,9 +110,7 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn stcs(&mut self, reg: u8, val: u8) -> Result<(), UpdiError<L::Error>> {
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_STCS | (reg & 0x0F))?;
-        self.link.send_byte(val).map_err(UpdiError::Link)
+        self.instr3(OP_STCS | (reg & 0x0F), val)
     }
 
     /// Loads one byte from a 24-bit data-space address.
@@ -122,12 +119,7 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8(&mut self, addr: u32) -> Result<u8, UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_LDS | ADDR_24)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
-        self.link.send_byte(a2)?;
+        self.instr5(OP_LDS | ADDR_24, addr)?;
         self.link.recv_byte().map_err(UpdiError::Link)
     }
 
@@ -138,15 +130,9 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8(&mut self, addr: u32, val: u8) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_STS | ADDR_24)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
-        self.link.send_byte(a2)?;
+        self.instr5(OP_STS | ADDR_24, addr)?;
         self.expect_ack()?;
-        self.link.send_byte(val)?;
-        self.expect_ack()
+        self.send_acked(val)
     }
 
     /// Sets the pointer register to a 24-bit address for `ld_inc`/`st_inc`.
@@ -156,12 +142,7 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer(&mut self, addr: u32) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_ST | PTR_SET | SIZE_24)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
-        self.link.send_byte(a2)?;
+        self.instr5(OP_ST | PTR_SET | SIZE_24, addr)?;
         self.expect_ack()
     }
 
@@ -171,11 +152,7 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8_16(&mut self, addr: u16) -> Result<u8, UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_LDS | ADDR_16)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
+        self.instr4(OP_LDS | ADDR_16, addr)?;
         self.link.recv_byte().map_err(UpdiError::Link)
     }
 
@@ -186,14 +163,9 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8_16(&mut self, addr: u16, val: u8) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_STS | ADDR_16)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
+        self.instr4(OP_STS | ADDR_16, addr)?;
         self.expect_ack()?;
-        self.link.send_byte(val)?;
-        self.expect_ack()
+        self.send_acked(val)
     }
 
     /// Sets the pointer register to a 16-bit address for `ld_inc`/`st_inc`.
@@ -203,11 +175,7 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer_16(&mut self, addr: u16) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_ST | PTR_SET | SIZE_16)?;
-        self.link.send_byte(a0)?;
-        self.link.send_byte(a1)?;
+        self.instr4(OP_ST | PTR_SET | SIZE_16, addr)?;
         self.expect_ack()
     }
 
@@ -222,8 +190,7 @@ impl<L: UpdiLink> Updi<L> {
     pub fn ld_inc(&mut self, buf: &mut [u8]) -> Result<(), UpdiError<L::Error>> {
         for chunk in buf.chunks_mut(REPEAT_MAX) {
             self.repeat(chunk.len())?;
-            self.link.send_byte(SYNCH)?;
-            self.link.send_byte(OP_LD | PTR_INC)?;
+            self.instr2(OP_LD | PTR_INC)?;
             self.link.recv(chunk)?;
         }
         Ok(())
@@ -241,11 +208,9 @@ impl<L: UpdiLink> Updi<L> {
     pub fn st_inc(&mut self, data: &[u8]) -> Result<(), UpdiError<L::Error>> {
         for chunk in data.chunks(REPEAT_MAX) {
             self.repeat(chunk.len())?;
-            self.link.send_byte(SYNCH)?;
-            self.link.send_byte(OP_ST | PTR_INC)?;
+            self.instr2(OP_ST | PTR_INC)?;
             for &byte in chunk {
-                self.link.send_byte(byte)?;
-                self.expect_ack()?;
+                self.send_acked(byte)?;
             }
         }
         Ok(())
@@ -257,12 +222,25 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn key(&mut self, key: &[u8; 8]) -> Result<(), UpdiError<L::Error>> {
-        self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_KEY)?;
+        self.instr2(OP_KEY)?;
         for &byte in key.iter().rev() {
             self.link.send_byte(byte)?;
         }
         Ok(())
+    }
+
+    /// Sends `byte` and requires the target's ACK in reply.
+    ///
+    /// Fusing send and ack check keeps store phases to one call and one
+    /// error branch each.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
+    /// [`UpdiError::Link`] if the transport fails.
+    fn send_acked(&mut self, byte: u8) -> Result<(), UpdiError<L::Error>> {
+        self.link.send_byte(byte)?;
+        self.expect_ack()
     }
 
     /// Emits a `REPEAT` so the next instruction runs `count` times. `count`
@@ -271,9 +249,41 @@ impl<L: UpdiLink> Updi<L> {
         // REPEAT takes count-1: the next instruction runs (count-1)+1 times. A
         // single byte bounds a page-sized block to 256, which is enough here.
         let rpt = u8::try_from(count.saturating_sub(1)).unwrap_or(u8::MAX);
+        self.instr3(OP_REPEAT, rpt)
+    }
+
+    /// Sends `SYNCH` plus an opcode through one shared out-of-line body.
+    /// Every instruction starts with these two bytes, so folding the constant
+    /// here drops one argument at every call site. The longer variants chain
+    /// on top of this one, so each body is one call plus one send.
+    #[inline(never)]
+    fn instr2(&mut self, opcode: u8) -> Result<(), UpdiError<L::Error>> {
         self.link.send_byte(SYNCH)?;
-        self.link.send_byte(OP_REPEAT)?;
-        self.link.send_byte(rpt).map_err(UpdiError::Link)
+        self.link.send_byte(opcode).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and one operand byte.
+    #[inline(never)]
+    fn instr3(&mut self, opcode: u8, a: u8) -> Result<(), UpdiError<L::Error>> {
+        self.instr2(opcode)?;
+        self.link.send_byte(a).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and a 16-bit operand. The operand travels
+    /// as one register pair at the call site and splits here.
+    #[inline(never)]
+    fn instr4(&mut self, opcode: u8, a: u16) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1] = a.to_le_bytes();
+        self.instr3(opcode, a0)?;
+        self.link.send_byte(a1).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and a 24-bit operand.
+    #[inline(never)]
+    fn instr5(&mut self, opcode: u8, a: u32) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1, a2, _] = a.to_le_bytes();
+        self.instr4(opcode, u16::from_le_bytes([a0, a1]))?;
+        self.link.send_byte(a2).map_err(UpdiError::Link)
     }
 
     fn expect_ack(&mut self) -> Result<(), UpdiError<L::Error>> {
