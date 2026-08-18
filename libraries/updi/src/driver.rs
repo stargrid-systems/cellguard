@@ -100,10 +100,9 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn ldcs(&mut self, reg: u8) -> Result<u8, UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_LDCS | (reg & 0x0F)])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_LDCS | (reg & 0x0F))?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Writes a control/status register. `STCS` is not acknowledged.
@@ -112,8 +111,9 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn stcs(&mut self, reg: u8, val: u8) -> Result<(), UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_STCS | (reg & 0x0F), val])?;
-        Ok(())
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_STCS | (reg & 0x0F))?;
+        self.link.send_byte(val).map_err(UpdiError::Link)
     }
 
     /// Loads one byte from a 24-bit data-space address.
@@ -123,10 +123,12 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8(&mut self, addr: u32) -> Result<u8, UpdiError<L::Error>> {
         let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_LDS | ADDR_24, a0, a1, a2])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_LDS | ADDR_24)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
+        self.link.send_byte(a2)?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Stores one byte to a 24-bit data-space address.
@@ -137,9 +139,13 @@ impl<L: UpdiLink> Updi<L> {
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8(&mut self, addr: u32, val: u8) -> Result<(), UpdiError<L::Error>> {
         let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_STS | ADDR_24, a0, a1, a2])?;
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_STS | ADDR_24)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
+        self.link.send_byte(a2)?;
         self.expect_ack()?;
-        self.link.send(&[val])?;
+        self.link.send_byte(val)?;
         self.expect_ack()
     }
 
@@ -151,8 +157,11 @@ impl<L: UpdiLink> Updi<L> {
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer(&mut self, addr: u32) -> Result<(), UpdiError<L::Error>> {
         let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link
-            .send(&[SYNCH, OP_ST | PTR_SET | SIZE_24, a0, a1, a2])?;
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_ST | PTR_SET | SIZE_24)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
+        self.link.send_byte(a2)?;
         self.expect_ack()
     }
 
@@ -163,10 +172,11 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8_16(&mut self, addr: u16) -> Result<u8, UpdiError<L::Error>> {
         let [a0, a1] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_LDS | ADDR_16, a0, a1])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_LDS | ADDR_16)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Stores one byte to a 16-bit data-space address.
@@ -177,9 +187,12 @@ impl<L: UpdiLink> Updi<L> {
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8_16(&mut self, addr: u16, val: u8) -> Result<(), UpdiError<L::Error>> {
         let [a0, a1] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_STS | ADDR_16, a0, a1])?;
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_STS | ADDR_16)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
         self.expect_ack()?;
-        self.link.send(&[val])?;
+        self.link.send_byte(val)?;
         self.expect_ack()
     }
 
@@ -191,8 +204,10 @@ impl<L: UpdiLink> Updi<L> {
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer_16(&mut self, addr: u16) -> Result<(), UpdiError<L::Error>> {
         let [a0, a1] = addr.to_le_bytes();
-        self.link
-            .send(&[SYNCH, OP_ST | PTR_SET | SIZE_16, a0, a1])?;
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_ST | PTR_SET | SIZE_16)?;
+        self.link.send_byte(a0)?;
+        self.link.send_byte(a1)?;
         self.expect_ack()
     }
 
@@ -207,7 +222,8 @@ impl<L: UpdiLink> Updi<L> {
     pub fn ld_inc(&mut self, buf: &mut [u8]) -> Result<(), UpdiError<L::Error>> {
         for chunk in buf.chunks_mut(REPEAT_MAX) {
             self.repeat(chunk.len())?;
-            self.link.send(&[SYNCH, OP_LD | PTR_INC])?;
+            self.link.send_byte(SYNCH)?;
+            self.link.send_byte(OP_LD | PTR_INC)?;
             self.link.recv(chunk)?;
         }
         Ok(())
@@ -225,9 +241,10 @@ impl<L: UpdiLink> Updi<L> {
     pub fn st_inc(&mut self, data: &[u8]) -> Result<(), UpdiError<L::Error>> {
         for chunk in data.chunks(REPEAT_MAX) {
             self.repeat(chunk.len())?;
-            self.link.send(&[SYNCH, OP_ST | PTR_INC])?;
+            self.link.send_byte(SYNCH)?;
+            self.link.send_byte(OP_ST | PTR_INC)?;
             for &byte in chunk {
-                self.link.send(&[byte])?;
+                self.link.send_byte(byte)?;
                 self.expect_ack()?;
             }
         }
@@ -240,10 +257,11 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn key(&mut self, key: &[u8; 8]) -> Result<(), UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_KEY])?;
-        let mut reversed = *key;
-        reversed.reverse();
-        self.link.send(&reversed)?;
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_KEY)?;
+        for &byte in key.iter().rev() {
+            self.link.send_byte(byte)?;
+        }
         Ok(())
     }
 
@@ -253,14 +271,13 @@ impl<L: UpdiLink> Updi<L> {
         // REPEAT takes count-1: the next instruction runs (count-1)+1 times. A
         // single byte bounds a page-sized block to 256, which is enough here.
         let rpt = u8::try_from(count.saturating_sub(1)).unwrap_or(u8::MAX);
-        self.link.send(&[SYNCH, OP_REPEAT, rpt])?;
-        Ok(())
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(OP_REPEAT)?;
+        self.link.send_byte(rpt).map_err(UpdiError::Link)
     }
 
     fn expect_ack(&mut self) -> Result<(), UpdiError<L::Error>> {
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        if b[0] == ACK {
+        if self.link.recv_byte()? == ACK {
             Ok(())
         } else {
             Err(UpdiError::NoAck)
@@ -329,17 +346,15 @@ mod tests {
             Ok(())
         }
 
-        fn send(&mut self, data: &[u8]) -> Result<(), ()> {
-            self.sent.extend(data);
+        fn send_byte(&mut self, byte: u8) -> Result<(), ()> {
+            self.sent.extend(&[byte]);
             Ok(())
         }
 
-        fn recv(&mut self, buf: &mut [u8]) -> Result<(), ()> {
-            for b in buf.iter_mut() {
-                *b = *self.recv_queue.as_slice().get(self.recv_pos).ok_or(())?;
-                self.recv_pos += 1;
-            }
-            Ok(())
+        fn recv_byte(&mut self) -> Result<u8, ()> {
+            let byte = *self.recv_queue.as_slice().get(self.recv_pos).ok_or(())?;
+            self.recv_pos += 1;
+            Ok(byte)
         }
     }
 
