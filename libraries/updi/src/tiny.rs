@@ -93,16 +93,7 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     ///
     /// See [`ProgError`].
     pub fn enter(&mut self) -> Result<(), ProgError<L::Error>> {
-        self.updi.break_()?;
-        if self.updi.ldcs(cs::STATUSA)? == 0 {
-            return Err(ProgError::NotAlive);
-        }
-        self.updi.stcs(cs::CTRLA, GUARD_TIME)?;
-        self.updi.key(KEY_NVMPROG)?;
-        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & asi::KEYSTAT_NVMPROG == 0 {
-            return Err(ProgError::KeyRejected);
-        }
-        self.reset()?;
+        self.unlock(Some(GUARD_TIME), KEY_NVMPROG, asi::KEYSTAT_NVMPROG)?;
         self.wait_prog_mode()
     }
 
@@ -113,16 +104,36 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     ///
     /// See [`ProgError`].
     pub fn chip_erase(&mut self) -> Result<(), ProgError<L::Error>> {
+        self.unlock(None, KEY_CHIPERASE, asi::KEYSTAT_CHIPERASE)?;
+        self.wait_erase_done()
+    }
+
+    /// Runs the shared key handshake: reset the UPDI state machine, check the
+    /// target is alive, optionally set the guard time, send `key`, confirm
+    /// `accepted` appeared in the key status, then reset the target so it acts
+    /// on the key. Callers wait for the key's effect.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "a by-value key would stack-copy 8 bytes at each call site"
+    )]
+    fn unlock(
+        &mut self,
+        guard_time: Option<u8>,
+        key: &[u8; 8],
+        accepted: u8,
+    ) -> Result<(), ProgError<L::Error>> {
         self.updi.break_()?;
         if self.updi.ldcs(cs::STATUSA)? == 0 {
             return Err(ProgError::NotAlive);
         }
-        self.updi.key(KEY_CHIPERASE)?;
-        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & asi::KEYSTAT_CHIPERASE == 0 {
+        if let Some(guard_time) = guard_time {
+            self.updi.stcs(cs::CTRLA, guard_time)?;
+        }
+        self.updi.key(key)?;
+        if self.updi.ldcs(cs::ASI_KEY_STATUS)? & accepted == 0 {
             return Err(ProgError::KeyRejected);
         }
-        self.reset()?;
-        self.wait_erase_done()
+        self.reset()
     }
 
     /// Erases the flash page starting at `flash_offset`.
