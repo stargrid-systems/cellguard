@@ -21,6 +21,8 @@
 //!   addressed to it are routed there.
 //! - I2C1 (PB2/PB3) carries the expanders (U103 power, U1100 bleed) and the
 //!   U908 temperature sensor.
+//! - PB7 is the bleed PWM: TCD0 WOD through `PORTMUX` TCD0 ALT1, modulating the
+//!   bleed legs (see `board`).
 //! - The balancing-test hardware (rail mux, `INA_EN`, gate-off, ALIVE inputs)
 //!   lives in `board`.
 //!
@@ -217,6 +219,11 @@ fn main() -> ! {
     let _scl = portb.p3.into_input_pullup();
     let twi = Twi::with_timeout_ms(dp.TWI1, F_CPU.hz(), SCL_HZ, TWI_TIMEOUT_MS);
 
+    // Bleed PWM on PB7: TCD0 WOD routed there by PORTMUX ALT1. The pin is a
+    // plain output (idle low) for when the TCD output is disabled.
+    dp.PORTMUX.tcdroutea().modify(|_, w| w.tcd0().alt1());
+    let _bleed_wo = portb.p7.into_output();
+
     // Balancing-test hardware. Rail mux PE0-PE2, INA_EN PF5, gate-off PB5,
     // TINY_ALL_OFF readback PC7, cellagent ALIVE PG0, ADS131M08s on SPI1
     // (CS A PC3, CS B PB6, DRDY A/B PE6/PE7, shared SYNC/RESET PF3) and the
@@ -226,8 +233,10 @@ fn main() -> ! {
     let spi1 = Spi::new(dp.SPI1, MODE_1, SpiPrescaler::Div16);
     let board = Board::new(
         twi,
+        &cpu,
         dp.VREF,
         dp.ADC0,
+        dp.TCD0,
         &mut delay,
         spi1,
         portf.p3.into_output_high(),

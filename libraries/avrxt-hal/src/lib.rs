@@ -32,6 +32,7 @@
 //! - SPI ([`spi`])
 //! - USART ([`usart`])
 //! - timer PWM ([`pwm`])
+//! - TCD PWM ([`tcd`])
 //! - ADC ([`adc`])
 //! - DAC ([`dac`])
 //! - voltage reference ([`vref`])
@@ -66,6 +67,7 @@ pub mod rstctrl;
 pub mod rtc;
 pub mod sigrow;
 pub mod spi;
+pub mod tcd;
 pub mod twi;
 pub mod usart;
 pub mod vref;

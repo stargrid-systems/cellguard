@@ -28,13 +28,14 @@ pub const DEFAULT_BLEED_TIMEOUT_TICKS: u32 = 4096;
 
 /// The hardware seam behind the balancing layer.
 ///
-/// The firmware implements this over the PWM expander, the TCA0 PWM, the
+/// The firmware implements this over the PWM expander, the TCD0 PWM, the
 /// ADCs, and the sense pins. Reads fill the latest device-side snapshot, so
 /// polling never triggers a conversion burst.
 pub trait BalancingHw {
     /// Writes the bleed-leg enable masks to the PWM expander.
     fn set_bleed(&mut self, en_3r6: u8, en_36r5: u8);
-    /// Sets the bleed PWM duty in 1/65536 units.
+    /// Sets the bleed PWM duty in 1/65536 units. Zero disables modulation:
+    /// the legs are statically on when enabled.
     fn set_pwm(&mut self, duty: u16);
     /// Writes the power-enable flags (`POWER_ACTIVE_BALANCER`,
     /// `POWER_EN_ALL`).
@@ -116,8 +117,10 @@ impl<H: BalancingHw> Balancing<H> {
     /// loop iteration with the current tick.
     pub fn tick(&mut self, now: u32) {
         if self.armed && now.wrapping_sub(self.last_refresh) > self.timeout_ticks {
-            self.hw.set_pwm(0);
+            // Masks first: a zero duty disables modulation (statically on),
+            // so the mask write must land before the duty parks.
             self.hw.set_bleed(0, 0);
+            self.hw.set_pwm(0);
             self.duty = 0;
             self.en_3r6 = 0;
             self.en_36r5 = 0;

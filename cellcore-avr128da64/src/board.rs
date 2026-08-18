@@ -1,8 +1,8 @@
 //! The board hardware behind the balancing-test telemetry.
 //!
 //! [`Board`] owns the I2C1 expanders (U103 power/heartbeat, U1100 bleed
-//! enables), the rail ADC with its U100/U101 mux, the cellagent-liveness
-//! inputs, and the emergency gate-off pin, and implements
+//! enables), the TCD0 bleed PWM, the rail ADC with its U100/U101 mux, the
+//! cellagent-liveness inputs, and the emergency gate-off pin, and implements
 //! [`BalancingHw`] over them. See
 //! `scratch/hardware/balancing.md` for the netlist facts.
 //!
@@ -18,6 +18,7 @@ use avrxt_hal::adc::{Adc as McuAdc, Avr128Resolution, Prescaler as AdcPrescaler}
 use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::{Input, Output};
 use avrxt_hal::spi::Spi;
+use avrxt_hal::tcd::{Output as PwmOutput, Prescaler as PwmPrescaler, TcdPwm};
 use avrxt_hal::twi::Twi;
 use avrxt_hal::vref::{Reference, Vref};
 use cellcore::balancing::BalancingHw;
@@ -33,6 +34,12 @@ use tca9535::{Address, Configuration, Output as ExpanderOut, PinIndex as Pin, Tc
 
 /// Heartbeat cadence in RTC ticks (~1.024 kHz): 256 ticks is about 250 ms.
 const HEARTBEAT_TICKS: u16 = 256;
+
+/// Bleed-PWM ramp end, in TCD0 counter ticks.
+const PWM_TOP: u16 = avrxt_hal::tcd::MAX_TOP;
+/// Bleed-PWM clock: 24 MHz / 4 = 6 MHz counter clock, so the full ramp
+/// modulates at about 1.47 kHz.
+const PWM_PRESCALE: PwmPrescaler = PwmPrescaler::Div4;
 
 /// The ADS131M08's internal reference, in millivolts.
 const ADS_VREF_MV: i32 = 1200;
@@ -104,6 +111,8 @@ pub struct Board {
     power_out: ExpanderOut,
     /// Cached U1100 output register.
     bleed_out: ExpanderOut,
+    /// Bleed PWM on TCD0 WOD (PB7 through PORTMUX ALT1).
+    bleed_pwm: TcdPwm<pac::TCD0>,
     /// U908's strapped address, once probed.
     temp_addr: Option<p3t1755::Address>,
     adc: McuAdc<pac::ADC0>,
@@ -138,8 +147,10 @@ impl Board {
     #[allow(clippy::too_many_arguments, reason = "hardware wiring")]
     pub fn new(
         mut twi: Twi<pac::TWI1>,
+        cpu: &pac::CPU,
         vref: pac::VREF,
         adc0: pac::ADC0,
+        tcd0: pac::TCD0,
         delay: &mut Delay,
         spi1: Spi<pac::SPI1>,
         mut adc_sync: Output,
@@ -160,6 +171,9 @@ impl Board {
         let mut vref = Vref::new(vref);
         vref.set_adc0(Reference::External);
         let adc = McuAdc::new(adc0, AdcPrescaler::Div64, Avr128Resolution::Bits10);
+        // Bleed PWM starts at zero duty (PB7 low), so the legs stay off
+        // until commanded.
+        let bleed_pwm = TcdPwm::new(cpu, tcd0, PWM_TOP, PWM_PRESCALE, PwmOutput::Wod);
 
         // Rail mux parked on the 5V0/3V3 position, enabled (active low).
         let _ = _mux_a0.set_low();
@@ -230,6 +244,7 @@ impl Board {
             twi,
             power_out,
             bleed_out,
+            bleed_pwm,
             temp_addr,
             adc,
             _mux_a0,
@@ -360,11 +375,18 @@ impl BalancingHw for Board {
         }
     }
 
-    /// Static interpretation: any nonzero duty enables the legs through the
-    /// U1100 P05 `PWM_SIGNAL` source. Pulse-width modulation on PB7 (TCD0
-    /// WOD) is a follow-up; the hardware accepts a static enable.
+    /// Duty 0 disables modulation, per the protocol: the legs are then
+    /// statically on when enabled, held through the U1100 P05 `PWM_SIGNAL`
+    /// source while PB7 parks low. Any other duty modulates PB7 and drops
+    /// P05. The two sources are ORed in hardware.
     fn set_pwm(&mut self, duty: u16) {
-        self.set_u1100(u1100::PWM_STATIC, duty > 0);
+        if duty == 0 {
+            self.bleed_pwm.set_on_ticks(0);
+            self.set_u1100(u1100::PWM_STATIC, true);
+        } else {
+            self.set_u1100(u1100::PWM_STATIC, false);
+            self.bleed_pwm.set_on_ticks(pwm_ticks(duty));
+        }
     }
 
     fn set_power(&mut self, flags: u8) {
@@ -437,6 +459,13 @@ impl BalancingHw for Board {
         self.poll_alive();
         self.alive_edge_seen
     }
+}
+
+/// Scales a 1/65536-unit duty onto the TCD0 ramp, rounded to the nearest
+/// tick.
+fn pwm_ticks(duty: u16) -> u16 {
+    u16::try_from((u32::from(duty) * u32::from(PWM_TOP) + 32_767) / 65_535)
+        .expect("duty fits the 12-bit ramp")
 }
 
 /// Converts an ADS131M08 word from the LM61 (10 mV/degC, 600 mV bias) to

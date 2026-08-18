@@ -156,8 +156,8 @@ enum Command {
         #[arg(long)]
         en_36r5: u8,
     },
-    /// Set the bleed PWM duty in 1/65536 units. Static on this board
-    /// revision: 0 = off, nonzero = fully on.
+    /// Set the bleed PWM duty in 1/65536 units (TCD0 WOD on PB7, ~1.5 kHz).
+    /// 0 disables modulation: legs statically on when enabled.
     SetBleedPwm {
         #[arg(long)]
         port: String,
