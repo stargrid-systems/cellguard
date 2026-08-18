@@ -223,7 +223,7 @@ impl MockTarget {
         }
     }
 
-    /// AVR Dx (NVMCTRL v2): writing CTRLA arms a command; a subsequent data
+    /// AVR Dx (NVMCTRL v2): writing CTRLA arms a command and a subsequent data
     /// write to a flash address triggers the armed operation.
     fn data_write_v2(&mut self, addr: u32, val: u8) {
         if addr == self.ctrl_addr() {
@@ -509,25 +509,18 @@ impl UpdiLink for MockTarget {
         Ok(())
     }
 
-    fn send(&mut self, data: &[u8]) -> Result<(), ()> {
-        for &b in data {
-            self.feed(b);
-        }
+    fn send_byte(&mut self, byte: u8) -> Result<(), ()> {
+        self.feed(byte);
         Ok(())
     }
 
-    fn recv(&mut self, buf: &mut [u8]) -> Result<(), ()> {
-        for b in buf.iter_mut() {
-            if self.resp_head >= self.resp_len {
-                return Err(());
-            }
-            *b = self.resp.get(self.resp_head).copied().ok_or(())?;
-            self.resp_head += 1;
-        }
+    fn recv_byte(&mut self) -> Result<u8, ()> {
+        let byte = *self.resp.as_slice().get(self.resp_head).ok_or(())?;
+        self.resp_head += 1;
         if self.resp_head == self.resp_len {
             self.resp_head = 0;
             self.resp_len = 0;
         }
-        Ok(())
+        Ok(byte)
     }
 }
