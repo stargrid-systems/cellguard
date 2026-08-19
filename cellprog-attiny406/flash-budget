@@ -1,0 +1,3 @@
+3600
+# Maximum flash footprint in bytes, summed from the text and data columns of
+# avr-size. Headroom above the current 3365-byte image on the 4K ATtiny406.
