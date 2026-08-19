@@ -38,4 +38,4 @@ const _: () = assert!(CELLPROG_CAP < APP_EEPROM_CAP);
 // The bands must not overlap and each must sit on a CAT25M01 write-page
 // boundary, so a staged image never straddles a page write.
 const _: () = assert!(CELLPROG_OFFSET + CELLPROG_CAP == CELLAGENT_OFFSET);
-const _: () = assert!(CELLPROG_OFFSET % 256 == 0);
+const _: () = assert!(CELLPROG_OFFSET.is_multiple_of(256));

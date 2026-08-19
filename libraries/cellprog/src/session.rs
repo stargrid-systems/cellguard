@@ -4,11 +4,25 @@
 //! and UPDI mode (execute), so [`SessionHandler::decode`] and
 //! [`SessionHandler::execute`] are separate calls. A decoded [`Command`]
 //! must be executed before the next is decoded.
+//!
+//! # Self-update sessions
+//!
+//! A [`SessionTarget::CellprogSelf`] session updates the programmer itself.
+//! It never touches the UPDI link: `Begin` arms without erasing anything,
+//! page commands range-check only (the cellcore streams bytes it read from
+//! the staging band, so they are already stored), and `End` CRC-checks the
+//! whole staged image through [`SelfStaging`] before reporting `Ok`. On `Ok`
+//! the handler latches [`SessionHandler::self_update_armed`]: the firmware
+//! then sets the on-chip EEPROM update flag and resets, and the walker
+//! applies the image on the next boot. A staged image that fails its check
+//! never arms, so a corrupt image can never trigger the walker.
 
+use cellboot::image::{MAGIC, Region};
 use cellguard_protocol::{
     Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget, decode_command,
     encode_reply,
 };
+use crc::Crc32;
 use updi::{ProgError, TinyProgrammer, UpdiLink};
 
 /// Decoded size of the largest command frame (`PageWrite`).
@@ -19,10 +33,42 @@ pub const MAX_REPLY_FRAME: usize = 1 + 3 + cellguard_protocol::PAGE_MAX + CRC_LE
 
 const CRC_LEN: usize = 2;
 
+/// Size of the position-fixed walker region at the top of the cellprog
+/// flash.
+///
+/// The walker is never rewritten by an update, so every update image ends
+/// below it. See the firmware's `walker` module for the frozen ABI.
+pub const WALKER_SIZE: u16 = 256;
+
+/// Flash budget of the updatable application region: the 4 KiB flash minus
+/// the walker region. Page commands beyond it are invalid, and the walker
+/// walks exactly this many bytes.
+pub const APP_FLASH_SIZE: u16 = updi::FLASH_SIZE - WALKER_SIZE;
+
+/// Payload size the `End` verifier reads per store call. Matches the command
+/// frame budget so the handler's receive buffer doubles as the scratch.
+const VERIFY_CHUNK: usize = cellguard_protocol::PAGE_MAX;
+
 const _: () = assert!(
     MAX_COMMAND_FRAME >= 3 + cellguard_protocol::PAGE_MAX,
     "rx must double as the page-read staging buffer"
 );
+const _: () = assert!(MAX_COMMAND_FRAME >= cellboot::image::HEADER_LEN);
+const _: () = assert!(updi::FLASH_SIZE == 4096);
+
+/// Read access to the staged cellprog self-update image.
+///
+/// The cellcore streams the image it already staged in the shared staging
+/// EEPROM, so the bytes a `CellprogSelf` session carries are already in the
+/// band by the time they arrive. The servant therefore does not write them
+/// back: `End` re-reads the band through this trait and CRC-checks it before
+/// arming the self-update, which verifies the servant's own read path end to
+/// end. Implementations add the band's base offset.
+pub trait SelfStaging {
+    /// Fills `buf` with staged-image bytes, starting `offset` bytes into the
+    /// image (offset 0 is the header). Returns `false` when the store fails.
+    fn read_staged(&mut self, offset: u32, buf: &mut [u8]) -> bool;
+}
 
 /// A decoded session command. Page data lives in the handler, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +111,13 @@ const fn status_of<E>(err: &ProgError<E>) -> SessionStatus {
 pub struct SessionHandler {
     decoder: Decoder,
     in_session: bool,
+    /// Whether the open session targets the programmer itself. Commands of a
+    /// self session run against the staging store, never the UPDI link.
+    self_session: bool,
+    /// Set by `End` of a self session whose staged image verified. The
+    /// firmware sets the on-chip update flag and resets after sending the
+    /// reply.
+    self_armed: bool,
     /// Decoded command frames, reused as the page-read staging buffer.
     rx: [u8; MAX_COMMAND_FRAME],
     /// Page-write data and the raw reply frame, never both at once.
@@ -85,6 +138,8 @@ impl SessionHandler {
         Self {
             decoder: Decoder::new(),
             in_session: false,
+            self_session: false,
+            self_armed: false,
             rx: [0; MAX_COMMAND_FRAME],
             tx: [0; MAX_REPLY_FRAME],
         }
@@ -94,6 +149,28 @@ impl SessionHandler {
     #[must_use]
     pub const fn in_session(&self) -> bool {
         self.in_session
+    }
+
+    /// Whether a verified self-update is waiting to be applied. The firmware
+    /// acts on this after sending the `End` reply: set the on-chip EEPROM
+    /// update flag, then reset.
+    #[must_use]
+    pub const fn self_update_armed(&self) -> bool {
+        self.self_armed
+    }
+
+    /// Whether executing `cmd` needs the link in UPDI mode. The firmware
+    /// consults this before switching the mux: self-session commands run
+    /// with the UART link connected.
+    #[must_use]
+    pub const fn uses_updi(&self, cmd: &Command) -> bool {
+        match cmd {
+            Command::Begin(SessionTarget::CellprogSelf) => false,
+            Command::Begin(_) => true,
+            Command::PageWrite { .. } | Command::End => !self.self_session,
+            #[cfg(feature = "page-read")]
+            Command::PageRead { .. } => !self.self_session,
+        }
     }
 
     /// Feeds one received wire byte from the UART link.
@@ -127,15 +204,35 @@ impl SessionHandler {
 
     /// Runs `cmd` against `prog` and returns the raw reply frame.
     ///
-    /// The link must be in UPDI mode with the mux set to the target.
+    /// The link must be in UPDI mode with the mux set to the target. A self
+    /// session instead runs against `stage`, the staging-band store, and the
+    /// link stays in UART mode.
     #[must_use]
-    pub fn execute<L: UpdiLink>(&mut self, cmd: Command, prog: &mut TinyProgrammer<L>) -> &[u8] {
+    pub fn execute<L: UpdiLink, S: SelfStaging>(
+        &mut self,
+        cmd: Command,
+        prog: &mut TinyProgrammer<L>,
+        stage: &mut S,
+    ) -> &[u8] {
         match cmd {
+            Command::Begin(SessionTarget::CellprogSelf) => self.begin_self(),
             Command::Begin(target) => self.begin(target, prog),
-            Command::PageWrite { addr, len } => self.page_write(addr, len, prog),
+            Command::PageWrite { addr, len } => {
+                if self.self_session {
+                    self.page_write_self(addr, len)
+                } else {
+                    self.page_write(addr, len, prog)
+                }
+            }
             #[cfg(feature = "page-read")]
             Command::PageRead { addr, len } => self.page_read(addr, len, prog),
-            Command::End => self.end(prog),
+            Command::End => {
+                if self.self_session {
+                    self.end_self(stage)
+                } else {
+                    self.end(prog)
+                }
+            }
         }
     }
 
@@ -143,9 +240,49 @@ impl SessionHandler {
     /// target out of programming mode. A no-op when no session is open.
     pub fn expire<L: UpdiLink>(&mut self, prog: &mut TinyProgrammer<L>) {
         if self.in_session {
-            let _ = prog.leave();
+            if !self.self_session {
+                let _ = prog.leave();
+            }
             self.in_session = false;
+            self.self_session = false;
         }
+    }
+
+    fn begin_self(&mut self) -> &[u8] {
+        self.in_session = true;
+        self.self_session = true;
+        self.status_reply(SessionStatus::Ok, None)
+    }
+
+    fn page_write_self(&mut self, addr: u16, len: usize) -> &[u8] {
+        if !self.in_session {
+            return self.status_reply(SessionStatus::BadState, Some(addr));
+        }
+        // The cellcore streams bytes it read from the staging band, so they
+        // are already stored. Only the range is checked here: `End` verifies
+        // the stored image before anything is armed.
+        let end = addr.saturating_add(len.try_into().unwrap_or(u16::MAX));
+        if end > APP_FLASH_SIZE {
+            return self.status_reply(SessionStatus::InvalidAddr, Some(addr));
+        }
+        self.status_reply(SessionStatus::Ok, Some(addr))
+    }
+
+    fn end_self<S: SelfStaging>(&mut self, stage: &mut S) -> &[u8] {
+        let ok = verify_staged(stage, &mut self.rx);
+        if ok {
+            self.self_armed = true;
+        }
+        self.in_session = false;
+        self.self_session = false;
+        self.status_reply(
+            if ok {
+                SessionStatus::Ok
+            } else {
+                SessionStatus::NvmError
+            },
+            None,
+        )
     }
 
     fn begin<L: UpdiLink>(&mut self, target: SessionTarget, prog: &mut TinyProgrammer<L>) -> &[u8] {
@@ -227,10 +364,61 @@ fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [
     };
     tx.get(..len).unwrap_or(&[])
 }
+
+/// Verifies the staged self-update image in `scratch`-sized reads: parses
+/// enough header to route it, then CRC-32 checks the whole payload against
+/// the header's own checksum.
+///
+/// `scratch` is the handler's receive buffer; the command frame it held is
+/// consumed by the time `End` runs.
+fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {
+    let Some(head) = scratch.first_chunk_mut::<{ cellboot::image::HEADER_LEN }>() else {
+        return false;
+    };
+    if !stage.read_staged(0, head) {
+        return false;
+    }
+    // Field offsets from `cellboot::image::ImageHeader::serialize`.
+    if head[0] != MAGIC[0]
+        || head[1] != MAGIC[1]
+        || head[2] != MAGIC[2]
+        || head[3] != MAGIC[3]
+        || head[4] != cellboot::image::FORMAT_VERSION
+        || Region::from_code(head[6]) != Some(Region::CellprogApp)
+    {
+        return false;
+    }
+    let payload_len = u32::from_le_bytes([head[12], head[13], head[14], head[15]]);
+    if payload_len > u32::from(APP_FLASH_SIZE) {
+        return false;
+    }
+    let expected = u32::from_le_bytes([head[16], head[17], head[18], head[19]]);
+
+    let mut crc = Crc32::new();
+    let mut done = 0u32;
+    while done < payload_len {
+        let take = VERIFY_CHUNK
+            .try_into()
+            .unwrap_or(u32::MAX)
+            .min(payload_len - done);
+        let n = usize::try_from(take).unwrap_or(VERIFY_CHUNK);
+        let Some(buf) = scratch.get_mut(..n) else {
+            return false;
+        };
+        let offset = cellboot::image::HEADER_LEN_U32.saturating_add(done);
+        if !stage.read_staged(offset, buf) {
+            return false;
+        }
+        crc.update(buf);
+        done = done.saturating_add(take);
+    }
+    crc.finalize() == expected
+}
 #[cfg(test)]
 mod tests {
     use std::vec::Vec;
 
+    use cellboot::image::{FORMAT_VERSION, HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellguard_protocol::{
         Command as WireCommand, Reply, SessionStatus, SessionTarget, decode_reply, encode_command,
         encode_frame,
@@ -243,6 +431,7 @@ mod tests {
     struct Rig {
         handler: SessionHandler,
         target: TinyProgrammer<MockTarget>,
+        band: FakeBand,
     }
 
     impl Rig {
@@ -250,6 +439,7 @@ mod tests {
             Self {
                 handler: SessionHandler::new(),
                 target: TinyProgrammer::new(target),
+                band: FakeBand::blank(),
             }
         }
 
@@ -312,7 +502,7 @@ mod tests {
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
         assert_eq!(cmd, Command::Begin(SessionTarget::Cellagent));
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert_eq!(
             parse_reply(reply),
             Reply::Status {
@@ -332,7 +522,7 @@ mod tests {
                     len: chunk.len()
                 }
             );
-            let reply = rig.handler.execute(cmd, &mut rig.target);
+            let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
             assert_eq!(
                 parse_reply(reply),
                 Reply::Status {
@@ -348,7 +538,7 @@ mod tests {
             let addr = u16::try_from(i * 32).expect("fits u16");
             let len = chunk.len().try_into().expect("fits u8");
             let cmd = send(&mut rig.handler, &read_raw(addr, len)).expect("page read decodes");
-            let reply = rig.handler.execute(cmd, &mut rig.target);
+            let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
             assert_eq!(
                 parse_reply(reply),
                 Reply::PageData {
@@ -361,7 +551,7 @@ mod tests {
         }
 
         let cmd = send(&mut rig.handler, &end_raw()).expect("end decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert_eq!(
             parse_reply(reply),
             Reply::Status {
@@ -376,7 +566,7 @@ mod tests {
     fn page_write_before_begin_is_rejected_and_flash_untouched() {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2, 3, 4])).expect("page write decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, .. } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -396,7 +586,7 @@ mod tests {
     fn page_read_before_begin_is_rejected() {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &read_raw(0, 4)).expect("page read decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, addr } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -408,7 +598,7 @@ mod tests {
     fn end_without_begin_is_a_harmless_ok() {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd = send(&mut rig.handler, &end_raw()).expect("end decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert!(matches!(
             parse_reply(reply),
             Reply::Status {
@@ -423,13 +613,13 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let cmd = send(&mut rig.handler, &write_raw(0, &[0xAA; 32])).expect("page write decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
 
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert!(matches!(
             parse_reply(reply),
             Reply::Status {
@@ -453,7 +643,7 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny_locked());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert!(matches!(
             parse_reply(reply),
             Reply::Status {
@@ -469,7 +659,7 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellcore)).expect("begin decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert!(matches!(
             parse_reply(reply),
             Reply::Status {
@@ -485,10 +675,10 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
 
         let cmd = send(&mut rig.handler, &write_raw(3, &[1, 2])).expect("page write decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, .. } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -496,7 +686,7 @@ mod tests {
 
         // 4094 + 4 overflows the 4 KiB flash.
         let cmd = send(&mut rig.handler, &write_raw(4094, &[1, 2, 3, 4])).expect("decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, .. } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -509,12 +699,12 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
 
         let oversized = u8::try_from(cellguard_protocol::PAGE_MAX + 1).expect("fits u8");
         for bad in [0u8, oversized] {
             let cmd = send(&mut rig.handler, &read_raw(0, bad)).expect("decodes");
-            let reply = rig.handler.execute(cmd, &mut rig.target);
+            let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
             let Reply::Status { status, .. } = parse_reply(reply) else {
                 panic!("expected status reply")
             };
@@ -527,9 +717,9 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny_failing());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("page write decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, .. } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -558,14 +748,14 @@ mod tests {
         let mut rig = Rig::new(MockTarget::tiny());
         let cmd =
             send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
-        let _ = rig.handler.execute(cmd, &mut rig.target);
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         assert!(rig.handler.in_session());
         rig.handler.expire(&mut rig.target);
         assert!(!rig.handler.in_session());
         rig.handler.expire(&mut rig.target);
 
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("page write decodes");
-        let reply = rig.handler.execute(cmd, &mut rig.target);
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
         let Reply::Status { status, .. } = parse_reply(reply) else {
             panic!("expected status reply")
         };
@@ -582,5 +772,255 @@ mod tests {
             super::MAX_REPLY_FRAME,
             1 + 3 + cellguard_protocol::PAGE_MAX + 2
         );
+    }
+
+    /// An in-memory staging band: the image the cellcore staged, with
+    /// optional read failures after a set number of reads.
+    struct FakeBand {
+        image: Vec<u8>,
+        fail_after: Option<usize>,
+        reads: usize,
+    }
+
+    impl FakeBand {
+        fn blank() -> Self {
+            Self {
+                image: Vec::new(),
+                fail_after: None,
+                reads: 0,
+            }
+        }
+
+        /// Stages a valid cellprog image carrying `payload`.
+        fn stage(&mut self, payload: &[u8]) {
+            self.stage_as(Region::CellprogApp, payload);
+        }
+
+        /// Stages an image for `region`, however mismatched.
+        fn stage_as(&mut self, region: Region, payload: &[u8]) {
+            let header = ImageHeader {
+                kind: ImageKind::Application,
+                region,
+                target_id: 3,
+                fw_version: 4,
+                payload_len: u32::try_from(payload.len()).unwrap(),
+                payload_crc32: crc::checksum32(payload),
+                hmac: [0u8; 32],
+            };
+            let mut image = header.serialize().to_vec();
+            image.extend_from_slice(payload);
+            self.image = image;
+        }
+    }
+
+    impl super::SelfStaging for FakeBand {
+        fn read_staged(&mut self, offset: u32, buf: &mut [u8]) -> bool {
+            self.reads += 1;
+            if self.fail_after.is_some_and(|limit| self.reads > limit) {
+                return false;
+            }
+            let start = usize::try_from(offset).unwrap();
+            let Some(bytes) = self.image.get(start..start + buf.len()) else {
+                return false;
+            };
+            buf.copy_from_slice(bytes);
+            true
+        }
+    }
+
+    /// Runs a full self session against the rig's band and returns the `End`
+    /// status.
+    fn run_self_session(rig: &mut Rig, payload: &[u8]) -> SessionStatus {
+        let cmd =
+            send(&mut rig.handler, &begin_raw(SessionTarget::CellprogSelf)).expect("begin decodes");
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        for (i, chunk) in payload.chunks(32).enumerate() {
+            let addr = u16::try_from(i * 32).expect("fits u16");
+            let cmd = send(&mut rig.handler, &write_raw(addr, chunk)).expect("decodes");
+            let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        }
+        let cmd = send(&mut rig.handler, &end_raw()).expect("end decodes");
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
+        status
+    }
+
+    #[test]
+    fn self_session_verifies_and_arms() {
+        let payload: Vec<u8> = (0..150u32).map(|i| u8::try_from(i).unwrap()).collect();
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+
+        assert_eq!(run_self_session(&mut rig, &payload), SessionStatus::Ok);
+        assert!(rig.handler.self_update_armed());
+        assert!(!rig.handler.in_session());
+        // The servant never talks UPDI in a self session, so the target is
+        // untouched.
+        assert_eq!(rig.target().flash_at(0), 0xFF);
+    }
+
+    #[test]
+    fn corrupt_staged_image_never_arms() {
+        let payload = [0x77u8; 130];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        // Flip one payload byte after staging.
+        if let Some(byte) = rig.band.image.get_mut(HEADER_LEN + 3) {
+            *byte ^= 0x01;
+        }
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn foreign_region_never_arms() {
+        let payload = [1u8, 2, 3];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage_as(Region::CellagentApp, &payload);
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn oversized_payload_never_arms() {
+        let payload = [1u8, 2, 3];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        // Patch the header length beyond the app budget. The CRC no longer
+        // needs to match: the length check fires first.
+        let len = u32::from(super::APP_FLASH_SIZE) + 1;
+        rig.band.image[12..16].copy_from_slice(&len.to_le_bytes());
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn unreadable_band_never_arms() {
+        let payload = [5u8; 10];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        rig.band.fail_after = Some(0);
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn self_page_out_of_budget_is_invalid() {
+        let mut rig = Rig::new(MockTarget::tiny());
+        let cmd =
+            send(&mut rig.handler, &begin_raw(SessionTarget::CellprogSelf)).expect("begin decodes");
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+
+        let at = super::APP_FLASH_SIZE;
+        let cmd = send(&mut rig.handler, &write_raw(at - 1, &[1, 2])).expect("decodes");
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
+        assert_eq!(status, SessionStatus::InvalidAddr);
+    }
+
+    #[test]
+    fn self_page_before_begin_is_rejected() {
+        let mut rig = Rig::new(MockTarget::tiny());
+        let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("decodes");
+        // The session is not open, so the command is not a self command yet.
+        let reply = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        let Reply::Status { status, .. } = parse_reply(reply) else {
+            panic!("expected status reply")
+        };
+        assert_eq!(status, SessionStatus::BadState);
+    }
+
+    #[test]
+    fn uses_updi_routes_self_commands_to_the_uart_link() {
+        let page = Command::PageWrite { addr: 0, len: 2 };
+        let self_begin = Command::Begin(SessionTarget::CellprogSelf);
+        let mut rig = Rig::new(MockTarget::tiny());
+        assert!(!rig.handler.uses_updi(&self_begin));
+        let cmd =
+            send(&mut rig.handler, &begin_raw(SessionTarget::CellprogSelf)).expect("begin decodes");
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        assert!(!rig.handler.uses_updi(&page));
+        assert!(!rig.handler.uses_updi(&Command::End));
+
+        // Outside a self session everything needs the UPDI link.
+        let agent_begin = Command::Begin(SessionTarget::Cellagent);
+        let mut rig = Rig::new(MockTarget::tiny());
+        assert!(rig.handler.uses_updi(&agent_begin));
+        let cmd =
+            send(&mut rig.handler, &begin_raw(SessionTarget::Cellagent)).expect("begin decodes");
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        assert!(rig.handler.uses_updi(&page));
+        assert!(rig.handler.uses_updi(&Command::End));
+    }
+
+    #[test]
+    fn expire_closes_a_self_session_without_arming() {
+        let mut rig = Rig::new(MockTarget::tiny());
+        let cmd =
+            send(&mut rig.handler, &begin_raw(SessionTarget::CellprogSelf)).expect("begin decodes");
+        let _ = rig.handler.execute(cmd, &mut rig.target, &mut rig.band);
+        rig.handler.expire(&mut rig.target);
+        assert!(!rig.handler.in_session());
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn self_session_flashes_nothing_over_updi() {
+        // A whole self session must leave the (updi-side) target erased.
+        let payload = [0x42u8; 64];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        let _ = run_self_session(&mut rig, &payload);
+        let target = rig.target();
+        for off in [0usize, 16, 32] {
+            assert_eq!(target.flash_at(off), 0xFF, "flash stays erased at {off}");
+        }
+    }
+
+    #[test]
+    fn app_flash_budget_excludes_the_walker() {
+        assert_eq!(super::APP_FLASH_SIZE, 4096 - 256);
+        assert_eq!(super::APP_FLASH_SIZE % 16, 0, "whole flash pages");
+    }
+
+    #[test]
+    fn header_field_offsets_match_cellboot() {
+        // The hand-rolled field reads in `verify_staged` must track
+        // `ImageHeader::serialize`.
+        let header = ImageHeader {
+            kind: ImageKind::Application,
+            region: Region::CellprogApp,
+            target_id: 1,
+            fw_version: 9,
+            payload_len: 0x0102_0304,
+            payload_crc32: 0x0A0B_0C0D,
+            hmac: [0u8; 32],
+        };
+        let raw = header.serialize();
+        assert_eq!(&raw[0..4], b"CGFW");
+        assert_eq!(raw[4], FORMAT_VERSION);
+        assert_eq!(raw[6], Region::CellprogApp.to_code());
+        assert_eq!(raw[12..16], 0x0102_0304u32.to_le_bytes());
+        assert_eq!(raw[16..20], 0x0A0B_0C0Du32.to_le_bytes());
     }
 }
