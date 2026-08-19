@@ -45,7 +45,7 @@ mod board;
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
 /// Debug UART baud (USART5, bring-up).
-const BUS_BAUD: u32 = 9_600;
+const BUS_BAUD: u32 = 1_000_000;
 /// Baud on the local links to the PROG programmer (USART3) and the
 /// cellagent (USART4).
 const PROG_BAUD: u32 = 115_200;
