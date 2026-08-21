@@ -10,6 +10,7 @@ members = [
     "cellcore-runtime",
     "cellguard-panic",
     "cellguard-protocol",
+    "cellprog",
     "crc",
     "p3t1755",
     "tca9535",
