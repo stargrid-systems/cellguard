@@ -17,8 +17,6 @@ pub use self::cobs::{DecodeError, Decoder, Encoder, encode_frame, max_encoded_le
 pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 #[cfg(feature = "bootloader")]
-pub use self::prog::{ProgSource, ProgStatus};
-#[cfg(feature = "bootloader")]
 pub use self::session::{
     Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionCmd, SessionStatus,
     SessionTarget, decode_begin, decode_command, decode_page_data, decode_page_status,
@@ -37,8 +35,6 @@ pub use self::telemetry::{
 mod cobs;
 mod kind;
 mod packet;
-#[cfg(feature = "bootloader")]
-mod prog;
 #[cfg(feature = "bootloader")]
 mod session;
 #[cfg(feature = "telemetry")]

@@ -92,13 +92,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cellboot"
-version = "0.1.0"
-dependencies = [
- "crc",
-]
-
-[[package]]
 name = "cellguard-protocol"
 version = "0.1.0"
 dependencies = [
@@ -110,7 +103,6 @@ dependencies = [
 name = "cellprog"
 version = "0.1.0"
 dependencies = [
- "cellboot",
  "cellguard-protocol",
  "crc",
  "updi",
