@@ -3,11 +3,11 @@
 #
 # Usage: flash-size-gate.sh <workspace-dir>
 #
-# The workspace must hold a flash-budget file (one integer line in bytes) and
-# at least one target/avr-none/release/*.elf. The gate sums the text and data
-# columns of avr-size over all ELFs, reports measured use against the budget,
-# and appends a markdown table to $GITHUB_STEP_SUMMARY when that is set.
-# SIZE_CMD overrides the size command for local testing.
+# The workspace must hold a flash-budget file (one integer line in bytes,
+# comments allowed) and at least one target/avr-none/release/*.elf. Sums the
+# text and data columns of avr-size over all ELFs and fails over budget.
+# Appends a markdown table to $GITHUB_STEP_SUMMARY when set. SIZE_CMD
+# overrides the size command for local testing.
 
 set -euo pipefail
 

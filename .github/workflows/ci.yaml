@@ -115,9 +115,8 @@ jobs:
       - name: Build
         working-directory: ${{ matrix.workspace }}
         run: cargo build --release --locked
-      # Skip library-only AVR workspaces such as avrxt-hal: they link no ELF,
-      # so there is nothing to measure. Any workspace that does link an ELF
-      # must declare a flash-budget.
+      # Library-only AVR workspaces such as avrxt-hal link no ELF, so there
+      # is nothing to measure.
       - name: Flash size gate
         if: steps.target.outputs.avr == 'true'
         working-directory: ${{ matrix.workspace }}

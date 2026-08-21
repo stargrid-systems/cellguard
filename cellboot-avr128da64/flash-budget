@@ -1,3 +1,3 @@
 8192
-# Maximum flash footprint in bytes, summed from the text and data columns of
-# avr-size. The AVR128DA64 reserves 8K of flash for the boot section.
+# Maximum flash footprint in bytes (avr-size text+data). The AVR128DA64
+# reserves 8K of flash for the boot section.

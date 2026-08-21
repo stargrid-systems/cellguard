@@ -1,3 +1,2 @@
 4096
-# Maximum flash footprint in bytes, summed from the text and data columns of
-# avr-size. The ATtiny406 devotes its whole 4K flash to this firmware.
+# Maximum flash footprint in bytes (avr-size text+data) on the 4K ATtiny406.
