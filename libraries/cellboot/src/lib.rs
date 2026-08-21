@@ -1,10 +1,11 @@
 //! Hardware-independent core shared by the `CellGuard` firmware-update roles.
 //!
-//! Defines the signed image format ([`image`]), the I/O traits ([`io`]), the
-//! shared storage geometry ([`layout`]), the persistent updater state
-//! ([`state`]), and the streaming programmer engine ([`programmer`]). All
-//! roles build on it: `cellcore`, `cellprog`, and the bootloader. No crypto
-//! lives here, so `cellprog` and the bootloader link none of it.
+//! Defines the signed image format ([`image`]), the factory identity record
+//! ([`factory`]), the I/O traits ([`io`]), the shared storage geometry
+//! ([`layout`]), the persistent updater state ([`state`]), and the streaming
+//! programmer engine ([`programmer`]). All roles build on it: `cellcore`,
+//! `cellprog`, and the bootloader. No crypto lives here, so `cellprog` and the
+//! bootloader link none of it.
 //!
 //! # Features
 //!
@@ -19,6 +20,7 @@
 
 #[cfg(any(feature = "drivers", feature = "avr128"))]
 pub mod drivers;
+pub mod factory;
 pub mod image;
 pub mod io;
 pub mod layout;
