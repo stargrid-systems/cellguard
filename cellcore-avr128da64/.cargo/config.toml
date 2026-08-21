@@ -1,0 +1,21 @@
+[build]
+target = "avr-none"
+# binutils' avrxmega4_flmap.x sizes the text region for the full 128K flash,
+# so the app section (right after the 8K boot section) must be forced with
+# defsyms. __RODATA_FLASH_START__ must be a 32K multiple. 0 parks .rodata
+# after the .text/.data load image, and the rodata VMA window is widened to
+# span the whole app section.
+rustflags = [
+  "-C", "target-cpu=avr128da64",
+  "-C", "link-arg=-mrelax",
+  "-C", "link-arg=-Wl,--defsym=__TEXT_REGION_ORIGIN__=0x2000",
+  "-C", "link-arg=-Wl,--defsym=__TEXT_REGION_LENGTH__=0x1E000",
+  "-C", "link-arg=-Wl,--defsym=__RODATA_FLASH_START__=0x0",
+  "-C", "link-arg=-Wl,--defsym=__RODATA_REGION_LENGTH__=0x20000",
+]
+
+[target.'cfg(target_arch = "avr")']
+runner = "ravedude"
+
+[unstable]
+build-std = ["core"]

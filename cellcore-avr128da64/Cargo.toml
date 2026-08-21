@@ -1,0 +1,46 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "cellcore-avr128da64"
+version = "0.1.0"
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "cellcore-avr128da64"
+test = false
+bench = false
+
+[dependencies]
+ads131m08 = { path = "../libraries/ads131m08" }
+avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
+cellboot = { path = "../libraries/cellboot", features = ["avr128", "drivers"] }
+cellcore = { path = "../libraries/cellcore", features = ["telemetry"] }
+cellcore-runtime = { path = "../libraries/cellcore-runtime" }
+cat25 = { path = "../libraries/cat25" }
+embedded-hal = { version = "1", default-features = false }
+embedded-hal-bus = { version = "0.3", default-features = false }
+cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
+cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader", "telemetry"] }
+p3t1755 = { path = "../libraries/p3t1755" }
+tca9535 = { path = "../libraries/tca9535" }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+
+[profile.dev]
+# Dev keeps the panic machinery so panic records work during bring-up.
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+# Release drops the panic machinery for ~4.7 KiB of flash. Panics abort in
+# place, so a PanicProbe is answered empty.
+panic = "immediate-abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
