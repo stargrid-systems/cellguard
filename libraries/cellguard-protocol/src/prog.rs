@@ -14,8 +14,8 @@ pub enum ProgSource {
     AppStaged,
     /// The bootloader image staged in the Bootloader region.
     BootloaderStaged,
-    /// The known-good golden image, used for recovery.
-    Golden,
+    /// The cellagent application image.
+    CellagentAppStaged,
 }
 
 impl ProgSource {
@@ -25,7 +25,7 @@ impl ProgSource {
         match self {
             Self::AppStaged => 0,
             Self::BootloaderStaged => 1,
-            Self::Golden => 2,
+            Self::CellagentAppStaged => 2,
         }
     }
 
@@ -35,7 +35,7 @@ impl ProgSource {
         match code {
             0 => Some(Self::AppStaged),
             1 => Some(Self::BootloaderStaged),
-            2 => Some(Self::Golden),
+            2 => Some(Self::CellagentAppStaged),
             _ => None,
         }
     }
@@ -52,6 +52,9 @@ pub enum ProgStatus {
     VerifyFailed,
     /// The store or writer failed, or the header did not parse.
     Failed,
+    /// The target was programmed and verified, but releasing it failed. Its
+    /// flash holds a valid image; only the release step did not complete.
+    OkReleaseFailed,
 }
 
 impl ProgStatus {
@@ -63,6 +66,7 @@ impl ProgStatus {
             Self::CorruptSource => 1,
             Self::VerifyFailed => 2,
             Self::Failed => 3,
+            Self::OkReleaseFailed => 4,
         }
     }
 
@@ -74,6 +78,7 @@ impl ProgStatus {
             1 => Some(Self::CorruptSource),
             2 => Some(Self::VerifyFailed),
             3 => Some(Self::Failed),
+            4 => Some(Self::OkReleaseFailed),
             _ => None,
         }
     }
@@ -88,7 +93,7 @@ mod tests {
         for source in [
             ProgSource::AppStaged,
             ProgSource::BootloaderStaged,
-            ProgSource::Golden,
+            ProgSource::CellagentAppStaged,
         ] {
             assert_eq!(ProgSource::from_code(source.to_code()), Some(source));
         }
@@ -102,9 +107,10 @@ mod tests {
             ProgStatus::CorruptSource,
             ProgStatus::VerifyFailed,
             ProgStatus::Failed,
+            ProgStatus::OkReleaseFailed,
         ] {
             assert_eq!(ProgStatus::from_code(status.to_code()), Some(status));
         }
-        assert_eq!(ProgStatus::from_code(4), None);
+        assert_eq!(ProgStatus::from_code(5), None);
     }
 }

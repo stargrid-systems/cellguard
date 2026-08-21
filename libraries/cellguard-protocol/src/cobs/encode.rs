@@ -7,8 +7,28 @@ const MAX_DATA_PER_BLOCK: usize = 0xFF - 1;
 ///
 /// Built from the frame to send, it yields one wire byte per [`Encoder::pull`]
 /// until it returns `None`. The final `0x00` delimiter is included.
+///
+/// The encoder is a pair of indices into the frame, so `pull` moves plain
+/// integers instead of re-slicing the data. That keeps it small on targets
+/// where slice bookkeeping costs real flash.
 pub struct Encoder<'a> {
-    state: State<'a>,
+    data: &'a [u8],
+    /// Index of the next data byte to emit.
+    pos: usize,
+    /// End of the current block's data, exclusive. Emission is mid-block
+    /// while `pos < end`.
+    end: usize,
+    /// Start of the block after the current one. One past `end` when the
+    /// current block was terminated by a zero byte.
+    next: usize,
+    /// The current block is followed by no implied zero (it filled all 254
+    /// data bytes). Only meaningful once the block is drained.
+    partial: bool,
+    /// The final block was short (not ended by a zero), so the next pull
+    /// emits the frame delimiter.
+    terminate: bool,
+    /// The delimiter was emitted and the encoder is exhausted.
+    done: bool,
 }
 
 impl<'a> Encoder<'a> {
@@ -16,100 +36,68 @@ impl<'a> Encoder<'a> {
     #[must_use]
     pub const fn new(data: &'a [u8]) -> Self {
         Self {
-            state: State::Start(data),
+            data,
+            pos: 0,
+            end: 0,
+            next: 0,
+            partial: false,
+            terminate: false,
+            done: false,
         }
     }
 
     /// Returns the next wire byte, or `None` once the frame is complete.
+    #[must_use]
     pub fn pull(&mut self) -> Option<u8> {
-        self.state.pull()
-    }
-}
-
-enum State<'a> {
-    Start(&'a [u8]),
-    Block(Block<'a>),
-    End,
-}
-
-impl State<'_> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a block holds at most 254 data bytes, so the code byte fits a u8"
-    )]
-    fn pull(&mut self) -> Option<u8> {
-        let (ret, next) = match self {
-            // Emit the code byte introducing the first block.
-            Self::Start(data) => {
-                let block = split_first_block(data);
-                (Some((block.data.len() + 1) as u8), Self::Block(block))
-            }
-            // This block is drained and there is no more data: emit the
-            // terminator.
-            Self::Block(Block {
-                data: [],
-                zero: false,
-                rest: [],
-            }) => (Some(0x00), Self::End),
-            // This block is drained: emit the code byte for the next block.
-            Self::Block(Block {
-                data: [],
-                zero: _,
-                rest,
-            }) => {
-                let block = split_first_block(rest);
-                (Some((block.data.len() + 1) as u8), Self::Block(block))
-            }
-            // Emit the next data byte of this block.
-            Self::Block(Block {
-                data: [first, tail @ ..],
-                zero,
-                rest,
-            }) => (
-                Some(*first),
-                Self::Block(Block {
-                    data: tail,
-                    zero: *zero,
-                    rest,
-                }),
-            ),
-            Self::End => (None, Self::End),
-        };
-        *self = next;
-        ret
-    }
-}
-
-struct Block<'a> {
-    data: &'a [u8],
-    zero: bool,
-    rest: &'a [u8],
-}
-
-#[expect(
-    clippy::option_if_let_else,
-    reason = "the explicit if/else reads more clearly than map_or_else here"
-)]
-fn split_first_block(buf: &[u8]) -> Block<'_> {
-    if let Some(idx) = buf.iter().take(MAX_DATA_PER_BLOCK).position(|&b| b == 0) {
-        // A zero falls within the next 254 bytes. The block runs up to it and
-        // the zero itself is consumed (it is what the code byte stands in for).
-        let data = buf.get(..idx).unwrap_or(&[]);
-        let rest = buf.get(idx + 1..).unwrap_or(&[]);
-        Block {
-            data,
-            zero: true,
-            rest,
+        if self.pos < self.end {
+            let byte = *self.data.get(self.pos)?;
+            self.pos += 1;
+            return Some(byte);
         }
-    } else {
-        // No zero in range: take a full (or final short) block with no implied
-        // trailing zero.
-        let len = buf.len().min(MAX_DATA_PER_BLOCK);
-        let (data, rest) = buf.split_at(len);
-        Block {
-            data,
-            zero: false,
-            rest,
+        if self.terminate {
+            self.terminate = false;
+            self.done = true;
+            return Some(0x00);
         }
+        if self.done {
+            return None;
+        }
+        // The previous block is drained. With no data left, what ends the
+        // frame depends on that block: a partial one ends it outright, any
+        // other needs an empty block to stand for its implied trailing zero.
+        let rest = self.data.get(self.next..).unwrap_or(&[]);
+        if rest.is_empty() {
+            if self.partial {
+                self.done = true;
+                return Some(0x00);
+            }
+            self.terminate = true;
+            return Some(0x01);
+        }
+        // Emit the code byte of the next block. A zero byte within the next
+        // 254 ends the block in place of that zero. Otherwise the block runs
+        // to the shorter of 254 bytes or the end of the data.
+        let scan_len = rest.len().min(MAX_DATA_PER_BLOCK);
+        let scan = rest.get(..scan_len).unwrap_or(&[]);
+        let idx = scan.iter().position(|&b| b == 0);
+        let block_len = idx.unwrap_or(scan_len);
+        self.pos = self.next;
+        self.end = self.next + block_len;
+        self.next = self.end + usize::from(idx.is_some());
+        if idx.is_some() {
+            self.partial = false;
+        } else if scan_len == MAX_DATA_PER_BLOCK {
+            // A full block (code 0xFF) implies no trailing zero.
+            self.partial = true;
+        } else {
+            // Final short block: only the delimiter follows.
+            self.terminate = true;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a block holds at most 254 data bytes, so the code byte fits a u8"
+        )]
+        let code = (block_len + 1) as u8;
+        Some(code)
     }
 }
