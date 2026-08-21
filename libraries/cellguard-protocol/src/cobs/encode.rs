@@ -8,26 +8,21 @@ const MAX_DATA_PER_BLOCK: usize = 0xFF - 1;
 /// Built from the frame to send, it yields one wire byte per [`Encoder::pull`]
 /// until it returns `None`. The final `0x00` delimiter is included.
 ///
-/// The encoder is a pair of indices into the frame, so `pull` moves plain
-/// integers instead of re-slicing the data. That keeps it small on targets
-/// where slice bookkeeping costs real flash.
+/// The state is plain indices into the frame, so `pull` re-slices nothing and
+/// the code stays small on flash-limited targets.
 pub struct Encoder<'a> {
     data: &'a [u8],
-    /// Index of the next data byte to emit.
     pos: usize,
-    /// End of the current block's data, exclusive. Emission is mid-block
-    /// while `pos < end`.
+    /// End of the current block's data, exclusive.
     end: usize,
     /// Start of the block after the current one. One past `end` when the
     /// current block was terminated by a zero byte.
     next: usize,
-    /// The current block is followed by no implied zero (it filled all 254
-    /// data bytes). Only meaningful once the block is drained.
+    /// The current block implies no trailing zero (it filled all 254 data
+    /// bytes).
     partial: bool,
-    /// The final block was short (not ended by a zero), so the next pull
-    /// emits the frame delimiter.
+    /// The next pull emits the frame delimiter.
     terminate: bool,
-    /// The delimiter was emitted and the encoder is exhausted.
     done: bool,
 }
 
@@ -62,9 +57,8 @@ impl<'a> Encoder<'a> {
         if self.done {
             return None;
         }
-        // The previous block is drained. With no data left, what ends the
-        // frame depends on that block: a partial one ends it outright, any
-        // other needs an empty block to stand for its implied trailing zero.
+        // No data left. A partial block ends the frame outright, any other
+        // needs an empty block (code 0x01) to emit its implied trailing zero.
         let rest = self.data.get(self.next..).unwrap_or(&[]);
         if rest.is_empty() {
             if self.partial {
@@ -74,9 +68,8 @@ impl<'a> Encoder<'a> {
             self.terminate = true;
             return Some(0x01);
         }
-        // Emit the code byte of the next block. A zero byte within the next
-        // 254 ends the block in place of that zero. Otherwise the block runs
-        // to the shorter of 254 bytes or the end of the data.
+        // Emit the code byte of the next block: it ends at a zero within the
+        // next 254 bytes, else runs 254 bytes or to the end of the data.
         let scan_len = rest.len().min(MAX_DATA_PER_BLOCK);
         let scan = rest.get(..scan_len).unwrap_or(&[]);
         let idx = scan.iter().position(|&b| b == 0);

@@ -1,14 +1,10 @@
-//! Adapters that back the [`io`](crate::io) traits with concrete device
-//! drivers.
+//! Adapters that back the [`io`](crate::io) traits with concrete drivers.
 //!
-//! These live here rather than in a driver crate because the orphan rule needs
-//! the adapter to sit in a crate that owns either the trait or the type.
-//! `cellboot` owns the I/O traits, so each adapter is a local newtype over a
-//! foreign driver.
+//! They live here because the orphan rule puts the adapter in a crate that
+//! owns either the trait or the type: each is a newtype over a foreign driver.
 //!
 //! - [`Cat25Store`] (feature `drivers`): [`ImageStore`](crate::io::ImageStore)
-//!   over a CAT25 SPI EEPROM, shared by both the main MCU (which writes the
-//!   staged image) and the PROG MCU (which reads it back).
+//!   over a CAT25 SPI EEPROM.
 //! - [`EepromState`], [`UserRowKeyStore`], [`FlashNvmWriter`] (feature
 //!   `avr128`): the AVR128 on-chip [`StateStore`](crate::io::StateStore),
 //!   [`KeyStore`](crate::io::KeyStore), and

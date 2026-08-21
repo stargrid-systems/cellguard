@@ -136,9 +136,8 @@ impl<'a> Packet<'a> {
         let (head, tail) = slot.split_at_mut(HEADER_LEN);
         head.copy_from_slice(Header::new(id, kind.to_u8(), payload_len).as_bytes());
         let (body, crc) = tail.split_at_mut(payload.len());
-        // A byte loop instead of `copy_from_slice`: the variable length would
-        // otherwise link the generic `memcpy` helper, which costs more flash
-        // than the loop on small targets.
+        // A byte loop instead of `copy_from_slice`: the variable-length copy
+        // would link the generic `memcpy`, which costs more flash.
         for (dst, src) in body.iter_mut().zip(payload) {
             *dst = *src;
         }

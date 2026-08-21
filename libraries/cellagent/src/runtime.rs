@@ -1,50 +1,34 @@
 //! The cellagent runtime.
 //!
-//! [`CellagentRuntime`] decodes incoming COBS frames, dispatches requests to
-//! the cellagent hardware, and writes encoded responses back to the bus.
-//!
-//! # Gate safety timeout
-//!
-//! The gates are a safety actuator. If the host stops refreshing
-//! `SetBalancer` (crash, unplugged cable), the gates must not hold their last
-//! state forever. The runtime therefore arms a refresh timeout on every
-//! `SetBalancer` and drives the gates to the safe state ([`SAFE_GATE_MASK`])
-//! once [`CellagentRuntime::check_timeout`] sees the deadline pass. The
-//! caller owns the time base and passes a free-running tick value to both
-//! [`CellagentRuntime::service`] and `check_timeout`, so the timeout is exact
-//! on hardware and deterministic in tests.
+//! The gates are a safety actuator. Every `SetBalancer` arms a refresh
+//! timeout, and once it passes [`CellagentRuntime::check_timeout`] drives
+//! the gates to [`SAFE_GATE_MASK`]. The caller owns the free-running tick
+//! passed to `service` and `check_timeout`.
 
 use cellguard_protocol::{Decoder, Kind, Packet, encode_frame};
 use embedded_io::Write;
 
 use crate::hw::{GateControl, TempSensor};
 
-/// Size of the receive buffer for COBS decoding.
 const RX_BUF_SIZE: usize = 64;
 
 /// Maximum response payload: the temperature reading in centi-degrees Celsius.
 const MAX_RESPONSE_PAYLOAD: usize = 2;
 
-/// Maximum raw response frame: header plus payload plus payload CRC.
 const MAX_RESPONSE_RAW: usize =
     cellguard_protocol::HEADER_LEN + MAX_RESPONSE_PAYLOAD + cellguard_protocol::PAYLOAD_CRC_LEN;
 
-/// Maximum COBS-encoded response frame.
 const MAX_RESPONSE_WIRE: usize = cellguard_protocol::max_encoded_len(MAX_RESPONSE_RAW);
 
-/// The gate mask driven when the refresh timeout fires or no command has
-/// arrived yet: both gate lines low and `ALL_OFF` asserted, which the
-/// balancing hardware decodes as "everything off".
+/// The gate mask driven before any command and after a timeout trip: both
+/// gate lines low and `ALL_OFF` asserted.
 pub const SAFE_GATE_MASK: u8 = 0x04;
 
 /// Default refresh window in caller ticks (roughly 2 s at 1.024 kHz).
 pub const DEFAULT_GATE_TIMEOUT_TICKS: u16 = 2048;
 
-/// The cellagent runtime.
-///
-/// Wraps a [`Decoder`] and dispatches incoming packets to the cellagent
-/// hardware. Construct one with [`CellagentRuntime::new`], then feed received
-/// bus bytes one at a time through [`CellagentRuntime::service`].
+/// The cellagent runtime. Feed received bus bytes one at a time through
+/// [`CellagentRuntime::service`].
 pub struct CellagentRuntime {
     decoder: Decoder,
     node_id: u8,
@@ -79,7 +63,7 @@ impl CellagentRuntime {
     }
 
     /// The last commanded gate mask. Reports the safe mask before any command
-    /// and after a timeout trip, so the echo always reflects reality.
+    /// and after a timeout trip.
     #[must_use]
     pub const fn gate_mask(&self) -> u8 {
         self.gate_mask
@@ -87,11 +71,8 @@ impl CellagentRuntime {
 
     /// Feeds one received byte.
     ///
-    /// `tick` is the caller's free-running time base (see the crate docs).
-    /// When a complete packet is decoded, handles it and writes any response
-    /// to `out`. No response is produced (and nothing is written) for an
-    /// incomplete frame, a frame addressed to another node, or a decode
-    /// error.
+    /// `tick` is the caller's free-running time base. Nothing is written for
+    /// an incomplete frame, a foreign-id frame, or a decode error.
     pub fn service<G, T, W>(
         &mut self,
         byte: u8,
@@ -143,9 +124,8 @@ impl CellagentRuntime {
     }
 
     /// Drives the gates to the safe state when the refresh window has
-    /// elapsed. Call every loop iteration with the current tick. The check is
-    /// inert until the first `SetBalancer` arms it: a link that is silent
-    /// from power-up never commanded gates on, so there is nothing to trip.
+    /// elapsed. Inert until the first `SetBalancer` arms it: a link silent
+    /// from power-up never commanded gates on.
     pub fn check_timeout<G: GateControl>(&mut self, tick: u16, gates: &mut G) {
         if self.armed && tick.wrapping_sub(self.last_refresh) > self.gate_timeout {
             gates.set_gates(SAFE_GATE_MASK);
@@ -154,7 +134,6 @@ impl CellagentRuntime {
         }
     }
 
-    /// Builds and writes a response packet COBS-encoded onto `out`.
     fn write_response<W: Write>(&self, kind: Kind, payload: &[u8], out: &mut W) {
         let mut raw = [0u8; MAX_RESPONSE_RAW];
         let Ok(raw_len) = Packet::write(self.node_id, kind, payload, &mut raw) else {
@@ -226,7 +205,6 @@ mod tests {
         }
     }
 
-    /// COBS-encodes a request packet addressed to [`NODE`].
     fn encode_request(kind: Kind, payload: &[u8]) -> Vec<u8> {
         let mut raw = [0u8; 32];
         let raw_len = Packet::write(NODE, kind, payload, &mut raw).expect("test: write raw packet");
@@ -241,7 +219,6 @@ mod tests {
         wire
     }
 
-    /// Decodes the first packet from a COBS wire stream.
     fn decode_response(wire: &[u8]) -> (Kind, Vec<u8>) {
         let mut decoder = Decoder::new();
         let mut scratch = [0u8; 128];
@@ -356,23 +333,18 @@ mod tests {
         let mut temp = MockTemp { value: 0 };
         let mut writer = VecWriter { buf: Vec::new() };
 
-        // Silence from power-up: the timeout must not trip (nothing armed).
         runtime.check_timeout(10_000, &mut gates);
         assert_eq!(gates.mask, 0);
 
-        // Command gates on at tick 1000.
         let wire = encode_request(Kind::SetBalancer, &[0x03]);
         for &byte in &wire {
             runtime.service(byte, 1000, &mut gates, &mut temp, &mut writer);
         }
         assert_eq!(gates.mask, 0x03);
 
-        // Inside the window: no trip.
         runtime.check_timeout(1050, &mut gates);
         assert_eq!(gates.mask, 0x03);
 
-        // Past the window: gates trip, echo reports the safe mask, and the
-        // timeout does not re-fire.
         runtime.check_timeout(1101, &mut gates);
         assert_eq!(gates.mask, super::SAFE_GATE_MASK);
         assert_eq!(runtime.gate_mask(), super::SAFE_GATE_MASK);
@@ -393,7 +365,6 @@ mod tests {
             runtime.service(byte, 0, &mut gates, &mut temp, &mut writer);
         }
 
-        // Refresh at the last moment; the window slides.
         let wire = encode_request(Kind::SetBalancer, &[0x01]);
         for &byte in &wire {
             runtime.service(byte, 100, &mut gates, &mut temp, &mut writer);

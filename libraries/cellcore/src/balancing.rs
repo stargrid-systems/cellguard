@@ -1,21 +1,11 @@
 //! The balancing-test subsystem: telemetry serving and actuator control.
 //!
-//! [`Balancing`] is the hardware-independent state layer behind the
-//! balancing-test protocol kinds. It owns the commanded state (bleed masks,
-//! PWM duty, power flags, gate-off), the safety timeout that drives the
-//! bleed safe when the host stops refreshing, and the request handlers that
-//! turn telemetry polls into reply payloads. Hardware access goes through
-//! [`BalancingHw`], which the firmware implements over the real drivers, so
-//! the whole layer is host-testable.
+//! [`Balancing`] owns the commanded bleed state, serves the telemetry polls,
+//! and drives the hardware through [`BalancingHw`].
 //!
-//! # Safety model
-//!
-//! The bleed actuators (the only current-carrying ones) start safe: masks
-//! and duty zero from power-up, and the refresh timeout trips them back to
-//! zero when the host stops sending `SetBleed`/`SetBleedPwm` within
-//! [`DEFAULT_BLEED_TIMEOUT_TICKS`]. The timeout is inert until the first
-//! command arms it, mirroring the cellagent gate timeout: a host that never
-//! commanded a bleed cannot "time out" one.
+//! The bleed actuators start safe (masks and duty zero) and the refresh
+//! timeout trips them back to zero when the host stops sending bleed
+//! commands. The timeout is inert until the first command arms it.
 
 use cellguard_protocol::{
     CELLS, Kind, RAILS, RailSnapshot, Snapshot, TEMP_INVALID, TEMPS, TempSnapshot, decode_bleed,
@@ -28,9 +18,8 @@ pub const DEFAULT_BLEED_TIMEOUT_TICKS: u32 = 4096;
 
 /// The hardware seam behind the balancing layer.
 ///
-/// The firmware implements this over the PWM expander, the TCD0 PWM, the
-/// ADCs, and the sense pins. Reads fill the latest device-side snapshot, so
-/// polling never triggers a conversion burst.
+/// Snapshot reads fill the latest device-side values, so polling never
+/// triggers a conversion burst.
 pub trait BalancingHw {
     /// Writes the bleed-leg enable masks to the PWM expander.
     fn set_bleed(&mut self, en_3r6: u8, en_36r5: u8);
@@ -72,8 +61,7 @@ pub struct Balancing<H: BalancingHw> {
 }
 
 impl<H: BalancingHw> Balancing<H> {
-    /// Creates the layer over `hw` with the default refresh timeout. The
-    /// hardware starts safe: masks and duty zero.
+    /// Creates the layer over `hw` with the default refresh timeout.
     #[must_use]
     pub const fn new(hw: H) -> Self {
         Self::with_timeout(hw, DEFAULT_BLEED_TIMEOUT_TICKS)
@@ -106,9 +94,8 @@ impl<H: BalancingHw> Balancing<H> {
         self.hw
     }
 
-    /// Records a gate mask routed to the cellagent, so
-    /// [`Kind::BalancerStatus`] reports the commanded gate state next to the
-    /// bleed state.
+    /// Records a gate mask routed to the cellagent, reported in
+    /// [`Kind::BalancerStatus`].
     pub const fn note_gate_mask(&mut self, mask: u8) {
         self.gate_mask = mask;
     }
@@ -128,11 +115,8 @@ impl<H: BalancingHw> Balancing<H> {
         }
     }
 
-    /// Handles one balancing-test request. `now` is the caller's tick and
-    /// stamps the refresh window of bleed commands. `payload` is the request
-    /// payload; the reply payload is written to `out` and its kind returned.
-    /// Returns `None` for kinds this layer does not own (the update agent or
-    /// another node may).
+    /// Handles one balancing-test request. `now` stamps the refresh window
+    /// of bleed commands. Returns `None` for kinds this layer does not own.
     pub fn handle(
         &mut self,
         now: u32,
@@ -291,7 +275,6 @@ mod tests {
         handle(&mut bal, cellguard_protocol::Kind::SetBleed, &[0x0F, 0x01]);
         assert_eq!(bal.hw.bleed, (0x0F, 0x01));
 
-        // A malformed SetBleed is refused, not half-applied.
         let mut out = [0u8; 32];
         assert!(
             bal.handle(0, cellguard_protocol::Kind::SetBleed, &[0x01], &mut out)
@@ -398,8 +381,8 @@ mod tests {
             &[0xFF, 0xFF],
         );
 
-        // Silence from power-up never trips (nothing armed before the first
-        // command): exercised implicitly by the calls above arming it.
+        // Silence from power-up never trips: nothing arms the timeout
+        // before the first command.
         bal.tick(50);
         assert_eq!(bal.hw.duty, 0xFFFF);
 
@@ -408,7 +391,6 @@ mod tests {
         assert_eq!(bal.hw.bleed, (0, 0), "masks must trip to zero");
         assert_eq!(bal.en_3r6, 0);
 
-        // Disarmed after one trip.
         bal.hw.duty = 0x1234;
         bal.tick(5000);
         assert_eq!(bal.hw.duty, 0x1234);

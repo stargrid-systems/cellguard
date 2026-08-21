@@ -1,14 +1,8 @@
-//! The board hardware behind the balancing-test telemetry.
+//! Board hardware for the balancing-test telemetry. Netlist facts live in
+//! `scratch/hardware/balancing.md`.
 //!
-//! [`Board`] owns the I2C1 expanders (U103 power/heartbeat, U1100 bleed
-//! enables), the TCD0 bleed PWM, the rail ADC with its U100/U101 mux, the
-//! cellagent-liveness inputs, and the emergency gate-off pin, and implements
-//! [`BalancingHw`] over them. See
-//! `scratch/hardware/balancing.md` for the netlist facts.
-//!
-//! The I2C devices share one TWI through transient borrows: each operation
-//! wraps `&mut Twi` in a driver, runs one transaction, and drops it. The two
-//! ADS131M08s share SPI1 the same way, through an init-once static cell.
+//! The I2C devices share one TWI through transient borrows. The two
+//! ADS131M08s share SPI1 through an init-once static cell.
 
 use core::cell::RefCell;
 
@@ -27,48 +21,38 @@ use embedded_hal::digital::{InputPin, OutputPin, StatefulOutputPin};
 use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::{NoDelay, RefCellDevice};
 
-/// One ADS131M08 over the shared SPI1 bus with its chip-select.
 type Adc = Ads131m08<RefCellDevice<'static, Spi<pac::SPI1>, Output, NoDelay>, Ready>;
 use p3t1755::P3t1755;
 use tca9535::{Address, Configuration, Output as ExpanderOut, PinIndex as Pin, Tca9535};
 
-/// Heartbeat cadence in RTC ticks (~1.024 kHz): 256 ticks is about 250 ms.
+/// Heartbeat cadence in RTC ticks (~1.024 kHz). 256 ticks is about 250 ms,
+/// per the cellprog supervision contract.
 const HEARTBEAT_TICKS: u16 = 256;
 
-/// Bleed-PWM ramp end, in TCD0 counter ticks.
 const PWM_TOP: u16 = avrxt_hal::tcd::MAX_TOP;
-/// Bleed-PWM clock: 24 MHz / 4 = 6 MHz counter clock, so the full ramp
-/// modulates at about 1.47 kHz.
+/// Bleed-PWM clock: 24 MHz / 4 = 6 MHz, so the ramp modulates at ~1.47 kHz.
 const PWM_PRESCALE: PwmPrescaler = PwmPrescaler::Div4;
 
-/// The ADS131M08's internal reference, in millivolts.
 const ADS_VREF_MV: i32 = 1200;
 /// 24-bit two's-complement full scale.
 const ADS_FULL_SCALE: i32 = 1 << 23;
 /// LM61 transfer bias in millivolts (10 mV/degC above this).
 const LM61_BIAS_MV: i32 = 600;
 
-/// The shared SPI1 ADC bus. Written once at boot, read afterwards. The
-/// firmware is single-threaded and never enables interrupts, so the raw
-/// access cannot race.
+/// Shared SPI1 ADC bus, written once at boot. The firmware is single-threaded
+/// and never enables interrupts, so access cannot race.
 static mut ADC_SPI: Option<RefCell<Spi<pac::SPI1>>> = None;
 
-/// The static ADC-bus reference, for `RefCellDevice` construction.
-///
-/// # Panics
-///
-/// Panics if called before [`Board::new`] initialized the bus. Only
-/// [`Board`] calls it, after initialization.
 fn adc_bus() -> &'static RefCell<Spi<pac::SPI1>> {
     // SAFETY: `ADC_SPI` is written exactly once (in `Board::new`) before
     // any call, and no interrupt or second thread exists to race the read.
     let ptr = core::ptr::addr_of!(ADC_SPI);
-    // SAFETY: the pointer is always valid; see the SAFETY note above.
+    // SAFETY: the pointer is valid per the note above.
     unsafe { (*ptr).as_ref().expect("ADC bus initialized") }
 }
 
-/// Configures one ADS131M08 over its `SpiDevice`, or `None` when the chip
-/// does not answer (missing/miswired), leaving the rest of the board alive.
+/// Configures one ADS131M08. Returns None when the chip does not answer, so
+/// the rest of the board stays alive.
 fn bring_up_adc<S: SpiDevice>(device: Ads131m08<S>) -> Option<Ads131m08<S, Ready>> {
     let mut device = device.configure(Config::default()).ok()?;
     device.wakeup().ok()?;
@@ -85,8 +69,8 @@ mod u103 {
     pub const WP_EEPROM_APP: PinIndex = PinIndex::P2;
     pub const ACTIVE_BALANCER_ON: PinIndex = PinIndex::P4;
     pub const EN_ALL: PinIndex = PinIndex::P5;
-    /// Candidate `POWER_ON` driver per the Power sheet; bench-verify
-    /// (see balancing.md).
+    /// Candidate `POWER_ON` driver per the Power sheet. Unverified, see
+    /// balancing.md.
     pub const POWER_ON: PinIndex = PinIndex::P6;
     pub const I2C_PWR_TEMP_EN: PinIndex = PinIndex::P11;
     pub const HEARTBEAT: PinIndex = PinIndex::P12;
@@ -96,15 +80,14 @@ mod u103 {
 mod u1100 {
     use tca9535::PinIndex;
 
-    /// EN_3R6_1..4: leg-A (2.0 Ω) bleed enables, cells 1-4.
+    /// Leg-A (2.0 ohm) bleed enables, cells 1-4.
     pub const EN_3R6: [PinIndex; 4] = [PinIndex::P0, PinIndex::P1, PinIndex::P2, PinIndex::P3];
-    /// EN_36R5_1..4: leg-B (7.2 Ω) bleed enables, cells 1-4.
+    /// Leg-B (7.2 ohm) bleed enables, cells 1-4.
     pub const EN_36R5: [PinIndex; 4] = [PinIndex::P10, PinIndex::P11, PinIndex::P12, PinIndex::P13];
     /// Static `PWM_SIGNAL` source. High = legs enabled (when masks allow).
     pub const PWM_STATIC: PinIndex = PinIndex::P5;
 }
 
-/// The board hardware. See the [module](self) docs.
 pub struct Board {
     twi: Twi<pac::TWI1>,
     /// Cached U103 output register, so pin updates are one I2C write.
@@ -142,8 +125,8 @@ pub struct Board {
 }
 
 impl Board {
-    /// Brings up the board: expanders configured to safe defaults, ADC on the
-    /// external 1.8 V reference, rail mux parked, `INA_EN` asserted.
+    /// Brings up the board: expanders at safe defaults, ADC on the external
+    /// 1.8 V reference, rail mux parked, `INA_EN` asserted.
     #[allow(clippy::too_many_arguments, reason = "hardware wiring")]
     pub fn new(
         mut twi: Twi<pac::TWI1>,
@@ -171,8 +154,7 @@ impl Board {
         let mut vref = Vref::new(vref);
         vref.set_adc0(Reference::External);
         let adc = McuAdc::new(adc0, AdcPrescaler::Div64, Avr128Resolution::Bits10);
-        // Bleed PWM starts at zero duty (PB7 low), so the legs stay off
-        // until commanded.
+        // Bleed PWM starts at zero duty, so the legs stay off until commanded.
         let bleed_pwm = TcdPwm::new(cpu, tcd0, PWM_TOP, PWM_PRESCALE, PwmOutput::Wod);
 
         // Rail mux parked on the 5V0/3V3 position, enabled (active low).
@@ -185,10 +167,8 @@ impl Board {
         let _ = ir_a0.set_low();
         let _ = ir_a1.set_low();
 
-        // Both ADS131M08s on SPI1, mode 1, sharing one bus through the
-        // static cell. A shared SYNC/RESET pulse (PF3) realigns them; a chip
-        // that does not answer parks as None and the rest of the board
-        // still serves.
+        // Both ADS131M08s on SPI1, mode 1, through the static cell. A shared
+        // SYNC/RESET pulse (PF3) realigns them. A missing chip parks as None.
         let _ = cs_adc_a.set_high();
         let _ = cs_adc_b.set_high();
         {
@@ -203,8 +183,8 @@ impl Board {
         let adc_a = bring_up_adc(Ads131m08::new(dev_a));
         let adc_b = bring_up_adc(Ads131m08::new(dev_b));
 
-        // Safe power-up: EEPROMs write-protected, enables off, isolated
-        // temp power on, heartbeat low.
+        // Safe power-up: EEPROMs write-protected, enables off, temp power
+        // isolated, heartbeat low.
         let power_out = ExpanderOut(0x0000)
             .with_high(u103::WP_EEPROM_BOOT)
             .with_high(u103::WP_EEPROM_APP)
@@ -218,9 +198,8 @@ impl Board {
             .with_input(Pin::P6)
             .with_input(Pin::P7);
 
-        // Board bring-up writes are best-effort: a missing expander must not
-        // brick the field-bus interface, and the status handlers report the
-        // gap.
+        // Bring-up writes are best-effort: a missing expander must not brick
+        // the field-bus interface.
         {
             let mut exp = Tca9535::new(&mut twi, Address::Lll);
             let _ = exp.write_configuration(power_config);
@@ -233,7 +212,7 @@ impl Board {
         }
 
         // U908 P3T1755 on I2C1. The strapped address is 0x41 or 0x42
-        // depending on board revision; probe both once.
+        // depending on board revision. Probe both once.
         let mut probe =
             |addr: p3t1755::Address| P3t1755::new(&mut twi, addr).read_temperature().is_ok();
         let temp_addr = [p3t1755::Address::Addr2, p3t1755::Address::Addr3]
@@ -272,9 +251,7 @@ impl Board {
         }
     }
 
-    /// Toggles the heartbeat pin on U103 P12 when the cadence elapsed.
-    /// `now` is the caller's RTC tick; 256 ticks (about 250 ms) separate
-    /// toggles, per the cellprog supervision contract.
+    /// Toggles U103 P12 when the cadence elapsed. `now` is the RTC tick.
     pub fn heartbeat(&mut self, now: u16) {
         if now.wrapping_sub(self.last_heartbeat) >= HEARTBEAT_TICKS {
             self.last_heartbeat = now;
@@ -283,14 +260,12 @@ impl Board {
         }
     }
 
-    /// The current heartbeat level.
     pub const fn heartbeat_state(&self) -> bool {
         self.power_out.0 & u103::HEARTBEAT.mask() != 0
     }
 
-    /// Polls both ADS131M08 data-ready lines and, when a sample waits,
-    /// reads it into the snapshot buffers. Call every loop iteration; a read
-    /// takes one SPI frame (~100 us at 3 MHz).
+    /// Polls the ADS131M08 data-ready lines and reads waiting samples into
+    /// the snapshot buffers. A read takes one SPI frame (~100 us at 3 MHz).
     pub fn poll_adcs(&mut self) {
         if self.drdy_a.is_low().unwrap_or(false)
             && let Some(adc) = self.adc_a.as_mut()
@@ -318,7 +293,6 @@ impl Board {
         }
     }
 
-    /// Samples the cellagent ALIVE pin and records edges.
     pub fn poll_alive(&mut self) {
         let level = self.alive.is_high().unwrap_or(self.last_alive);
         if level != self.last_alive {
@@ -327,7 +301,6 @@ impl Board {
         }
     }
 
-    /// Sets one U103 output pin through the cached register.
     fn set_u103(&mut self, pin: Pin, high: bool) {
         self.power_out = if high {
             self.power_out.with_high(pin)
@@ -338,7 +311,6 @@ impl Board {
         let _ = exp.write_output(self.power_out);
     }
 
-    /// Sets one U1100 output pin through the cached register.
     fn set_u1100(&mut self, pin: Pin, high: bool) {
         self.bleed_out = if high {
             self.bleed_out.with_high(pin)
@@ -350,7 +322,7 @@ impl Board {
     }
 
     /// Reads one rail-mux position into `out` (AIN0-3). Position 00 reads
-    /// [`5V0`, `3V3`, `1V8AN`, `3V3B`]; position 10 reads
+    /// [`5V0`, `3V3`, `1V8AN`, `3V3B`]. Position 10 reads
     /// [`VBAT_A`, `VBAT_B`, `12V_CON`, `20V_MOS`] (MCU sheet).
     fn read_mux_position(&mut self, a1: bool, out: &mut [u8; 4]) {
         if a1 {
@@ -375,10 +347,9 @@ impl BalancingHw for Board {
         }
     }
 
-    /// Duty 0 disables modulation, per the protocol: the legs are then
-    /// statically on when enabled, held through the U1100 P05 `PWM_SIGNAL`
-    /// source while PB7 parks low. Any other duty modulates PB7 and drops
-    /// P05. The two sources are ORed in hardware.
+    /// Duty 0 statically enables the legs through the U1100 P05 `PWM_SIGNAL`
+    /// source while PB7 parks low, per the protocol. Any other duty
+    /// modulates PB7 and drops P05. The sources are ORed in hardware.
     fn set_pwm(&mut self, duty: u16) {
         if duty == 0 {
             self.bleed_pwm.set_on_ticks(0);
@@ -392,8 +363,7 @@ impl BalancingHw for Board {
     fn set_power(&mut self, flags: u8) {
         self.set_u103(u103::ACTIVE_BALANCER_ON, flags & 0x01 != 0);
         self.set_u103(u103::EN_ALL, flags & 0x02 != 0);
-        // Bit 2 is the POWER_ON candidate (bench-verify the exact pin, see
-        // balancing.md).
+        // Bit 2 is the POWER_ON candidate. Unverified pin, see balancing.md.
         self.set_u103(u103::POWER_ON, flags & 0x04 != 0);
     }
 
@@ -443,8 +413,7 @@ impl BalancingHw for Board {
             }
         }
         out[1] = self.lm61_centi;
-        // Slot 2 (routed cellagent LM61) fills in a later revision; the
-        // test tooling polls it through the routed `ReadTemperature`.
+        // Slot 2 (routed cellagent LM61) stays invalid in this revision.
     }
 
     fn tiny_all_off(&mut self) -> bool {
@@ -475,7 +444,7 @@ fn lm61_centi(code: i32) -> i16 {
     i16::try_from(mv.saturating_sub(LM61_BIAS_MV).saturating_mul(10)).unwrap_or(TEMP_INVALID)
 }
 
-/// Halts with interrupts disabled; unrecoverable board wiring failure.
+/// Halts with interrupts disabled. Unrecoverable board wiring failure.
 fn halt() -> ! {
     avr_device::interrupt::disable();
     loop {

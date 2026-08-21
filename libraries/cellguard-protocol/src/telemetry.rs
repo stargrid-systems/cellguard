@@ -1,21 +1,21 @@
 //! Payload codecs for the balancing-test kinds.
 //!
 //! All readings are raw ADC codes, not engineering units. The conversion
-//! constants live with the test tooling so a recalibration never needs a
-//! firmware update. They are documented here for the host side:
+//! constants live with the test tooling so a recalibration needs no firmware
+//! update. They are documented here for the host side:
 //!
-//! - Cell voltages (ADC A ch0-3): `V_cell = code / 2^23 * VREF / 0.0330` with
-//!   the 820k:28k divider (÷30.29) and the ADS131M08 internal reference (1.2 V,
-//!   gain 1 by default). Reading is valid only while `POWER_ON` is asserted.
-//! - Balance currents (ADC B ch0-3, IR mux position 0): INA190A1 over a 47 mΩ
-//!   shunt, gain 25 → `I = V_out / (1.175 V/A)`. `V_out = code / 2^23 * VREF /
-//!   1` per the same frontend. Mind the `INA_REF` switch `S501`: at GND the
-//!   reading is unipolar, at 3.15 V bipolar.
-//! - Rails: 10-bit MCU ADC with a 1.8 V reference. Divider ratios: VBAT A/B =
-//!   ÷0.052, `3V3`/`3V3B`/`5V0`/`12V_CON`/`20V_MOS` = ÷0.0536, `1V8AN` = ÷0.5.
+//! - Cell voltages (ADC A ch0-3): `V_cell = code / 2^23 * VREF / 0.0330`
+//!   (820k:28k divider, ADS131M08 1.2 V internal reference, gain 1). Valid only
+//!   while `POWER_ON` is asserted.
+//! - Balance currents (ADC B ch0-3, IR mux position 0): INA190A1 over a 47
+//!   milliohm shunt, gain 25, so `I = V_out / (1.175 V/A)` where `V_out`
+//!   converts from the code like a cell voltage. The `INA_REF` switch `S501`
+//!   selects the range: GND is unipolar, 3.15 V is bipolar.
+//! - Rails: 10-bit MCU ADC with a 1.8 V reference. Divider scale: VBAT A/B =
+//!   0.052, `3V3`/`3V3B`/`5V0`/`12V_CON`/`20V_MOS` = 0.0536, `1V8AN` = 0.5.
 //! - Temperatures: centi-degrees Celsius, measured at the source.
 //!
-//! Payloads are little-endian throughout, like every other frame.
+//! Payloads are little-endian throughout.
 
 /// Number of cell channels reported in a snapshot.
 pub const CELLS: usize = 4;
@@ -46,8 +46,8 @@ pub type Seq = u8;
 /// Decoded cell-voltage or balance-current snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Snapshot {
-    /// Increments per device-side snapshot. A repeated value means the poll
-    /// raced the sampler; a jump means snapshots were skipped.
+    /// Increments per device-side snapshot. A repeat flags a stale read, a
+    /// jump flags missed snapshots.
     pub seq: Seq,
     /// Raw ADC codes, cell 1 first. 24-bit values sign-extended to `i32`.
     pub codes: [i32; CELLS],
@@ -153,8 +153,7 @@ pub fn decode_temps(payload: &[u8]) -> Option<TempSnapshot> {
 
 /// Decoded [`Kind::BalancerStatus`](crate::Kind::BalancerStatus) payload.
 ///
-/// The frame exists so one poll fully describes balancing state, including
-/// the commanded-vs-actual comparison the test trace needs.
+/// One poll reports the full balancing state, commanded and actual.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent status bits, not a state machine"
@@ -234,9 +233,9 @@ impl BalancerStatus {
 /// Decoded [`Kind::SetBleed`](crate::Kind::SetBleed) payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BleedMasks {
-    /// Leg-A (2.0 Ω) enable mask, bit x = cell x+1.
+    /// Leg-A (2.0 ohm) enable mask, bit x = cell x+1.
     pub en_3r6: u8,
-    /// Leg-B (7.2 Ω) enable mask, bit x = cell x+1.
+    /// Leg-B (7.2 ohm) enable mask, bit x = cell x+1.
     pub en_36r5: u8,
 }
 

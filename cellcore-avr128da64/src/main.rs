@@ -2,36 +2,16 @@
 #![no_main]
 #![feature(abi_avr_interrupt)]
 
-//! CellGuard core firmware for the AVR128DA64, the MCU populated on the board.
+//! CellGuard core firmware for the AVR128DA64.
 //!
-//! This is the thin hardware wrapper for the core MCU. It brings up the DA64,
-//! runs the mandatory crypto self-test, stages received images into the
-//! external SPI EEPROMs, and hands the peripherals to the shared `cellcore`
-//! update agent through `cellcore-runtime`. All update logic lives in those
-//! libraries. This crate only maps them onto this chip.
+//! Thin hardware wrapper for the core MCU. It brings up the DA64, runs the
+//! crypto self-test, stages received images into the external SPI EEPROMs,
+//! and hands the peripherals to the shared `cellcore` update agent through
+//! `cellcore-runtime`. All update logic lives in those libraries.
 //!
-//! Pin map is from the board schematic (`hardware/boards/cellguard-eval`):
-//! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. Each of the three
-//!   staging EEPROMs has its own active-low chip-select GPIO: App `PG6` (U104),
-//!   Boot `PA7` (U105), Factory `PG7` (U106).
-//! - USART5 (PG4/PG5 via PORTMUX ALT1) is the debug UART, used as the field bus
-//!   for bring-up. The production RS485 field bus on USART1 is untested.
-//! - USART3 (PB0/PB1) is the local link to the ATtiny406 PROG programmer.
-//! - USART4 (PE4/PE5) is the control link to the cellagent. Bus frames
-//!   addressed to it are routed there.
-//! - I2C1 (PB2/PB3) carries the expanders (U103 power, U1100 bleed) and the
-//!   U908 temperature sensor.
-//! - PB7 is the bleed PWM: TCD0 WOD through `PORTMUX` TCD0 ALT1, modulating the
-//!   bleed legs (see `board`).
-//! - The balancing-test hardware (rail mux, `INA_EN`, gate-off, ALIVE inputs)
-//!   lives in `board`.
-//!
-//! The application is linked at 0x2000, after the 8 KB boot section
-//! (FUSE.BOOTSIZE = 16).
-//!
-//! The clock is the 24 MHz external oscillator Y100 on PA0. The heartbeat to
-//! the cellprog (U103 P12) toggles every 250 ms; TWI has a bounded timeout,
-//! so a wedged expander can stall one toggle but not the main loop.
+//! Linked at 0x2000, after the 8 KB boot section (FUSE.BOOTSIZE = 16). The
+//! clock is the 24 MHz external oscillator Y100 on PA0. The pin map is from
+//! the board schematic (`hardware/boards/cellguard-eval`).
 
 use core::cell::RefCell;
 
@@ -86,13 +66,12 @@ const AGENT_VERSION: u32 = 1;
 /// Consecutive panic-resets before the handler halts instead of resetting.
 const PANIC_THRESHOLD: u8 = 3;
 
-/// USART5 receive timeout in ms.
 const BUS_RX_TIMEOUT_MS: u32 = 10;
 /// USART3 receive timeout in ms. Bounds the per-tick programmer-reply poll
-/// while an in-flight handoff waits for its `ProgResult`.
+/// while a handoff waits for its `ProgResult`.
 const PROG_RX_TIMEOUT_MS: u32 = 5;
-/// USART4 receive timeout in ms. One bounded read while waiting for a
-/// forwarded cellagent reply (40 reads total, see `cellcore-runtime`).
+/// USART4 receive timeout in ms. Bounds a read while waiting for a
+/// forwarded cellagent reply.
 const AGENT_RX_TIMEOUT_MS: u32 = 2;
 
 /// I2C1 bus speed.
@@ -113,13 +92,13 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // Y100: external 24 MHz oscillator. The app configures its own clock so
-    // it never depends on what the bootloader leaves behind.
+    // Y100: external 24 MHz oscillator. Set explicitly so the app never
+    // depends on the bootloader's clock state.
     clock::set_extclk(&cpu, &dp.CLKCTRL, F_CPU);
 
-    // USART5 debug UART on PG4/PG5, used as the field bus for bring-up.
-    // Default USART5 pins are PG0/PG1; PORTMUX ALT1 routes to PG4/PG5 where
-    // the serial adapter is connected.
+    // USART5 debug UART on PG4/PG5, the field bus for bring-up. Default pins
+    // are PG0/PG1. PORTMUX ALT1 routes to PG4/PG5 where the serial adapter
+    // sits.
     dp.PORTMUX.usartrouteb().modify(|_, w| w.usart5().alt1());
     let portg = Port::new(dp.PORTG).split();
     let _bus_tx = portg.p4.into_output_high();
@@ -130,14 +109,13 @@ fn main() -> ! {
             .rx_timeout_ms(BUS_RX_TIMEOUT_MS),
     );
 
-    // Mandatory: verify the crypto primitives on this silicon before trusting
-    // any image. A miscompiled hash must never authenticate firmware.
+    // Verify the crypto primitives on this silicon before trusting any
+    // image. A miscompiled hash must never authenticate firmware.
     if cellcore::kat::self_test().is_err() {
         halt();
     }
 
-    // On-chip NVM: read the fleet key from the USERROW and back the agent state
-    // with an EEPROM slot.
+    // Fleet key from the USERROW, agent state in an EEPROM slot.
     let nvm = Nvm::new(dp.NVMCTRL);
     let mut key = [0u8; KEY_LEN];
     if nvm.read_userrow(0, &mut key).is_err() {
@@ -212,9 +190,8 @@ fn main() -> ! {
             .rx_timeout_ms(AGENT_RX_TIMEOUT_MS),
     );
 
-    // I2C1 (PB2/PB3): expanders and the temperature sensor. The TWI
-    // peripheral takes the pins once enabled; internal pull-ups hold the bus
-    // between transactions.
+    // I2C1 (PB2/PB3): expanders and the temperature sensor. Internal
+    // pull-ups hold the bus between transactions.
     let _sda = portb.p2.into_input_pullup();
     let _scl = portb.p3.into_input_pullup();
     let twi = Twi::with_timeout_ms(dp.TWI1, F_CPU.hz(), SCL_HZ, TWI_TIMEOUT_MS);
@@ -256,17 +233,15 @@ fn main() -> ! {
     );
     let mut balancing = BoardBalancing::new(board);
 
-    // The runtime ties everything together: bus, programmer link, cellagent
-    // link, and the balancing telemetry handler.
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID, agent_link, CELLAGENT_ID)
         .with_telemetry(&mut balancing, NODE_ID);
 
-    // Init completed: this boot is healthy, so any prior panic was transient.
-    // Clear the crash-loop counter so unrelated panics do not accumulate.
+    // This boot is healthy, so any prior panic was transient. Clear the
+    // crash-loop counter.
     clear(&nvm, &cpu, layout::PANIC_OFFSET);
 
     // RTC as the free-running time base (~1.024 kHz). The heartbeat cadence
-    // lives in the telemetry handler's on_tick.
+    // lives in on_tick.
     let rtc = Rtc::new(dp.RTC, ClockSource::Internal1k, Prescaler::Div1, u16::MAX);
 
     loop {
@@ -284,7 +259,7 @@ fn build_usart<T: UsartInstance>(builder: Builder<T, u32, Unset>) -> Usart<T> {
     }
 }
 
-/// Halts with interrupts disabled. A future revision can blink a fault code.
+/// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
     loop {

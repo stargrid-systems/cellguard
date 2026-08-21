@@ -1,11 +1,8 @@
 //! The device-side update agent state machine.
 //!
-//! [`UpdateAgent`] runs on the AVR128. It answers [`Command`]s from the host,
-//! streams the received payload into an [`ImageStore`] (the external EEPROM),
-//! and verifies the image before marking it ready. It never programs flash
-//! itself. After a successful commit, [`UpdateAgent::pending_program`] tells
-//! the caller which region is ready, so the caller can hand off to the
-//! programmer.
+//! [`UpdateAgent`] answers [`Command`]s from the host, streams the payload
+//! into an [`ImageStore`], and verifies the image before marking it ready.
+//! It never programs flash itself.
 
 use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, ImageKind, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
@@ -80,23 +77,19 @@ pub struct UpdateAgent<'k, S, K, St> {
     state_store: St,
     state: PersistentState,
     session: Session,
-    /// Cached last panic record, reported on `PanicProbe`. `None` until the
-    /// firmware reads the slot at boot.
+    /// Cached last panic record, reported on `PanicProbe`.
     panic_record: Option<PanicRecord>,
 }
 
 impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Creates an agent.
     ///
-    /// `target_id` is this device's identity, used to reject images built for a
-    /// different device. `cellagent_target_id` is the cellagent's identity,
-    /// used to verify cellagent images relayed through the cellcore. `key` is
-    /// the shared HMAC key, normally a mutable slice over a boot-time buffer
-    /// copied from USERROW. On a successful key replacement the buffer is
-    /// updated in-place, so the new key takes effect immediately. Use
-    /// [`NoKeyStore`](cellboot::io::NoKeyStore) in production to disable key
-    /// replacement. `state_store` persists the probe-able state, and `state`
-    /// is the state already loaded from it at boot (see
+    /// `target_id` is this device's identity and `cellagent_target_id` is the
+    /// cellagent's, used to verify cellagent images relayed through the
+    /// cellcore. `key` is the shared HMAC key buffer, updated in place on a
+    /// successful key replacement so the new key takes effect immediately.
+    /// Use [`NoKeyStore`](cellboot::io::NoKeyStore) in production to disable
+    /// key replacement. `state` is the state loaded at boot (see
     /// [`cellboot::state::load`]).
     #[expect(
         clippy::too_many_arguments,
@@ -140,14 +133,11 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
 
     /// Marks the running application as healthy and clears the boot counter.
     ///
-    /// The bootloader bumps `boot_count` on every boot and flips
-    /// `app_health` to [`Bad`](cellboot::state::AppHealth::Bad) once it
+    /// The bootloader counts boots while the app stays unconfirmed and flips
+    /// `app_health` to [`Bad`](cellboot::state::AppHealth::Bad) once the count
     /// reaches
     /// [`BOOT_HEALTH_THRESHOLD`](cellboot::state::BOOT_HEALTH_THRESHOLD).
-    /// A boot only counts against the app while it stays unconfirmed, so the
-    /// runtime calls this once the app has proven itself alive (typically
-    /// after the first successful field-bus exchange). This persists the new
-    /// state.
+    /// Call this once the app has proven itself alive.
     pub fn confirm_app_healthy(&mut self) {
         self.state.app_health = AppHealth::Good;
         self.state.boot_count = 0;
@@ -156,11 +146,9 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
 
     /// Records that the programmer failed to flash a handed-off image.
     ///
-    /// The handoff consumes the staged image and records `Success` before the
-    /// programmer runs (see [`UpdateAgent::take_pending_program`]). When the
-    /// programmer later reports failure over the local link, this flips the
-    /// persisted outcome to `ProgramFailed`, so a probe does not report a
-    /// flash that never succeeded.
+    /// The handoff already recorded `Success` before the programmer ran, so
+    /// this flips the persisted outcome to `ProgramFailed` and keeps a probe
+    /// honest.
     pub fn record_program_failure(&mut self) {
         if self.state.last_outcome != UpdateOutcome::ProgramFailed {
             self.state.last_outcome = UpdateOutcome::ProgramFailed;
@@ -169,8 +157,6 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     }
 
     /// Returns the region ready to be programmed after a successful commit.
-    ///
-    /// The caller uses this to decide when to signal the programmer.
     #[must_use]
     pub const fn pending_program(&self) -> Option<Region> {
         match self.state.staged {
@@ -183,18 +169,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     ///
     /// Returns the region to program, or `None` when nothing is staged and
     /// ready. Programming resets the core (the programmer halts it over
-    /// UPDI), so the core never sees the result and must treat the handoff
-    /// as final: the staged image is cleared, an application image advances
-    /// the recorded `app_version` to the staged version (health back to
-    /// `Unknown` until the new app confirms itself), and the outcome is
-    /// recorded as a success. Persistence is best-effort: a state-store
-    /// write failure is not surfaced here, since the in-RAM state still
-    /// drives the current boot and the host can observe a stale persisted
-    /// record only across a reset.
+    /// UPDI), so the core never sees the result and the handoff is final:
+    /// the staged image is cleared, an application image advances the
+    /// recorded `app_version`, and the outcome is recorded as a success.
+    /// A state-store write failure is not surfaced, since the in-RAM state
+    /// still drives the current boot.
     ///
-    /// There is no rollback enforcement, so if programming never happens (for
-    /// example power is lost first) the still-working old image keeps running.
-    /// Dropping an update is safe.
+    /// There is no rollback enforcement: if programming never happens, the
+    /// old image keeps running. Dropping an update is safe.
     #[must_use]
     pub fn take_pending_program(&mut self) -> Option<Region> {
         let region = self.pending_program()?;
@@ -205,12 +187,10 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
 
     /// Handles one command and returns the response.
     ///
-    /// When the command changes the probe-able state, the new state is written
-    /// through to the [`StateStore`] so a probe after a reset reflects reality.
-    /// A `Data` chunk does not touch the state, so a large transfer causes no
-    /// extra store writes. The write-through is best-effort: a store failure is
-    /// not reported here, since the in-RAM state still drives the current
-    /// session and the handoff that follows a commit.
+    /// A changed state is written through to the [`StateStore`] so a probe
+    /// after a reset reflects reality. `Data` does not change the state, so
+    /// a large transfer causes no store writes. The write-through is
+    /// best-effort: a store failure is not reported here.
     pub fn handle(&mut self, command: Command<'_>) -> Response {
         let before = self.state;
         let response = match command {
@@ -253,10 +233,8 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let Some(slot) = self.layout.slot(header.region) else {
             return Response::Nack(NackReason::WrongTarget);
         };
-        // The kind must match the region: a bootloader image belongs in the
-        // bootloader slot, an application image in an application slot. An
-        // image signed for the other kind must never be flashed into this
-        // region, whatever its target id says.
+        // The image kind must match the region: an image signed for one kind
+        // must never land in the other kind's slot.
         let kind_matches = match header.kind {
             ImageKind::Bootloader => header.region == Region::Bootloader,
             ImageKind::Application => matches!(
@@ -277,7 +255,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             return Response::Nack(NackReason::StorageError);
         }
 
-        // A new transfer silently discards a committed image that was never
+        // A new transfer discards a committed image that was never
         // programmed. Record it as host-aborted so the outcome is honest.
         if self.state.staged == StagedState::Ready {
             self.state.last_outcome = UpdateOutcome::Aborted;
@@ -477,7 +455,6 @@ mod tests {
         assert_eq!(agent.status().staged, StagedState::Ready);
         assert_eq!(agent.status().last_outcome, UpdateOutcome::Success);
 
-        // The store holds the header then the payload.
         let mut staged = [0u8; HEADER_LEN + 300];
         SharedImageStore::new(&backing)
             .read(0, &mut staged)
@@ -536,7 +513,6 @@ mod tests {
     #[test]
     fn kind_region_mismatch_is_rejected() {
         let payload = [1u8, 2, 3];
-        // A bootloader-kind image signed for the application region.
         let header = {
             let image = ImageHeader {
                 kind: ImageKind::Bootloader,
@@ -587,8 +563,6 @@ mod tests {
         ));
         assert_eq!(agent.status().last_outcome, UpdateOutcome::Success);
 
-        // A second transfer supersedes the committed image before it was
-        // programmed. The stale commit must not silently stay `Success`.
         assert!(matches!(
             agent.handle(Command::Begin { header }),
             Response::Ack { next_offset: 0 }
@@ -713,7 +687,6 @@ mod tests {
             agent.handle(Command::ReplaceKey { new_key, tag }),
             Response::Ack { .. }
         ));
-        // The self-check on the auth helper mirrors what the device did.
         assert!(authenticate_key_replace(&KEY, &new_key, &tag));
     }
 
@@ -739,7 +712,6 @@ mod tests {
             Response::Ack { .. }
         ));
 
-        // An image signed with the new key is accepted without a reboot.
         let payload = ramp300();
         let header = signed_image_with(&payload, &new_key);
         assert!(matches!(
@@ -786,7 +758,6 @@ mod tests {
         );
         let new_key = [0x5Au8; KEY_LEN];
         let tag = replace_key_tag(&KEY, &new_key);
-        // Authentication passes, but a locked key store refuses the write.
         assert_eq!(
             agent.handle(Command::ReplaceKey { new_key, tag }),
             Response::Nack(NackReason::StorageError)
@@ -817,7 +788,6 @@ mod tests {
             ));
         }
 
-        // Reset: a fresh agent loads what the first one persisted at commit.
         let restored = cellboot::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Ready);
         assert_eq!(restored.staged_region, Some(Region::ApplicationCode));
@@ -850,8 +820,7 @@ mod tests {
         assert_eq!(restored.last_outcome, UpdateOutcome::Aborted);
     }
 
-    /// An image store whose writes always fail. Used to exercise the
-    /// storage-failure paths.
+    /// An image store whose writes always fail.
     struct FailingStore;
 
     impl ImageStore for FailingStore {
@@ -870,16 +839,15 @@ mod tests {
         }
     }
 
-    /// A `Begin` whose store write fails must clear any previously staged
-    /// image, so a stale `Ready` from a prior commit cannot survive the failed
-    /// begin and trigger an unintended handoff. See `on_begin`.
+    /// A `Begin` whose store write fails must clear a previously staged
+    /// image: a stale `Ready` must not survive to trigger an unintended
+    /// handoff.
     #[test]
     fn begin_storage_failure_clears_stale_ready() {
         let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);
         let payload = ramp300();
         let header = signed_image(&payload);
 
-        // First agent: commit an app image so the persisted state is `Ready`.
         {
             let mut key = KEY;
             let mut agent = UpdateAgent::new(
@@ -899,8 +867,6 @@ mod tests {
             assert_eq!(agent.pending_program(), Some(Region::ApplicationCode));
         }
 
-        // Second agent: load the `Ready` state, then fail a `Begin`. The stale
-        // Ready must be cleared so `pending_program` reports nothing.
         {
             let mut key = KEY;
             let state = cellboot::state::load(&mut SharedStore::new(&backing), 1);
@@ -923,7 +889,6 @@ mod tests {
             assert_eq!(agent.status().last_outcome, UpdateOutcome::StorageFailed);
         }
 
-        // The cleared state survives a reset.
         let restored = cellboot::state::load(&mut SharedStore::new(&backing), 1);
         assert_eq!(restored.staged, StagedState::Empty);
         assert_eq!(restored.last_outcome, UpdateOutcome::StorageFailed);

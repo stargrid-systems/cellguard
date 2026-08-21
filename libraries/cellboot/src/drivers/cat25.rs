@@ -8,8 +8,7 @@ use crate::io::ImageStore;
 
 /// An [`ImageStore`] backed by a CAT25 SPI EEPROM.
 ///
-/// The staged firmware image lives in this EEPROM: the AVR128 writes it and the
-/// PROG MCU reads it back.
+/// The AVR128 stages the image here and the PROG MCU reads it back.
 pub struct Cat25Store<S, D>(Cat25<S, D>);
 
 impl<S, D> Cat25Store<S, D> {

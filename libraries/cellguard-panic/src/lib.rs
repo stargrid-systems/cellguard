@@ -1,14 +1,10 @@
 //! Persistent panic record and crash-loop policy for the `CellGuard` firmware.
 //!
-//! A panic handler stores a [`PanicRecord`] (the panic location plus
-//! the reset-cause flags and a crash-loop counter) in on-chip EEPROM, then
-//! resets the device. A later boot or a field-bus probe reads the record back
-//! to learn where and why the device panicked. After a configurable number of
-//! consecutive panic-resets the policy halts instead of resetting, so a
-//! persistent fault cannot reboot-loop forever.
-//!
-//! The record module is pure and host-testable. The NVM-backed storage and
-//! reset/halt decision live behind the `hal` feature.
+//! A panic handler stores a [`PanicRecord`] (panic location, reset-cause
+//! flags, crash-loop counter) in on-chip EEPROM, then resets the device. After
+//! a configurable number of consecutive panic-resets the policy halts instead.
+//! The record format is pure and host-testable. The NVM-backed storage and
+//! the reset/halt decision live behind the `hal` feature.
 //!
 //! # Features
 //!
@@ -27,16 +23,12 @@ mod store;
 
 /// Defines a standard `#[panic_handler]` for a `CellGuard` firmware crate.
 ///
-/// Expands to a handler that disables interrupts, steals the peripherals,
-/// records the panic via `store_and_decide` (requires the `hal` feature),
-/// then either resets (under the
-/// crash-loop threshold) or halts. `$steal_peripherals` is the expression that
-/// takes the device peripherals (e.g.
-/// `unsafe { avr_device::avr128da64::Peripherals::steal() }`). `$offset` and
-/// `$threshold` configure the EEPROM panic-record slot.
-///
-/// The handler also pulls the reset-cause flags from `RSTCTRL.RSTFR`, so the
-/// record shows why the panic fired.
+/// The handler disables interrupts, records the panic via
+/// [`store_and_decide`], then resets or halts per the decision. Reset-cause
+/// flags come from `RSTCTRL.RSTFR`. `$steal_peripherals` takes the device
+/// peripherals, for example
+/// `unsafe { avr_device::avr128da64::Peripherals::steal() }`. `$offset` is
+/// the EEPROM panic-record slot and `$threshold` the crash-loop limit.
 ///
 /// Requires the `hal` feature.
 #[cfg(feature = "hal")]

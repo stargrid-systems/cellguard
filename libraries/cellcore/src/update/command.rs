@@ -1,8 +1,6 @@
 //! Bootloader commands and responses, and their mapping to bus packets.
 //!
-//! The update session works on these semantic types. This module maps them to
-//! and from [`cellguard_protocol`] packets using the bootloader [`Kind`]s, so
-//! the wire framing (COBS, CRCs) lives entirely in the protocol crate.
+//! The wire framing (COBS, CRCs) lives in [`cellguard_protocol`].
 
 use cellboot::image::HEADER_LEN;
 use cellboot::state::PersistentState;
@@ -16,9 +14,6 @@ pub const KEY_LEN: usize = 16;
 const TAG_LEN: usize = 32;
 
 /// A command from the host to the update agent.
-///
-/// `Data` borrows its chunk from the packet, so mapping a command does not copy
-/// the payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command<'a> {
     /// Ask the agent to report its [`PersistentState`].
@@ -103,7 +98,7 @@ pub enum Response {
     /// The agent's current state, in reply to [`Command::Probe`].
     Status(PersistentState),
     /// The command succeeded. `next_offset` is the next payload offset the
-    /// agent expects, so the host can track progress and resync.
+    /// agent expects.
     Ack {
         /// Next payload offset the agent expects.
         next_offset: u32,
@@ -118,7 +113,7 @@ pub enum Response {
 impl Response {
     /// Writes this response as a packet frame into `out`, returning its length.
     ///
-    /// The result is the pre-COBS frame; the caller COBS-encodes it with
+    /// The frame is pre-COBS: the caller encodes it with
     /// [`cellguard_protocol::Encoder`].
     ///
     /// # Errors

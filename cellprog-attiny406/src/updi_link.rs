@@ -1,14 +1,9 @@
 //! A [`UpdiLink`] over the ATtiny406 one-wire USART.
 //!
-//! The PROG tiny has a single USART. In UPDI mode (U1004 mux channel 1/3) its
-//! TxD and RxD are coupled onto the target's UPDI line, so every transmitted
-//! byte echoes back. [`UsartUpdiLink::send_byte`] consumes that echo, so the
-//! `updi` stack sees a clean request/response link.
-//!
-//! The link borrows the [`Usart`] rather than owning it, because the same USART
-//! is also the UART command link to the cellcore (mux channel 0). The firmware
-//! keeps the USART, switches its frame and the mux channel, and lends it here
-//! only for the duration of a flash.
+//! The PROG tiny has a single USART, shared with the cellcore UART link
+//! through the U1004 mux and lent here only for the duration of a flash. In
+//! UPDI mode its TxD and RxD are coupled onto the target's UPDI line, so every
+//! byte sent echoes back. [`UsartUpdiLink::send_byte`] consumes that echo.
 
 use avrxt_hal::usart::{Usart, UsartInstance};
 use updi::UpdiLink;
@@ -26,15 +21,13 @@ impl<'a, T: UsartInstance> UsartUpdiLink<'a, T> {
 }
 
 impl<T: UsartInstance> UpdiLink for UsartUpdiLink<'_, T> {
-    /// The servant maps every transport failure to one session status, so the
-    /// error type is `()`. A unit error also keeps `Result` plumbing thin in
-    /// the UPDI stack below.
+    /// All transport failures map to one session status.
     type Error = ();
 
     fn break_(&mut self) -> Result<(), ()> {
         self.usart.send_break();
-        // The break byte echoes back on the shared line. Drop it, ignoring a
-        // timeout since a BREAK is best-effort.
+        // The break echoes back. Drop it, ignoring a timeout since BREAK is
+        // best-effort.
         let _ = self.usart.read_byte();
         Ok(())
     }

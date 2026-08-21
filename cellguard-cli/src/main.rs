@@ -1,11 +1,8 @@
 //! `cellguard-cli` is the host-side tool for the `CellGuard` field bus.
 //!
-//! It speaks the same COBS-framed protocol as the cellcore firmware, so a host
-//! connected to the RS485 field bus (or directly to the cellcore's USART pins)
-//! can push signed firmware images, probe device state, and read panic records.
-//!
-//! The most common use is pushing a cellagent image to demonstrate the full
-//! update chain: the cellcore stages it, the cellprog reflashes U403 over UPDI.
+//! It speaks the cellcore's COBS-framed protocol over a serial link, so a
+//! host can push signed firmware images, probe device state, and read panic
+//! records.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -46,8 +43,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Push a signed firmware image to the cellcore, which stages it and
-    /// triggers the cellprog to flash the target.
+    /// Push a signed firmware image to the cellcore.
     PushImage {
         /// Serial port path (e.g. /dev/ttyUSB0).
         #[arg(long)]
@@ -60,15 +56,14 @@ enum Command {
         /// Which region to target.
         #[arg(long)]
         target: Target,
-        /// Fleet HMAC key as 32 hex chars (16 bytes). Defaults to all-0xFF
+        /// Fleet HMAC key as 32 hex chars (16 bytes), default all-0xFF
         /// (blank USERROW).
         #[arg(long)]
         key: Option<String>,
-        /// Image `target_id`. Defaults to 1 for app/bootloader, 2 for
-        /// cellagent.
+        /// Image `target_id` (default 1, or 2 for cellagent).
         #[arg(long)]
         target_id: Option<u16>,
-        /// Firmware version (informational). Defaults to 1.
+        /// Firmware version (informational).
         #[arg(long, default_value_t = DEFAULT_FW_VERSION)]
         fw_version: u32,
         /// Serial baud rate.
@@ -157,7 +152,6 @@ enum Command {
         en_36r5: u8,
     },
     /// Set the bleed PWM duty in 1/65536 units (TCD0 WOD on PB7, ~1.5 kHz).
-    /// 0 disables modulation: legs statically on when enabled.
     SetBleedPwm {
         #[arg(long)]
         port: String,
@@ -373,12 +367,10 @@ fn push_image(
 
     let mut transport = Transport::open(port, baud)?;
 
-    // BootBegin
     eprintln!("sending BootBegin...");
     let reply = transport.exchange(node, Kind::BootBegin, &signed_header)?;
     expect_ack(&reply, 0)?;
 
-    // BootData chunks
     let total = payload.len();
     let mut offset = 0usize;
     let mut data_buf = vec![0u8; 4 + chunk_size];
@@ -394,7 +386,6 @@ fn push_image(
     }
     eprintln!();
 
-    // BootCommit
     eprintln!("sending BootCommit...");
     let reply = transport.exchange(node, Kind::BootCommit, &[])?;
     expect_ack(&reply, payload.len() as u32)?;
@@ -536,7 +527,6 @@ fn hex_val(c: u8) -> Result<u8, Box<dyn Error>> {
     }
 }
 
-/// Which snapshot a `read_snapshot` call fetches.
 #[derive(Clone, Copy)]
 enum SnapshotKind {
     Cells,

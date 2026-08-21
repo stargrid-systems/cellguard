@@ -1,13 +1,8 @@
 //! The persistent, probe-able updater state.
 //!
-//! [`PersistentState`] is the small record the updater keeps in a
-//! [`StateStore`]. It survives a program-memory rewrite
-//! and is what a `Probe` command reports back, so an operator can ask a device
-//! what firmware it runs, whether that firmware is healthy, and how the last
-//! update went.
-//!
-//! Both the bootloader and the cellcore update agent read and write this
-//! record, which is why it lives here rather than in `cellcore`.
+//! [`PersistentState`] survives a program-memory rewrite and is what a
+//! `Probe` command reports back. Both the bootloader and the cellcore update
+//! agent read and write it, which is why it lives here.
 
 use core::fmt;
 
@@ -16,10 +11,8 @@ use crate::io::StateStore;
 
 /// Loads the persisted state, falling back to a fresh one on any problem.
 ///
-/// A read error, a wrong length, a bad CRC, or an unknown field all resolve to
+/// Any read error, wrong length, bad CRC, or unknown field resolves to
 /// [`PersistentState::new`], so a blank or corrupt store never blocks boot.
-/// Call this once at boot and pass the result to the update agent (or use it
-/// directly in the bootloader).
 pub fn load<St: StateStore>(store: &mut St, agent_version: u32) -> PersistentState {
     let mut buf = [0u8; STATE_LEN];
     match store.load(&mut buf) {
@@ -39,11 +32,8 @@ pub const STATE_FORMAT_VERSION: u8 = 1;
 /// Default ceiling on `boot_count` before the bootloader declares the
 /// application unhealthy.
 ///
-/// The bootloader increments [`PersistentState::boot_count`] on every boot
-/// that hands control to the app. If the counter reaches this value without
-/// the app confirming itself, the bootloader sets [`AppHealth::Bad`]. A device
-/// that reboots in a loop (the app panics before it can confirm) is flagged
-/// within this many boots.
+/// `boot_count` grows by one per unconfirmed boot. Reaching this value
+/// without the app confirming itself flags [`AppHealth::Bad`].
 pub const BOOT_HEALTH_THRESHOLD: u8 = 5;
 
 /// Sentinel region code meaning "no staged image".
@@ -174,9 +164,8 @@ pub struct PersistentState {
     pub staged_region: Option<Region>,
     /// Result of the most recent update attempt.
     pub last_outcome: UpdateOutcome,
-    /// Bootloader self-program attempts for the current staged image.
-    /// Incremented on each failed attempt; cleared on success or when the
-    /// bootloader gives up. Meaningful only to the bootloader.
+    /// Bootloader self-program attempts for the current staged image. Cleared
+    /// on success or when the bootloader gives up. Bootloader-internal.
     pub program_attempts: u8,
     /// Boots since the application last confirmed itself.
     pub boot_count: u16,
@@ -201,14 +190,11 @@ impl PersistentState {
 
     /// Marks the staged image as successfully programmed and hands it off.
     ///
-    /// Clears the staged slot, records `Success`, and resets the
-    /// `program_attempts` counter. For an application image it also advances
-    /// `app_version` to the staged version and resets `app_health` and
-    /// `boot_count`, so the new app starts from a clean health slate.
-    ///
-    /// This is the single transition used by both the update agent's
-    /// handoff path and the bootloader's self-program path, so the two cannot
-    /// drift.
+    /// Clears the staged slot, records `Success`, and resets
+    /// `program_attempts`. For an application image it also advances
+    /// `app_version` and resets `app_health` and `boot_count`. The agent
+    /// handoff and the bootloader self-program path share this single
+    /// transition so the two cannot drift.
     pub fn mark_programmed(&mut self, region: Region) {
         if region == Region::ApplicationCode {
             self.app_version = self.staged_version;
@@ -220,11 +206,11 @@ impl PersistentState {
         self.last_outcome = UpdateOutcome::Success;
         self.program_attempts = 0;
     }
-    /// Marks the staged image as permanently failed: attempts exhausted or the
-    /// error is not recoverable by retrying.
+    /// Marks the staged image as permanently failed: attempts exhausted or
+    /// the error is not retryable.
     ///
-    /// Clears the staged slot, records `ProgramFailed`, and resets
-    /// `program_attempts`. The installed app (if any) keeps running.
+    /// Clears the staged slot and records `ProgramFailed`. The installed app
+    /// keeps running.
     pub const fn mark_program_failed(&mut self) {
         self.staged = StagedState::Empty;
         self.staged_region = None;
@@ -255,9 +241,8 @@ impl PersistentState {
     ///
     /// # Errors
     ///
-    /// Returns [`StateError`] if the record is the wrong length, has a bad CRC,
-    /// an unknown format version, or an unknown field value. A caller that gets
-    /// an error should fall back to [`PersistentState::new`].
+    /// Returns [`StateError`] if the record has a bad CRC, an unknown format
+    /// version, or an unknown field value.
     pub fn parse(bytes: &[u8; STATE_LEN]) -> Result<Self, StateError> {
         let stored_crc = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
         if crc::checksum32(&bytes[0..24]) != stored_crc {
@@ -373,7 +358,7 @@ mod tests {
     fn detects_bad_format() {
         let mut bytes = PersistentState::new(1).serialize();
         bytes[0] = 9;
-        // Recompute the CRC so the format check is what trips, not the CRC.
+        // Recompute the CRC so the version check trips, not the CRC check.
         let crc = crc::checksum32(&bytes[0..24]);
         bytes[24..28].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(
@@ -423,7 +408,6 @@ mod tests {
         };
         state.mark_programmed(Region::Bootloader);
         assert_eq!(state.last_outcome, UpdateOutcome::Success);
-        // A bootloader flash does not touch the recorded app version/health.
         assert_eq!(state.app_version, 7);
         assert_eq!(state.app_health, AppHealth::Good);
         assert_eq!(state.boot_count, 3);

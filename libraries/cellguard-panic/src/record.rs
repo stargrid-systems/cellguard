@@ -1,16 +1,11 @@
 //! The persistent panic record.
 //!
-//! [`PanicRecord`] is a fixed-size, versioned, CRC-32-protected record that a
-//! panic handler stores in on-chip EEPROM so a later boot or a field-bus probe
-//! can read back why and where the device panicked. It captures only the panic
-//! location (file, line, column), the reset-cause flags active at the time, and
-//! a crash-loop counter. The payload is intentionally compact to fit the
+//! A fixed-size, versioned, CRC-32-protected record stored in on-chip EEPROM:
+//! panic location, reset-cause flags, and a crash-loop counter. It fits the
 //! 128-byte EEPROM of the tinyAVR co-processors as well as the AVR128 core.
-//!
-//! The layout mirrors `cellcore::update::state::PersistentState`: a format
-//! version byte, the fields, and a trailing CRC-32 over everything before it.
-//! Parsing falls back gracefully: a blank EEPROM cell (`0xFF`) or a corrupt
-//! record fails the version or CRC check, which a caller treats as "no record".
+//! The layout is a format-version byte, the fields, and a trailing CRC-32
+//! over everything before it. A blank `0xFF` cell fails the version or CRC
+//! check, which callers treat as "no record".
 
 use core::panic::PanicInfo;
 
@@ -33,16 +28,12 @@ const CRC_OFF: usize = COL_OFF + 4;
 const _: () = assert!(CRC_OFF + 4 == RECORD_LEN);
 
 /// The persistent panic record.
-///
-/// Build it from a [`PanicInfo`] with [`PanicRecord::from_panic_info`], then
-/// [`PanicRecord::serialize`] it for storage. Recover it with
-/// [`PanicRecord::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PanicRecord {
     /// Reset-cause flags (`RSTCTRL.RSTFR` bits) active when the panic fired.
     pub reset_flags: u8,
-    /// Consecutive panic-resets at the time this record was written. A healthy
-    /// boot clears it back to zero.
+    /// Consecutive panic-resets at the time this record was written. A
+    /// healthy boot clears it back to zero.
     pub consecutive_panics: u8,
     /// Source-file path bytes, truncated to [`FILE_CAP`].
     pub file: [u8; FILE_CAP],
@@ -55,8 +46,9 @@ pub struct PanicRecord {
 }
 
 impl PanicRecord {
-    /// Builds a record from a panic, capturing its location and the given reset
-    /// flags. The crash-loop counter starts at zero; the storage layer sets it.
+    /// Builds a record from a panic location plus the given reset flags.
+    ///
+    /// The crash-loop counter starts at zero. The storage layer sets it.
     #[must_use]
     pub fn from_panic_info(info: &PanicInfo, reset_flags: u8) -> Self {
         let (file, file_len, line, col) = location_bytes(info);
@@ -90,10 +82,10 @@ impl PanicRecord {
     ///
     /// # Errors
     ///
-    /// [`ParseError::BadCrc`] if the CRC does not match,
-    /// [`ParseError::UnsupportedVersion`] if the format version is not
-    /// [`RECORD_FORMAT_VERSION`] (a blank `0xFF` cell lands here), or
-    /// [`ParseError::BadField`] if the stored file length is out of range.
+    /// [`ParseError::BadCrc`] on a CRC mismatch,
+    /// [`ParseError::UnsupportedVersion`] on a wrong format version (a blank
+    /// `0xFF` cell lands here), or [`ParseError::BadField`] if the stored
+    /// file length is out of range.
     pub fn parse(bytes: &[u8; RECORD_LEN]) -> Result<Self, ParseError> {
         let stored = u32::from_le_bytes([
             bytes[CRC_OFF],
@@ -144,7 +136,6 @@ impl PanicRecord {
     }
 }
 
-/// Extracts the panic location into a fixed-size buffer plus line/column.
 fn location_bytes(info: &PanicInfo) -> ([u8; FILE_CAP], u8, u32, u32) {
     let Some(loc) = info.location() else {
         return ([0u8; FILE_CAP], 0, 0, 0);
@@ -155,14 +146,12 @@ fn location_bytes(info: &PanicInfo) -> ([u8; FILE_CAP], u8, u32, u32) {
 }
 
 /// Copies up to [`FILE_CAP`] bytes of `path` into `buf`, returning the count.
-/// Paths longer than the cap keep their leading bytes, which carry the
-/// crate/module and are usually enough to locate the panic.
+/// Longer paths keep their leading bytes.
 fn store_path(path: &[u8], buf: &mut [u8; FILE_CAP]) -> u8 {
     let n = path.len().min(FILE_CAP);
     let (dst, _) = buf.split_at_mut(n);
     let (src, _) = path.split_at(n);
     dst.copy_from_slice(src);
-    // `n` is clamped to `FILE_CAP` (48), so it always fits in a `u8`.
     u8::try_from(n).unwrap_or(u8::MAX)
 }
 
@@ -218,7 +207,7 @@ mod tests {
     fn detects_bad_version() {
         let mut bytes = sample().serialize();
         bytes[0] = 9;
-        // Recompute the CRC so the version check is what trips, not the CRC.
+        // Recompute the CRC so the version check trips, not the CRC check.
         let crc = crc::checksum32(&bytes[0..CRC_OFF]);
         bytes[CRC_OFF..CRC_OFF + 4].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(
@@ -229,8 +218,6 @@ mod tests {
 
     #[test]
     fn blank_eeprom_fails_to_parse() {
-        // A never-written EEPROM slot reads all `0xFF`. It must fail to parse
-        // (CRC first, then version) so callers treat it as "no record".
         let bytes = [0xFFu8; RECORD_LEN];
         assert!(PanicRecord::parse(&bytes).is_err());
     }

@@ -53,7 +53,7 @@ pub enum ProgStatus {
     /// The store or writer failed, or the header did not parse.
     Failed,
     /// The target was programmed and verified, but releasing it failed. Its
-    /// flash holds a valid image; only the release step did not complete.
+    /// flash holds a valid image.
     OkReleaseFailed,
 }
 

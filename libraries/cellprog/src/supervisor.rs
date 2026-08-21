@@ -1,30 +1,11 @@
-//! The `cellprog` supervisor: the programmer's bus-facing driver.
+//! The programmer's bus-facing driver.
 //!
-//! [`Supervisor`] owns the staged-image [`ImageStore`] and answers the
-//! cellcore over the local `UART_PROG` link, which speaks the same
-//! [`cellguard_protocol`] as the field bus.
-//!
-//! The supervisor does **not** own the [`NvmWriter`]. On the hardware the
-//! programmer's single USART is shared between the UART command link and the
-//! UPDI link through an analog mux, so the firmware owns the USART and lends
-//! the writer to the supervisor only for the duration of a flash. The three
-//! phases are therefore split into separate methods so the firmware can switch
-//! the USART mode and mux channel between them:
-//!
-//! 1. [`Supervisor::decode`] feeds one wire byte and, on a complete
-//!    [`Kind::ProgProgram`] addressed to this node, returns the source to
-//!    flash.
-//! 2. The firmware switches the link to UPDI, then calls
-//!    [`Supervisor::program`] with the borrowed writer to flash and verify.
-//! 3. The firmware switches the link back to UART and calls
-//!    [`Supervisor::reply`] to emit the [`Kind::ProgResult`].
-//!
-//! [`Supervisor::service`] does all three in one call for hosts and tests where
-//! the writer is always available.
-//!
-//! The programmer never acts on its own. The cellcore is the sole
-//! orchestrator: it stages images into the EEPROM and sends the program
-//! request.
+//! The programmer's single USART is shared between the UART command link
+//! and the UPDI link through a mux, so the firmware owns the USART and
+//! lends the [`NvmWriter`] to the supervisor only for a flash. Decode,
+//! program, and reply are therefore separate methods ([`Supervisor::decode`],
+//! [`Supervisor::program`], [`Supervisor::reply`]), with
+//! [`Supervisor::service`] doing all three in one call for hosts and tests.
 
 use cellboot::io::{ImageStore, NvmWriter};
 use cellboot::programmer::{ProgramError, program};
@@ -33,13 +14,10 @@ use cellguard_protocol::{
     max_encoded_len,
 };
 
-/// Streaming scratch buffer size the programmer uses.
 const SCRATCH: usize = 64;
 
-/// A `ProgResult` frame is a header, a one-byte status, and the payload CRC.
 const RESULT_FRAME: usize = HEADER_LEN + 1 + PAYLOAD_CRC_LEN;
 
-/// Worst-case COBS-encoded size of a result frame, including the terminator.
 /// Computed from the shared helper so it cannot drift.
 const RESULT_WIRE: usize = max_encoded_len(RESULT_FRAME);
 
@@ -75,8 +53,7 @@ impl ProgLayout {
 
 /// The programmer's bus driver.
 ///
-/// `RX` sizes the receive buffer. Program requests are tiny, so it can be
-/// small. The [`NvmWriter`] is supplied per flash (see [`Supervisor::program`])
+/// `RX` sizes the receive buffer. The [`NvmWriter`] is supplied per flash
 /// so the firmware can share one USART between the command link and UPDI.
 pub struct Supervisor<S, const RX: usize> {
     store: S,
@@ -102,11 +79,8 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
         }
     }
 
-    /// Feeds one received wire byte from the cellcore link.
-    ///
-    /// On a complete, valid `ProgProgram` addressed to this node, returns the
-    /// source to flash. Otherwise returns `None` and the decoder keeps
-    /// accumulating.
+    /// Feeds one received wire byte from the cellcore link. Returns the
+    /// source on a complete, valid `ProgProgram` addressed to this node.
     pub fn decode(&mut self, byte: u8) -> Option<ProgSource> {
         let Ok(Some(len)) = self.decoder.feed(byte, &mut self.rx) else {
             return None;
@@ -119,11 +93,10 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
         ProgSource::from_code(*packet.payload.first()?)
     }
 
-    /// Flashes the staged image for `source` into the target through `writer`,
-    /// returning the outcome.
+    /// Flashes the staged image for `source` through `writer`.
     ///
-    /// The writer is borrowed rather than owned so the firmware can lend the
-    /// shared USART/UPDI link for just this call.
+    /// The writer is borrowed so the firmware can lend the shared
+    /// USART/UPDI link for just this call.
     pub fn program<W: NvmWriter>(&mut self, source: ProgSource, writer: &mut W) -> ProgStatus {
         let slot = self.layout.slot(source);
         match program(
@@ -142,8 +115,8 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
         }
     }
 
-    /// Encodes a `ProgResult(status)` reply into the internal transmit buffer
-    /// and returns it, ready to send back on the cellcore link.
+    /// Encodes a `ProgResult(status)` reply into the internal transmit
+    /// buffer and returns it.
     #[must_use]
     pub fn reply(&mut self, status: ProgStatus) -> Option<&[u8]> {
         let mut raw = [0u8; RESULT_FRAME];
@@ -154,8 +127,7 @@ impl<S: ImageStore, const RX: usize> Supervisor<S, RX> {
     }
 
     /// Decodes, programs, and replies in one call, for hosts and tests where
-    /// the writer is always available. Returns the encoded reply slice when a
-    /// complete request was serviced, otherwise `None`.
+    /// the writer is always available.
     pub fn service<W: NvmWriter>(&mut self, byte: u8, writer: &mut W) -> Option<&[u8]> {
         let source = self.decode(byte)?;
         let status = self.program(source, writer);
@@ -293,7 +265,6 @@ mod tests {
         let payload: [u8; 200] = core::array::from_fn(|i| u8::try_from(i % 251).unwrap());
         stage(&mut sup.store, APP_OFFSET, &payload);
 
-        // Build and COBS-encode a ProgProgram(AppStaged) request.
         let mut raw = [0u8; 32];
         let raw_len = Packet::write(NODE, Kind::ProgProgram, &[0], &mut raw).unwrap();
         let mut wire = [0u8; 48];
@@ -316,7 +287,6 @@ mod tests {
 
     #[test]
     fn decode_then_program_then_reply_round_trips() {
-        // Exercises the three split phases as the firmware will call them.
         let mut sup = make();
         let mut writer = MockWriter {
             flash: [0; FLASH_CAP],
@@ -325,13 +295,11 @@ mod tests {
         let payload: [u8; 128] = core::array::from_fn(|i| u8::try_from(i).unwrap());
         stage(&mut sup.store, APP_OFFSET, &payload);
 
-        // Encode a request.
         let mut raw = [0u8; 32];
         let raw_len = Packet::write(NODE, Kind::ProgProgram, &[0], &mut raw).unwrap();
         let mut wire = [0u8; 48];
         let wire_len = encode_frame(&raw[..raw_len], &mut wire).unwrap();
 
-        // Phase 1: decode.
         let mut source = None;
         for &byte in &wire[..wire_len] {
             if let Some(s) = sup.decode(byte) {
@@ -340,13 +308,11 @@ mod tests {
         }
         assert_eq!(source, Some(ProgSource::AppStaged));
 
-        // Phase 2: program.
         let status = sup.program(ProgSource::AppStaged, &mut writer);
         assert_eq!(status, ProgStatus::Ok);
         assert!(writer.finished);
         assert_eq!(&writer.flash[..128], &payload[..]);
 
-        // Phase 3: reply.
         let frame = sup.reply(status).unwrap();
         let (kind, code) = decode_response(frame);
         assert_eq!(kind, Kind::ProgResult);

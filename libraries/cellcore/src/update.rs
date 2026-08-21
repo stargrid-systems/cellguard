@@ -1,14 +1,10 @@
 //! The field firmware-update agent.
 //!
-//! This subsystem answers bootloader commands from the field bus, streams a
-//! received image into staging storage, and verifies it before marking it ready
-//! to program. It never programs flash itself: after a successful commit,
-//! [`session::UpdateAgent::pending_program`] tells the caller which region is
-//! ready, so the caller can hand off to the `cellprog` programmer.
-//!
-//! The logic is written against the `cellboot` I/O traits only, so nothing here
-//! touches a register. A concrete target supplies the storage, key, and
-//! transport implementations.
+//! It answers bootloader commands from the field bus, streams the received
+//! image into staging storage, verifies it, and marks it ready. It never
+//! programs flash itself: after a successful commit, the caller hands the
+//! region off to the `cellprog` programmer. The logic is written against the
+//! `cellboot` I/O traits only.
 //!
 //! # Layout
 //!
@@ -17,16 +13,12 @@
 //! - [`command`]: the semantic command and response layer.
 //! - [`handoff`]: the request that tells the `cellprog` programmer to flash a
 //!   committed image.
-//! - [`state`](cellboot::state): the probe-able persistent state.
 //! - [`verify`]: streaming image verification and host-side signing.
 //! - [`mac`]: the message-authentication abstraction over HMAC-SHA256.
 //!
-//! # Authenticity model
-//!
-//! Images are authenticated with HMAC-SHA256 over the image header and payload.
-//! The shared key protects against corrupt or untrusted firmware arriving over
-//! the field bus. It is not meant to defend against an attacker who can
-//! physically extract a device.
+//! Images are authenticated with HMAC-SHA256 under a shared key. This
+//! protects against corrupt or untrusted firmware arriving over the field
+//! bus, not against an attacker who can physically extract a device.
 
 pub mod command;
 pub mod dispatch;

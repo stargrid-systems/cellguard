@@ -1,13 +1,10 @@
 //! Streaming image verification, plus host-side signing behind the `sign`
 //! feature.
 //!
-//! [`Verifier`] streams the header and payload through a [`Mac`] and a
-//! [`Crc32`], so an image staged in external storage can be checked in chunks
-//! without ever holding it whole in RAM. The host-side counterpart (`sign`,
-//! behind the `sign` feature) produces a signed header. A device never signs,
-//! so firmware links none of it.
-//!
-//! Both work on the [`ImageHeader`] format defined in `cellboot`.
+//! [`Verifier`] checks an image in chunks, without ever holding it whole in
+//! RAM. `sign` is the host-side counterpart: the CRC lives inside the signed
+//! prefix, so signing needs the whole payload at once and a device never
+//! signs.
 
 use core::fmt;
 
@@ -18,18 +15,12 @@ use crate::update::mac::{Mac, ct_eq};
 
 /// Signs `payload` and returns the complete header bytes.
 ///
-/// The payload length and CRC-32 are derived from `payload`, then the tag is
-/// computed over the header prefix followed by the payload using the keyed
-/// `mac`. The `payload_len`, `payload_crc32`, and `hmac` fields of `header` are
-/// ignored on input and filled in the result.
-///
-/// This is the host-side counterpart to [`Verifier`]. It needs the whole
-/// payload at once because the CRC lives inside the signed prefix, so a device
-/// never signs, it only verifies.
+/// `payload_len`, `payload_crc32`, and `hmac` are ignored on input and
+/// filled in the result.
 ///
 /// # Errors
 ///
-/// Returns [`SignError::PayloadTooLarge`] if the payload does not fit in a
+/// Returns [`SignError::PayloadTooLarge`] if the payload does not fit a
 /// `u32` length field.
 #[cfg(any(test, feature = "sign"))]
 pub fn sign<M: Mac>(
@@ -92,10 +83,6 @@ impl fmt::Display for VerifyError {
 impl core::error::Error for VerifyError {}
 
 /// Streams an image through a [`Mac`] and a [`Crc32`] to check it.
-///
-/// Construct it from the raw header bytes and a freshly keyed MAC, feed the
-/// payload with [`Verifier::feed`], then call [`Verifier::finish`]. The payload
-/// may be fed in any number of chunks.
 pub struct Verifier<M: Mac> {
     mac: M,
     crc: Crc32,
@@ -108,8 +95,8 @@ pub struct Verifier<M: Mac> {
 impl<M: Mac> Verifier<M> {
     /// Starts verifying an image.
     ///
-    /// Parses `header_bytes`, primes `mac` with the header prefix, and returns
-    /// the parsed header alongside the verifier.
+    /// Primes `mac` with the header prefix and returns the parsed header
+    /// alongside the verifier.
     ///
     /// # Errors
     ///
@@ -150,8 +137,8 @@ impl<M: Mac> Verifier<M> {
         if self.fed != self.payload_len {
             return Err(VerifyError::WrongLength);
         }
-        // The tag is authoritative, but the CRC gives a cheaper corruption
-        // signal and is checked first.
+        // The CRC gives a cheaper corruption signal than the tag, so it is
+        // checked first.
         if self.crc.finalize() != self.expected_crc {
             return Err(VerifyError::CorruptPayload);
         }
@@ -215,7 +202,6 @@ mod tests {
             *first ^= 0x01;
         }
         verifier.feed(&tampered);
-        // CRC catches the flip before the tag does.
         assert_eq!(verifier.finish(), Err(VerifyError::CorruptPayload));
     }
 

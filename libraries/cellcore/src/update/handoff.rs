@@ -1,16 +1,10 @@
 //! Handing a staged image off to the `cellprog` programmer.
 //!
-//! After the agent commits an image
-//! ([`session::UpdateAgent::pending_program`]), the core MCU tells the
-//! programmer to flash it over the local `UART_PROG` link. The programmer reads
-//! the image straight from the shared EEPROM, so only a one-byte [`ProgSource`]
-//! selector crosses the link, never the image bytes.
-//!
-//! [`program_frame`] builds the outbound request. [`parse_result`] reads the
-//! programmer's reply. The transport (COBS decode, `Packet::parse`) is the
-//! caller's, reusing [`cellguard_protocol`] exactly as the field bus does.
-//!
-//! [`session::UpdateAgent::pending_program`]: crate::update::session::UpdateAgent::pending_program
+//! The programmer reads the image straight from the shared EEPROM, so only a
+//! one-byte [`ProgSource`] selector crosses the local `UART_PROG` link, never
+//! the image bytes. Build the request with [`program_frame`] and read the
+//! reply with [`parse_result`]. The transport (COBS decode, `Packet::parse`)
+//! is the caller's.
 
 use cellboot::image::Region;
 use cellguard_protocol::{

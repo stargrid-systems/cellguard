@@ -1,22 +1,13 @@
 //! An [`NvmWriter`] backed by the `updi` programmer.
 //!
-//! [`UpdiNvmWriter`] adapts any [`FlashProg`] programmer (AVR Dx or tinyAVR)
-//! to the [`cellboot::io::NvmWriter`] trait, so
-//! [`program`](cellboot::programmer::program) drives either target with no
-//! change. It
-//! erases each flash page the first time a write touches it, then streams
-//! bytes straight to flash, so a sub-page or page-straddling chunk is handled
-//! without buffering a whole page. The shared erase-and-split loop lives in
-//! [`cellboot::io::write_with_page_erase`].
+//! [`UpdiNvmWriter`] adapts any [`FlashProg`] programmer to the shared
+//! [`write_with_page_erase`] loop, so sub-page and page-straddling chunks
+//! are written without buffering a whole page.
 
 use cellboot::io::{NvmWriter, PagedFlash, write_with_page_erase};
 use updi::FlashProg;
 
 /// An [`NvmWriter`] that programs any UPDI flash target (AVR Dx or tinyAVR).
-///
-/// Generic over a [`FlashProg`] programmer, so the same writer drives both
-/// target families. The page mechanics live in the programmer and the shared
-/// `write_with_page_erase` helper.
 pub struct UpdiNvmWriter<P> {
     prog: P,
     erased_page: Option<u32>,
@@ -37,9 +28,8 @@ impl<P: FlashProg> UpdiNvmWriter<P> {
     }
 }
 
-/// Local adapter so the shared `write_with_page_erase` helper can drive a
-/// `FlashProg` programmer through the cellboot `PagedFlash` seam without
-/// cellboot depending on `updi`.
+/// Adapts a `FlashProg` programmer to the cellboot `PagedFlash` seam
+/// without cellboot depending on `updi`.
 struct FlashProgAdapter<'a, P: FlashProg>(&'a mut P);
 
 impl<P: FlashProg> PagedFlash for FlashProgAdapter<'_, P> {
@@ -105,8 +95,7 @@ mod tests {
         let mut w = make();
         let data = ramp();
         w.begin().unwrap();
-        // 600 bytes in one call cross the 512-byte page boundary: the adapter
-        // must erase page 0 and page 1 and split the write.
+        // 600 bytes in one call cross the 512-byte page boundary.
         w.write(0, &data).unwrap();
         let mut back = [0u8; 600];
         w.read(0, &mut back).unwrap();
@@ -131,8 +120,6 @@ mod tests {
 
     #[test]
     fn each_page_is_erased_once() {
-        // Write page 0 in two chunks. The page must be erased on the first
-        // chunk only, or the second chunk's data would be wiped.
         let mut w = make();
         w.begin().unwrap();
         w.write(0, &[0x11; 8]).unwrap();

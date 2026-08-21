@@ -3,23 +3,15 @@
 #![feature(abi_avr_interrupt)]
 
 //! Cellagent firmware for the production CellGuard board (ATtiny406, U403).
+//! Balancer and safety co-processor. Protocol logic lives in the `cellagent`
+//! library.
 //!
-//! The cellagent is the balancer and safety co-processor. It drives the active
-//! balancer gates (GATE_A, GATE_B) and the emergency gate-off
-//! (OUT_TINY_ALL_OFF), reads the LM61 temperature sensor, and toggles an ALIVE
-//! heartbeat pin. It talks to the cellcore over USART0 using the
-//! `cellguard-protocol`. All protocol logic lives in the `cellagent` library.
-//! This crate only maps it onto the chip.
+//! Fits the 4 KB flash without panic diagnostics: panics abort in place, the
+//! watchdog turns a hang into a reset, and no panic records are written.
 //!
-//! The firmware is built to fit the 4 KB flash without panic diagnostics:
-//! panics abort in place and the watchdog turns a hang back into a reset. No
-//! panic records are written, so `PanicProbe` answers empty.
-//!
-//! Pin map (see `scratch/hardware/cellagent-mcu.md`):
-//! - PA3 = GATE_B, PA4 = GATE_A, PA5 = ALIVE.
-//! - PA7 = TEMP (LM61, ADC AIN7).
-//! - PB2 = USART0 TxD, PB3 = USART0 RxD.
-//! - PC1 = OUT_TINY_ALL_OFF.
+//! Pin map (`scratch/hardware/cellagent-mcu.md`): PA3 = GATE_B, PA4 = GATE_A,
+//! PA5 = ALIVE, PA7 = TEMP (LM61, ADC AIN7), PB2/PB3 = USART0 TxD/RxD,
+//! PC1 = OUT_TINY_ALL_OFF.
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
@@ -31,21 +23,16 @@ use avrxt_hal::wdt::{Period, Watchdog};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 
-/// Main clock: 20 MHz internal, prescaler off.
 const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
 const PRESCALER: Option<ClkPrescaler> = None;
 
-/// Baud on the cellcore UART link.
 const BAUD: u32 = 115_200;
 
-/// This node's address on the cellcore link. Placeholder until provisioned.
+/// Placeholder until provisioned.
 const NODE_ID: u8 = 3;
 
-/// USART receive timeout in ms. Short enough that the heartbeat is serviced
-/// even when the link is idle.
 const RX_TIMEOUT_MS: u32 = 50;
 
-/// Heartbeat toggle interval in RTC ticks (~1.024 kHz). 256 ticks ~= 250 ms.
 const HEARTBEAT_TICKS: u16 = 256;
 
 /// LM61 temperature input on PA7 (ADC AIN7).
@@ -55,7 +42,7 @@ const TEMP_ADC_CHANNEL: u8 = 7;
 const LM61_BIAS_MV: u32 = 300;
 const LM61_CENTI_PER_MV: u32 = 10;
 
-/// ADC reference: VDD ~= 3.3 V, 10-bit resolution.
+/// ADC reference: VDD ~= 3.3 V.
 const VDD_MV: u32 = 3300;
 const ADC_FULLSCALE: u32 = 1024;
 
@@ -73,37 +60,30 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // Run the main clock at full speed (20 MHz).
     clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
     let f_cpu = BASE_FREQ.clk_per_hz(PRESCALER);
 
-    // Bounds hangs: panics abort in place (no handler runs), so the watchdog
-    // is what restores service after a fault.
     let mut wdt = Watchdog::start(&cpu, dp.WDT, WDT_PERIOD);
 
     let porta = Port::new(dp.PORTA).split();
     let portb = Port::new(dp.PORTB).split();
     let portc = Port::new(dp.PORTC).split();
 
-    // Balancer gates and the emergency gate-off. All idle low: gates off and
-    // all-off inactive.
+    // All three outputs idle low: gates off, all-off inactive.
     let mut gates = BalancerGates {
         gate_a: porta.p4.into_output(),
         gate_b: porta.p3.into_output(),
         all_off: portc.p1.into_output(),
     };
 
-    // ALIVE heartbeat (PA5). Starts high.
     let mut alive = porta.p5.into_output_high();
 
-    // ADC0 for the LM61 on PA7 (AIN7). VDD reference, 10-bit. The HAL ADC
-    // driver keeps the reset-default reference (INTREF), so select VDD first.
+    // The HAL ADC driver defaults to INTREF, so select VDD here.
     dp.ADC0.ctrlc().modify(|_, w| w.refsel().vddref());
     let mut temp = Lm61Temp {
         adc: Adc::new(dp.ADC0, AdcPrescaler::Div64, TinyResolution::Bits10),
     };
 
-    // USART0 on PB2 (TxD) / PB3 (RxD), 8N1.
     let _tx = portb.p2.into_output_high();
     let _rx = portb.p3.into_input();
     let mut usart = Usart::builder(dp.USART0, f_cpu)
@@ -113,7 +93,6 @@ fn main() -> ! {
         .build()
         .unwrap_or_else(|_| halt());
 
-    // RTC as a free-running time base (~1.024 kHz).
     let rtc = Rtc::new(
         dp.RTC,
         ClockSource::Internal1k,
@@ -123,8 +102,6 @@ fn main() -> ! {
 
     let mut runtime = CellagentRuntime::new(NODE_ID);
 
-    // Gates start in the safe state. A link that never commands anything
-    // must never leave them in an unknown hardware default.
     gates.set_gates(cellagent::SAFE_GATE_MASK);
 
     let mut last_toggle = rtc.count();
@@ -136,8 +113,6 @@ fn main() -> ! {
             runtime.service(byte, now, &mut gates, &mut temp, &mut usart);
         }
 
-        // Gate refresh timeout: drives the gates safe when the host stops
-        // refreshing SetBalancer. See the runtime docs.
         runtime.check_timeout(now, &mut gates);
 
         if now.wrapping_sub(last_toggle) >= HEARTBEAT_TICKS {
@@ -147,7 +122,6 @@ fn main() -> ! {
     }
 }
 
-/// Active balancer gate outputs.
 struct BalancerGates {
     gate_a: Output,
     gate_b: Output,
@@ -174,7 +148,6 @@ impl GateControl for BalancerGates {
     }
 }
 
-/// LM61 temperature sensor on ADC0.
 struct Lm61Temp {
     adc: Adc<pac::ADC0>,
 }
@@ -187,7 +160,6 @@ impl TempSensor for Lm61Temp {
     }
 }
 
-/// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
     #[expect(

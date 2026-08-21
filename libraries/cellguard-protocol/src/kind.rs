@@ -83,8 +83,7 @@ pub enum Kind {
     /// payload means no panic is recorded for this session.
     PanicStatus = 22,
     /// Programmer session request (main MCU to `cellprog`): chip-erase the
-    /// target and enter programming mode. Payload: 1 target byte. See the
-    /// `session` module.
+    /// target and enter programming mode. Payload: 1 target byte.
     #[cfg(feature = "bootloader")]
     ProgSessionBegin = 23,
     /// Programmer session request: program up to `PAGE_MAX` bytes at a flash
@@ -109,8 +108,7 @@ pub enum Kind {
     #[cfg(feature = "bootloader")]
     ProgPageData = 28,
     /// Balancing-test request: read the latest cell-voltage snapshot.
-    /// Response is [`Kind::CellVoltages`]. Payload: none. The response is
-    /// raw 24-bit ADC codes; see the telemetry module for conversion.
+    /// Response is [`Kind::CellVoltages`], raw 24-bit ADC codes.
     ReadCellVoltages = 29,
     /// Response: `seq` byte, then 4 little-endian `i32` raw ADC codes
     /// (cells 1-4, ADC A ch0-3). `seq` increments per snapshot.
@@ -139,8 +137,7 @@ pub enum Kind {
     /// Balancing-test request: read the full balancing status. Response is
     /// [`Kind::BalancerStatus`].
     ReadBalancerStatus = 37,
-    /// Response: the balancing status frame. See the telemetry module for
-    /// the payload layout.
+    /// Response: the balancing status frame.
     BalancerStatus = 38,
     /// Balancing-test request: set the bleed-leg enable masks on the PWM
     /// expander. Payload: 2 bytes, `en_3r6` then `en_36r5`, bit x = cell

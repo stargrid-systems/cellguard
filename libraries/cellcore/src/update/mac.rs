@@ -1,17 +1,14 @@
 //! Message authentication abstraction over HMAC-SHA256.
 //!
-//! The concrete hash and HMAC come from the [`hmac-sha256`] crate. This module
-//! adds the [`Mac`] trait, so image verification is generic and testable, a
-//! constant-time [`ct_eq`], and the known-answer tests.
+//! The [`Mac`] trait makes image verification generic over the MAC, and
+//! [`ct_eq`] compares tags in constant time. The concrete primitives come
+//! from the [`hmac-sha256`] crate.
 //!
 //! [`hmac-sha256`]: https://crates.io/crates/hmac-sha256
 
 use hmac_sha256::HMAC;
 
 /// A streaming message authentication code.
-///
-/// Implementors accumulate data with [`Mac::update`] and produce a fixed-length
-/// tag with [`Mac::finalize`].
 pub trait Mac {
     /// Feeds `data` into the running computation.
     fn update(&mut self, data: &[u8]);
@@ -32,16 +29,14 @@ impl Mac for HMAC {
 
 /// Domain-separation prefix for the key-replacement authentication tag.
 ///
-/// Mixing this into the tag keeps a captured firmware-image HMAC from being
-/// replayed as a key-replacement request.
+/// Keeps a captured firmware-image HMAC from being replayed as a
+/// key-replacement request.
 pub const KEY_REPLACE_DOMAIN: &[u8] = b"CGKEYROT1";
 
 /// Authenticates a key-replacement request in constant time.
 ///
 /// Returns `true` when `tag` equals
-/// `HMAC(current_key, KEY_REPLACE_DOMAIN || new_key)`. Only a holder of the
-/// current key can produce a valid tag, so an unauthorized peer cannot rotate
-/// the key.
+/// `HMAC(current_key, KEY_REPLACE_DOMAIN || new_key)`.
 #[must_use]
 pub fn authenticate_key_replace(current_key: &[u8], new_key: &[u8], tag: &[u8; 32]) -> bool {
     let mut mac = HMAC::new(current_key);
@@ -52,8 +47,8 @@ pub fn authenticate_key_replace(current_key: &[u8], new_key: &[u8], tag: &[u8; 3
 
 /// Compares two byte slices in constant time.
 ///
-/// The running time depends only on the length of the inputs, not their
-/// contents. Returns `false` immediately when the lengths differ.
+/// Running time depends only on the input length. A length mismatch
+/// returns early.
 #[must_use]
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

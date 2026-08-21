@@ -4,24 +4,14 @@
 
 //! Bootloader firmware for the CellGuard cellcore (AVR128DA64).
 //!
-//! On every reset the bootloader checks whether a new application image is
-//! staged in EEPROM. If so, it self-programs the application flash section and
-//! reboots. Otherwise it jumps straight to the installed application.
+//! On every reset it checks for a staged application image in EEPROM,
+//! self-programs it into flash, then jumps to the installed application.
 //!
 //! The boot section is 8 KB (FUSE.BOOTSIZE = 16, flash 0x0000-0x1FFF). The
-//! application occupies the remaining 120 KB (flash 0x2000-0x1FFFF). The link
-//! enforces the bound (`__TEXT_REGION_LENGTH__` defsym in
-//! `.cargo/config.toml`), so an image that outgrows the section fails to build
-//! instead of silently overlapping the app.
-//!
-//! Panic handling is `immediate-abort` (see the release profile) to keep the
-//! `core::fmt` machinery out of the 8 KB section. The bootloader therefore
-//! writes no panic records; a panic or hang is bounded by the watchdog instead.
-//! The application keeps full panic recording.
-//!
-//! Pin map is from the board schematic (`hardware/boards/cellguard-eval`):
-//! - SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) is the EEPROM bus. App U104 chip-select
-//!   is `PG6`, Boot U105 chip-select is `PA7` (both active-low).
+//! link enforces the bound through the `__TEXT_REGION_LENGTH__` defsym in
+//! `.cargo/config.toml`. Panics abort immediately to keep `core::fmt` out of
+//! the section, so a hang is bounded by the watchdog instead. Pin map is
+//! from the board schematic (`hardware/boards/cellguard-eval`).
 
 use core::cell::RefCell;
 
@@ -43,21 +33,20 @@ use cellguard_panic::clear;
 use embedded_hal::spi::MODE_0;
 use embedded_hal_bus::spi::RefCellDevice;
 
-/// BRING-UP: internal RC at 4 MHz (Y100 not verified). The app re-configures
-/// its own clock at boot, so the handoff is safe regardless of what this
-/// bootloader picks.
+/// BRING-UP: internal RC at 4 MHz (Y100 unverified). The app sets its own
+/// clock, so the handoff is safe whatever this bootloader picks.
 const F_CPU: HfFreq = HfFreq::Mhz4;
 
-/// Watchdog period for the boot path. Long enough to cover self-programming a
-/// full 120 KB image from the staging EEPROM (roughly 6 s at 250 kbit/s SPI
-/// plus flash row writes) with margin, short enough to bound a hung boot.
+/// Watchdog period for the boot path. Long enough to self-program a full
+/// 120 KB image from the staging EEPROM (roughly 6 s at 250 kbit/s SPI plus
+/// flash row writes), short enough to bound a hung boot.
 const WDT_PERIOD: Period = Period::Clk8k;
 
 /// Flash address where the application begins (right after the boot section).
 const APP_TARGET_BASE: u32 = layout::BOOT_SECTION_SIZE;
 
-/// Maximum self-program attempts before the bootloader gives up, clears the
-/// staged image, and falls through to the installed app.
+/// Maximum self-program attempts before giving up, clearing the staged
+/// image, and falling through to the installed app.
 const MAX_PROGRAM_ATTEMPTS: u8 = 3;
 
 /// This firmware's agent version, reported in the probe status.
@@ -68,17 +57,16 @@ fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
     let cpu = dp.CPU;
 
-    // BRING-UP: internal RC until Y100 is verified. Explicit so the clock
-    // state does not depend on the reset path that led here.
+    // BRING-UP: internal RC until Y100 is verified, set explicitly whatever
+    // the reset path.
     clock::set_oschf(&cpu, &dp.CLKCTRL, F_CPU);
 
-    // Bounds the whole boot path. Panics abort immediately (no panic records,
-    // see the profile), so the watchdog is what turns a hung boot back into a
-    // reset instead of a silent halt.
+    // Bounds the whole boot path. Panics abort immediately, so the watchdog
+    // turns a hung boot back into a reset.
     let mut wdt = Watchdog::start(&cpu, dp.WDT, WDT_PERIOD);
 
-    // On-chip NVM: back the agent state with an EEPROM slot, and later use the
-    // same NVMCTRL for flash self-programming.
+    // On-chip NVM: agent state in an EEPROM slot, flash writes through the
+    // same NVMCTRL.
     let nvm = Nvm::new(dp.NVMCTRL);
     let mut state_store = EepromState::new(&nvm, &cpu, layout::STATE_OFFSET, layout::STATE_LEN);
     let mut state = state::load(&mut state_store, AGENT_VERSION);
@@ -101,7 +89,6 @@ fn main() -> ! {
     let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(F_CPU.hz())));
     let mut store = BandedStore::new(app, boot);
 
-    // If a verified application image is staged, self-program it into flash.
     if state.staged == StagedState::Ready && state.staged_region == Some(Region::ApplicationCode) {
         let give_up = if state.program_attempts < MAX_PROGRAM_ATTEMPTS {
             wdt.feed();
@@ -125,23 +112,19 @@ fn main() -> ! {
         } else {
             true
         };
-        // Give up: clear staged so the device does not loop, and fall through
-        // to the installed app. If the error was non-destructive (corrupt
-        // source, bad header) the installed app is intact and runs normally.
-        // If it was destructive, the cellprog watchdog detects heartbeat loss
-        // and attempts recovery.
+        // Give up: clear staged so the device does not loop, and fall
+        // through to the installed app. A destructive failure is caught by
+        // the cellprog watchdog.
         if give_up {
             state.mark_program_failed();
             let _ = state_store.store(&state.serialize());
         }
     }
 
-    // Every boot that hands control to the app counts toward the health
-    // check. The bootloader bumps boot_count on each such boot, and flips
-    // app_health to Bad once it reaches BOOT_HEALTH_THRESHOLD without the app
-    // having confirmed itself. The app clears the counter via the runtime's
-    // first successful field-bus exchange, so a normally-running device stays
-    // at boot_count == 0.
+    // Each handoff increments boot_count. Once it reaches
+    // BOOT_HEALTH_THRESHOLD without the app confirming itself, app_health
+    // flips to Bad. The app clears the counter on its first successful
+    // field-bus exchange.
     state.boot_count = state.boot_count.saturating_add(1);
     if state.boot_count >= u16::from(BOOT_HEALTH_THRESHOLD) && state.app_health != AppHealth::Bad {
         state.app_health = AppHealth::Bad;
@@ -151,31 +134,22 @@ fn main() -> ! {
     // The app does not expect an armed watchdog, so hand over with it stopped.
     wdt.stop(&cpu);
 
-    // No pending update: jump to the installed application.
     unsafe { jump_to_app() }
 }
 
-/// Jumps to the application at [`APP_TARGET_BASE`].
+/// Jumps to the application at [`APP_TARGET_BASE`], its reset vector. The
+/// CRT there re-initializes the stack pointer, clears `.bss`, copies
+/// `.data`, and calls `main`, so the jump is a warm reset into the app.
 ///
-/// `APP_TARGET_BASE` is the app's reset vector: the CRT linked at the start of
-/// the app's FLASH region (0x2000), which re-initializes the stack pointer,
-/// clears `.bss`, copies `.data`, and then calls `main`. So a jump here is
-/// functionally a warm reset into the app, and the bootloader's stack and
-/// state do not leak.
-///
-/// Interrupts are disabled first as defense-in-depth, even though the
-/// bootloader never enables them.
-///
-/// Note: on AVR Dx the hardware interrupt-vector table lives at 0x0000, inside
-/// this boot section. The app therefore cannot register its own ISRs while the
-/// bootloader owns the boot section, and the current app is polling-only by
-/// design. If ISRs are ever added to the app, the bootloader must forward the
-/// vectors.
+/// On AVR Dx the interrupt-vector table lives at 0x0000, inside the boot
+/// section. The app is polling-only and cannot register ISRs. If the app
+/// ever adds ISRs, the bootloader must forward the vectors.
 ///
 /// # Safety
 ///
-/// Transmutes a flash address to a function pointer. The caller must guarantee
-/// that valid application code with a reset vector is present at that address.
+/// Transmutes a flash address to a function pointer. The caller must
+/// guarantee that valid application code with a reset vector is present at
+/// that address.
 unsafe fn jump_to_app() -> ! {
     avr_device::interrupt::disable();
     type Entry = fn() -> !;

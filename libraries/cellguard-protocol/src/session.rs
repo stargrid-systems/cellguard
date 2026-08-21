@@ -1,44 +1,20 @@
 //! The transactional programming session over the local `UART_PROG` link.
 //!
-//! The `cellprog` MCU has one USART reached through an analog mux: channel 0
-//! is the UART to the cellcore, the other channels are UPDI lines. While the
-//! programmer talks UPDI its UART path to the cellcore is physically
-//! disconnected, so a transparent byte pipe is impossible. Instead the
-//! programmer services one command per transaction: receive a complete
-//! command on channel 0, switch the mux to the target, run one UPDI
-//! operation, switch back, reply.
+//! The `cellprog` MCU reaches both its cellcore UART and the UPDI targets
+//! through one analog mux (channel 0 is the UART, the rest are UPDI lines),
+//! so a transparent byte pipe is impossible. The programmer services one
+//! command per transaction: receive it, switch the mux, run one UPDI
+//! operation, switch back, reply. Exactly one command may be in flight.
+//! Commands sent while the mux is on a UPDI channel are electrically lost.
 //!
-//! A session is:
+//! A session is [`SessionCmd::Begin`] (chip-erase and enter programming
+//! mode), any number of [`SessionCmd::PageWrite`], optional read-back via
+//! [`SessionCmd::PageRead`], then [`SessionCmd::End`]. Page commands before a
+//! successful `Begin` are rejected with [`SessionStatus::BadState`]: writing
+//! un-erased flash corrupts it.
 //!
-//! 1. [`SessionCmd::Begin`]: the programmer chip-erases the target and resets
-//!    it into programming mode. Erase first means every page write lands on
-//!    blank flash. A retry of `Begin` simply restarts the session from a blank
-//!    chip.
-//! 2. [`SessionCmd::PageWrite`] x N: the master streams the image, at most
-//!    [`PAGE_MAX`] data bytes per command. Addresses are byte offsets into the
-//!    target's flash (0-based, the programmer maps them into the target's data
-//!    space). Writes are idempotent: a re-sent identical command programs the
-//!    same bytes.
-//! 3. [`SessionCmd::PageRead`] x N: the master reads flash back to verify
-//!    against its own copy of the image.
-//! 4. [`SessionCmd::End`]: the programmer resets the target out of programming
-//!    mode.
-//!
-//! Page commands before a successful `Begin` are rejected with
-//! [`SessionStatus::BadState`]: writing un-erased flash corrupts it.
-//!
-//! Exactly one command may be in flight. Commands sent while the mux is on a
-//! UPDI channel are electrically lost, never buffered.
-//!
-//! # Framing
-//!
-//! The link is point-to-point (two endpoints, one wire), so a session frame
-//! is lean: `[cmd][body][crc16]`, COBS-encoded on the wire like every other
-//! frame. There is no node address to route, no central [`Kind`](crate::Kind)
-//! registry to consult, and a single CRC-16 over the whole frame. The
-//! field-bus [`Packet`](crate::Packet) exists for cut-through routing on the
-//! multi-drop bus, where its separate header CRC pays for itself. Carrying
-//! that machinery over this link costs servant flash for no function.
+//! Frames are lean because the link is point-to-point: `[cmd][body][crc16]`,
+//! COBS-encoded, with no address or kind byte.
 
 /// Maximum data bytes carried by one page command or reply.
 pub const PAGE_MAX: usize = 64;
@@ -57,8 +33,7 @@ const CRC_LEN: usize = 2;
 pub enum SessionTarget {
     /// The `cellagent` balancer MCU, reached over UPDI mux channel 3.
     Cellagent,
-    /// The `cellcore` MCU over mux channel 1. Reserved for a future
-    /// programmer build. The current servant firmware does not support it and
+    /// The `cellcore` MCU over mux channel 1. Reserved: this programmer
     /// answers [`SessionStatus::NotSupported`].
     Cellcore,
 }
@@ -146,7 +121,7 @@ impl SessionStatus {
     }
 }
 
-/// The lean frame type on the session link: one byte, one meaning.
+/// Frame type byte of the session link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionCmd {
     /// Chip-erase the target and enter programming mode.
@@ -219,8 +194,8 @@ pub enum Command<'a> {
 /// A session reply, borrowing read-back data from the caller's buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reply<'a> {
-    /// The outcome of a command. `addr` extends the reply for page commands,
-    /// so the master can match it to its request.
+    /// The outcome of a command. `addr` is set for page commands so the
+    /// master can match the reply to its request.
     Status {
         /// Outcome code.
         status: SessionStatus,
@@ -245,13 +220,10 @@ pub enum Reply<'a> {
 }
 
 /// Encodes a session command into `out` as a complete frame (command byte,
-/// body, CRC-16), returning its length.
+/// body, CRC-16), returning its length. The result is pre-COBS.
 ///
-/// This is the master-side encoder. The result is the pre-COBS frame and the
-/// caller COBS-encodes it onto the wire.
-///
-/// Returns `None` if `out` is too small or the command is malformed (empty or
-/// oversized page data).
+/// Returns `None` if `out` is too small or the page data is empty or
+/// oversized.
 #[must_use]
 pub fn encode_command(cmd: Command<'_>, out: &mut [u8]) -> Option<usize> {
     let body_len = match cmd {
@@ -284,9 +256,7 @@ pub fn encode_command(cmd: Command<'_>, out: &mut [u8]) -> Option<usize> {
     finish_frame(out, body_len + 1)
 }
 
-/// Decodes a complete session command frame, checking its CRC.
-///
-/// This is the servant-side decoder. `frame` is the COBS-decoded frame.
+/// Decodes a complete, COBS-decoded session command frame, checking its CRC.
 ///
 /// Returns `None` if the CRC does not match, the command byte is unknown, or
 /// the body is malformed.
@@ -311,7 +281,7 @@ pub fn decode_command(frame: &[u8]) -> Option<Command<'_>> {
 }
 
 /// Encodes a session reply into `out` as a complete frame, returning its
-/// length. The servant-side encoder and the caller COBS-encodes the result.
+/// length. The result is pre-COBS.
 ///
 /// Returns `None` if `out` is too small or the reply carries oversized data.
 #[must_use]
@@ -341,8 +311,7 @@ pub fn encode_reply(reply: Reply<'_>, out: &mut [u8]) -> Option<usize> {
     finish_frame(out, body_len + 1)
 }
 
-/// Decodes a complete session reply frame, checking its CRC. The master-side
-/// decoder.
+/// Decodes a complete, COBS-decoded session reply frame, checking its CRC.
 ///
 /// Returns `None` if the CRC does not match, the command byte is unknown, or
 /// the body is malformed.
@@ -371,7 +340,6 @@ pub fn decode_reply(frame: &[u8]) -> Option<Reply<'_>> {
     }
 }
 
-/// Splits a frame into its CRC-covered body, validating the trailing CRC-16.
 fn split_frame(frame: &[u8]) -> Option<&[u8]> {
     let split = frame.len().checked_sub(CRC_LEN)?;
     let (body, crc_bytes) = frame.split_at(split);
@@ -382,7 +350,6 @@ fn split_frame(frame: &[u8]) -> Option<&[u8]> {
     Some(body)
 }
 
-/// Appends the frame CRC after `len` covered bytes.
 fn finish_frame(out: &mut [u8], len: usize) -> Option<usize> {
     let covered = out.get(..len)?;
     let crc = crc::checksum16(covered);
@@ -391,18 +358,16 @@ fn finish_frame(out: &mut [u8], len: usize) -> Option<usize> {
     Some(len + CRC_LEN)
 }
 
-/// Copies `bytes` to `out[at..]`, whole, or not at all.
 fn write_at(out: &mut [u8], at: usize, bytes: &[u8]) -> Option<()> {
     let slot = out.get_mut(at..at + bytes.len())?;
-    // Byte loop, not `copy_from_slice`: the variable length would link the
-    // generic `memcpy` helper on small targets.
+    // A byte loop instead of `copy_from_slice`: the variable-length copy
+    // would link the generic `memcpy`, which costs more flash.
     for (dst, src) in slot.iter_mut().zip(bytes) {
         *dst = *src;
     }
     Some(())
 }
 
-/// Writes the `PageWrite` body (`addr` then data) after the command byte.
 fn write_addr_body(out: &mut [u8], addr: u16, data: &[u8]) -> Option<()> {
     let head = out.get_mut(1..3)?;
     head.copy_from_slice(&addr.to_le_bytes());
@@ -421,8 +386,8 @@ pub fn decode_begin(payload: &[u8]) -> Option<SessionTarget> {
     SessionTarget::from_code(*payload.first()?)
 }
 
-/// Encodes the payload of a `ProgPageWrite` command into `out`, returning the
-/// encoded slice. `data` must not be empty nor longer than [`PAGE_MAX`].
+/// Encodes a `ProgPageWrite` payload. `data` must not be empty nor longer
+/// than [`PAGE_MAX`].
 #[must_use]
 pub fn encode_write<'a>(addr: u16, data: &[u8], out: &'a mut [u8]) -> Option<&'a [u8]> {
     let len = 2 + data.len();
@@ -431,16 +396,15 @@ pub fn encode_write<'a>(addr: u16, data: &[u8], out: &'a mut [u8]) -> Option<&'a
     }
     let (head, rest) = out.split_at_mut(2);
     head.copy_from_slice(&addr.to_le_bytes());
-    // Byte loop, not `copy_from_slice`: the variable length would link the
-    // generic `memcpy` helper on small targets.
+    // A byte loop instead of `copy_from_slice`: the variable-length copy
+    // would link the generic `memcpy`, which costs more flash.
     for (dst, src) in rest.iter_mut().zip(data) {
         *dst = *src;
     }
     out.get(..len)
 }
 
-/// Decodes the payload of a `ProgPageWrite` command into the address and the
-/// data slice, which borrows from `payload`.
+/// Decodes a `ProgPageWrite` payload. The data slice borrows from `payload`.
 #[must_use]
 pub fn decode_write(payload: &[u8]) -> Option<(u16, &[u8])> {
     let (addr_bytes, data) = payload.split_first_chunk::<2>()?;
@@ -468,16 +432,15 @@ pub fn decode_read(payload: &[u8]) -> Option<(u16, u8)> {
     Some((u16::from_le_bytes(*addr_bytes), *rest.first()?))
 }
 
-/// Encodes the payload of a `ProgSessionStatus` reply to a page command: the
-/// status plus the address it refers to, so the master can match the reply to
-/// its command.
+/// Encodes a `ProgSessionStatus` reply payload: status byte, then the 2
+/// address bytes it refers to.
 #[must_use]
 pub const fn encode_page_status(status: SessionStatus, addr: u16) -> [u8; 3] {
     let [a0, a1] = addr.to_le_bytes();
     [status.to_code(), a0, a1]
 }
 
-/// Decodes the payload of a `ProgSessionStatus` reply to a page command.
+/// Decodes a `ProgSessionStatus` reply payload.
 #[must_use]
 pub fn decode_page_status(payload: &[u8]) -> Option<(SessionStatus, u16)> {
     let (status, rest) = payload.split_first_chunk::<1>()?;
@@ -490,9 +453,9 @@ pub fn decode_page_status(payload: &[u8]) -> Option<(SessionStatus, u16)> {
 
 /// Encodes the payload of a `ProgPageData` reply into `out`.
 ///
-/// On success `data` holds the read-back bytes. An error reply carries no
-/// data, which [`decode_page_data`] reports as an empty slice. Returns `None`
-/// if `data` is longer than [`PAGE_MAX`] or `out` is too small.
+/// An error reply carries no data, which [`decode_page_data`] reports as an
+/// empty slice. Returns `None` if `data` is longer than [`PAGE_MAX`] or `out`
+/// is too small.
 #[must_use]
 pub fn encode_page_data<'a>(
     status: SessionStatus,
@@ -512,8 +475,8 @@ pub fn encode_page_data<'a>(
     out.get(..len)
 }
 
-/// Decodes the payload of a `ProgPageData` reply into the status, the address
-/// it refers to, and the data slice, which borrows from `payload`.
+/// Decodes the payload of a `ProgPageData` reply. The data slice borrows from
+/// `payload`.
 #[must_use]
 pub fn decode_page_data(payload: &[u8]) -> Option<(SessionStatus, u16, &[u8])> {
     let (status, addr) = decode_page_status(payload)?;

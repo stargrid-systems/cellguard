@@ -9,18 +9,14 @@
 ///
 /// Owning no buffer means a caller can hold a `Decoder` and its output buffer
 /// as separate fields without a self-referential borrow. The state is plain
-/// integers, so a handler that embeds a decoder can stay zero-initialized
-/// (`.bss`) instead of carrying a flash image of its initial state.
+/// integers, so an embedded decoder stays zero-initialized (`.bss`).
 #[derive(Debug, Clone)]
 pub struct Decoder {
-    /// Write position in the output buffer.
     pos: usize,
     /// Data bytes still expected in the current block.
     remaining: u8,
-    /// Whether a block is in progress. `false` between frames.
     active: bool,
-    /// Whether the current block is followed by no implied zero (a `0xFF`
-    /// code byte).
+    /// Whether the current block implies no trailing zero (started by `0xFF`).
     partial: bool,
 }
 
@@ -55,8 +51,7 @@ impl Decoder {
     /// or [`DecodeError::InvalidFrame`] on a malformed frame.
     pub fn feed(&mut self, byte: u8, out: &mut [u8]) -> Result<Option<usize>, DecodeError> {
         if !self.active {
-            // Idling between frames. A zero is an empty frame and anything else
-            // is the code byte of the first block.
+            // A zero is an empty frame, anything else starts the first block.
             if byte == 0x00 {
                 return Ok(Some(0));
             }
@@ -65,7 +60,7 @@ impl Decoder {
             return Ok(None);
         }
         if byte == 0x00 {
-            // Delimiter. The frame ends only if the block was fully consumed.
+            // The frame ends only if the block was fully consumed.
             let complete = self.remaining == 0;
             self.active = false;
             if complete {
@@ -76,7 +71,7 @@ impl Decoder {
         }
         if self.remaining == 0 {
             // Code byte of the next block. The finished block implies a
-            // trailing zero unless it was started by `0xFF`.
+            // trailing zero unless it started with `0xFF`.
             if !self.partial {
                 self.put(out, 0)?;
             }
@@ -88,7 +83,6 @@ impl Decoder {
         Ok(None)
     }
 
-    /// Starts a block from its code byte.
     const fn start_block(&mut self, code: u8) {
         self.active = true;
         if code == 0xFF {

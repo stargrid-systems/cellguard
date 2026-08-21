@@ -1,10 +1,9 @@
 [build]
 target = "avr-none"
-# The avr-none link uses binutils' avrxmega4_flmap.x script. It sizes the text
-# region from the deviceinfo note (full 128K flash), so the 8K boot section
-# must be forced with a defsym. __RODATA_FLASH_START__ must be a 32K multiple;
-# 0 parks .rodata right after the load image of .text/.data inside the boot
-# section instead of the default top-of-flash minus 32K.
+# binutils' avrxmega4_flmap.x sizes the text region for the full 128K flash,
+# so the 8K boot section must be forced with a defsym.
+# __RODATA_FLASH_START__ must be a 32K multiple. 0 parks .rodata after the
+# .text/.data load image instead of the default top-of-flash minus 32K.
 rustflags = [
   "-C", "target-cpu=avr128da64",
   "-C", "link-arg=-mrelax",

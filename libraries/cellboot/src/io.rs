@@ -1,14 +1,12 @@
 //! The I/O traits through which a target performs all input and output.
 //!
-//! The core logic is written against these traits only. Each target provides
-//! concrete implementations: the AVR128 backs [`ImageStore`] with the external
-//! EEPROM driver, the `ATtiny406` programmer backs [`NvmWriter`] with its UPDI
-//! writer, and so on. Nothing here touches a register.
+//! The core logic is written against these traits only. Each target supplies
+//! concrete implementations.
 
 /// Byte-addressable staging storage for a firmware image.
 ///
-/// On `CellGuard` this is the external SPI EEPROM. The AVR128 writes a received
-/// image here and the `ATtiny406` reads it back to program the target.
+/// On `CellGuard` this is the external SPI EEPROM: the AVR128 stages a
+/// received image here and the `ATtiny406` reads it back.
 pub trait ImageStore {
     /// Error type reported by the backing storage.
     type Error;
@@ -35,17 +33,15 @@ pub trait ImageStore {
 
 /// A streaming writer for a target's non-volatile program memory.
 ///
-/// On `CellGuard` this is implemented by the `ATtiny406` programmer over UPDI,
-/// so the AVR128 never programs its own flash. It streams so the 256-byte
-/// programmer can push a 512-byte-page target: [`NvmWriter::write`] is called
-/// with sequential, sub-page chunks and the implementation handles the target's
-/// page mechanics.
+/// Streams so a 256-byte programmer can push a 512-byte-page target: writes
+/// arrive as sequential, sub-page chunks and the implementation handles the
+/// target's page mechanics.
 pub trait NvmWriter {
     /// Error type reported by the writer.
     type Error;
 
-    /// Begins a programming session: enters programming mode (halting the
-    /// target) and erases the program memory to be written.
+    /// Enters programming mode (halting the target) and erases the program
+    /// memory to be written.
     ///
     /// # Errors
     ///
@@ -55,8 +51,7 @@ pub trait NvmWriter {
     /// Writes `data` at `address`, extending the previous write.
     ///
     /// Chunks arrive in ascending, contiguous order starting from a page
-    /// boundary. The implementation buffers into the target's page and commits
-    /// full pages as they fill.
+    /// boundary.
     ///
     /// # Errors
     ///
@@ -65,28 +60,26 @@ pub trait NvmWriter {
 
     /// Reads `buf.len()` bytes back from `address` for verification.
     ///
-    /// Any page still buffered from [`NvmWriter::write`] is committed first, so
-    /// a read always reflects what will be in flash.
+    /// Any page still buffered from [`NvmWriter::write`] is committed first,
+    /// so the read reflects final flash contents.
     ///
     /// # Errors
     ///
     /// Returns an error if the read fails.
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), Self::Error>;
 
-    /// Ends the session: commits any buffered page, leaves programming mode,
-    /// and lets the target run.
+    /// Ends the session: commits any buffered page and lets the target run.
     ///
     /// # Errors
     ///
-    /// Returns an error if the final commit or release fails.
+    /// Returns an error if the final commit fails.
     fn finish(&mut self) -> Result<(), Self::Error>;
 }
 
 /// Persistent storage for the updater's own state.
 ///
-/// This holds the probe-able status: which image is current, whether it is
-/// valid, boot counters, and the last error. It survives a program-memory
-/// rewrite, so on-chip EEPROM is the natural backing.
+/// The state must survive a program-memory rewrite, so on-chip EEPROM is the
+/// natural backing.
 pub trait StateStore {
     /// Error type reported by the store.
     type Error;
@@ -108,9 +101,8 @@ pub trait StateStore {
 
 /// Persistent storage for the shared authentication key.
 ///
-/// The key normally lives in the AVR128 USERROW, provisioned once at the
-/// factory. Only development builds provide a writable implementation. See
-/// [`NoKeyStore`] for the production default.
+/// The key lives in the AVR128 USERROW, provisioned at the factory. Only
+/// development builds provide a writable implementation.
 pub trait KeyStore {
     /// Error type reported by the store.
     type Error;
@@ -125,8 +117,7 @@ pub trait KeyStore {
 
 /// A [`KeyStore`] that rejects every write.
 ///
-/// This is the production default: the key is locked and can never be replaced
-/// over the bus, so a `BootReplaceKey` command is answered with a rejection.
+/// The production default: the key can never be replaced over the bus.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoKeyStore;
 
@@ -152,11 +143,8 @@ impl core::error::Error for KeyLocked {}
 
 /// An [`ImageStore`] that bands two stores into one address space.
 ///
-/// The `CellGuard` board stages each firmware region on its own SPI EEPROM
-/// chip. A banded store maps the low band (offsets below `low`'s capacity) to
-/// `low` and the high band to `high` with a rebased offset. An access that
-/// straddles the boundary is rejected. Both the cellcore and the cellprog
-/// programmer use this to address their App and Boot EEPROMs as one store.
+/// Offsets below `low`'s capacity map to `low`. Higher offsets map to `high`
+/// rebased. An access that straddles the boundary is rejected.
 pub struct BandedStore<A, B> {
     low: A,
     high: B,
@@ -171,7 +159,6 @@ impl<A: ImageStore, B: ImageStore> BandedStore<A, B> {
         Self { low, high, split }
     }
 
-    /// Resolves an access to a band and a rebased offset within it.
     fn locate(&self, offset: u32, len: usize) -> Result<Band, BandedError<A::Error, B::Error>> {
         let len = u32::try_from(len).map_err(|_| BandedError::OutOfBounds)?;
         let end = offset.checked_add(len).ok_or(BandedError::OutOfBounds)?;
@@ -242,9 +229,8 @@ where
 
 /// A paged flash target that supports page-erase and chunk-write.
 ///
-/// The shared [`write_with_page_erase`] helper drives any implementor. Each
-/// concrete backend implements this (usually via a small local adapter) so
-/// the page-erase-and-split loop exists in exactly one place.
+/// Driven by the shared [`write_with_page_erase`] helper, so the
+/// page-erase-and-split loop exists in one place.
 pub trait PagedFlash {
     /// Error type reported by the target.
     type Error;
@@ -266,20 +252,14 @@ pub trait PagedFlash {
 /// Streams `data` to a page-oriented target, erasing each page the first time
 /// it is touched.
 ///
-/// This is the shared body of every [`NvmWriter`] impl that streams into a
-/// paged target (UPDI AVR Dx, UPDI tinyAVR, AVR128 self-programming). It
-/// assumes writes arrive in ascending, contiguous order from a page boundary,
-/// and tracks the most recently erased page in `erased_page` so consecutive
-/// writes to the same page erase it only once.
-///
-/// Sub-page or page-straddling chunks are split at the page boundary, so the
-/// caller does not need to buffer a whole page.
+/// Assumes writes arrive in ascending, contiguous order from a page boundary,
+/// and splits chunks at page boundaries so the caller never buffers a whole
+/// page. `erased_page` advances only after a successful erase, so a mid-stream
+/// failure re-erases the in-flight page on the next call.
 ///
 /// # Errors
 ///
-/// Returns the target's error if any erase or write fails. The `erased_page`
-/// tracker is only advanced after a successful erase, so a mid-stream failure
-/// causes the next call to re-erase the in-flight page.
+/// Returns the target's error if any erase or write fails.
 pub fn write_with_page_erase<T: PagedFlash>(
     address: u32,
     data: &[u8],
@@ -316,7 +296,6 @@ mod tests {
         let mut store = BandedStore::new(MemStore::<64>::new(), MemStore::<32>::new());
         assert_eq!(store.capacity(), 96);
 
-        // Low band write is invisible to the high band and vice versa.
         store.write(10, &[0xAA; 4]).unwrap();
         store.write(64, &[0xBB; 4]).unwrap();
 
@@ -326,7 +305,6 @@ mod tests {
         store.read(64, &mut buf).unwrap();
         assert_eq!(buf, [0xBB; 4]);
 
-        // An access crossing the boundary is refused.
         assert_eq!(store.write(62, &[0; 4]), Err(BandedError::OutOfBounds));
     }
 }

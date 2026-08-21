@@ -1,14 +1,12 @@
 //! Storage geometry shared by all `CellGuard` firmware images.
 //!
-//! Three independent binaries (cellcore app, cellboot bootloader, cellprog
-//! programmer) read and write the same staging EEPROMs and the same on-chip
-//! EEPROM slots. The constants here are the single source of truth for that
-//! geometry. A copy in any firmware silently corrupts the others' reads, so
-//! every image must take them from here.
+//! Three binaries (cellcore app, cellboot bootloader, cellprog programmer)
+//! read and write the same EEPROMs. These constants are the single source of
+//! truth: a copy in any firmware silently corrupts the others' reads.
 
 /// AVR128DA64 boot section size (FUSE.BOOTSIZE = 16, units of 512 bytes).
-/// The bootloader occupies flash 0x0000 up to this address; the application
-/// starts here.
+/// The bootloader occupies flash below this address. The application starts
+/// here.
 pub const BOOT_SECTION_SIZE: u32 = 16 * 512;
 
 /// App staging EEPROM capacity (U104, CAT25M01, 128 KB).

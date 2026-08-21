@@ -1,11 +1,7 @@
 //! Shared test utilities for downstream crates.
 //!
-//! Simple in-RAM implementations of [`ImageStore`] and [`StateStore`] that
-//! several test suites need. Gated behind the `testutil` feature so they do
-//! not ship in production builds.
-//!
-//! Enable with `cellboot = { workspace = true, features = ["testutil"] }` in
-//! `[dev-dependencies]`.
+//! In-RAM implementations of the store traits, gated behind the `testutil`
+//! feature so they do not ship in production builds.
 
 use core::cell::RefCell;
 
@@ -13,8 +9,7 @@ use crate::io::{ImageStore, StateStore};
 
 /// A fixed-capacity in-RAM [`ImageStore`] for tests.
 ///
-/// The buffer starts zeroed and is publicly readable so a test can inspect
-/// what was written. `N` is the capacity in bytes.
+/// `N` is the capacity. The buffer is public for inspection.
 pub struct MemStore<const N: usize> {
     /// Backing storage, exposed for test inspection.
     pub buf: [u8; N],
@@ -71,11 +66,10 @@ impl<const N: usize> ImageStore for MemStore<N> {
     }
 }
 
-/// An [`ImageStore`] over a shared backing cell, so a test can inspect what an
-/// agent staged while the agent owns the store.
+/// An [`ImageStore`] over a shared backing cell.
 ///
-/// The caller owns the backing [`RefCell`] and passes a reference, so a second
-/// handle constructed over the same cell reads what the first one wrote.
+/// Two handles over the same [`RefCell`] see each other's writes, so a test
+/// can inspect what an agent staged while the agent owns its store.
 pub struct SharedImageStore<'a, const N: usize> {
     backing: &'a RefCell<[u8; N]>,
 }
@@ -115,8 +109,6 @@ impl<const N: usize> ImageStore for SharedImageStore<'_, N> {
 }
 
 /// A [`StateStore`] that always reports an empty load and drops writes.
-///
-/// Useful for tests that need an agent with no persisted state.
 #[derive(Debug, Default)]
 pub struct NullStateStore;
 
@@ -132,12 +124,10 @@ impl StateStore for NullStateStore {
     }
 }
 
-/// A [`StateStore`] backed by shared bytes, so a second agent can load what a
-/// first one persisted.
+/// A [`StateStore`] backed by shared bytes.
 ///
-/// `None` stands in for a blank store. The caller owns the backing
-/// [`RefCell`] and passes a reference, so two agents constructed in sequence
-/// (simulating a reset) can share it.
+/// `None` stands for a blank store. Two agents built in sequence over the
+/// same cell simulate a reset.
 pub struct SharedStore<'a, const L: usize> {
     backing: &'a RefCell<Option<[u8; L]>>,
 }

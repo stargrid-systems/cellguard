@@ -1,21 +1,13 @@
 //! Power-on known-answer self-test for the crypto primitives.
 //!
-//! The firmware runs [`self_test`] once at boot, before it trusts any image or
-//! key. It recomputes fixed NIST SHA-256 and RFC 4231 HMAC-SHA256 vectors on
-//! the actual silicon and checks them against the published digests.
-//!
-//! This is not belt-and-braces. The AVR LLVM backend has miscompiled correct
-//! Rust in the past (rust-lang/rust#109000), so a self-test on the target is
-//! the only way to be sure the compiler that built this image did not silently
-//! break the hash. A failure means the crypto cannot be trusted, so the caller
-//! must refuse to run.
+//! [`self_test`] runs once at boot, before any image or key is trusted. The
+//! AVR LLVM backend has miscompiled correct Rust in the past
+//! (rust-lang/rust#109000), so the vectors must be recomputed on the actual
+//! silicon. A failure means the crypto cannot be trusted.
 
 use hmac_sha256::{HMAC, Hash};
 
 /// Which known-answer vector failed.
-///
-/// The caller can surface the specific variant (for example as a distinct
-/// error code) to tell a hash break apart from an HMAC break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KatError {
     /// A bare SHA-256 vector did not match.
@@ -62,13 +54,10 @@ const HMAC_CASE2: [u8; 32] = [
 
 /// Runs the power-on crypto self-test.
 ///
-/// Recomputes fixed SHA-256 and HMAC-SHA256 vectors on this device and checks
-/// them against the published digests.
-///
 /// # Errors
 ///
 /// Returns [`KatError`] identifying the first primitive whose output did not
-/// match. On success the crypto is safe to use for this power cycle.
+/// match.
 pub fn self_test() -> Result<(), KatError> {
     if Hash::hash(b"") != SHA256_EMPTY || Hash::hash(b"abc") != SHA256_ABC {
         return Err(KatError::Sha256);

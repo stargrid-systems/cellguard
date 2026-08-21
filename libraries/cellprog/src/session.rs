@@ -1,17 +1,9 @@
 //! The servant-side programming session handler.
 //!
-//! [`SessionHandler`] is the `cellprog` MCU's side of the transactional
-//! programming protocol (see `cellguard_protocol::session`). It decodes one
-//! command from the UART link, runs it against a `TinyProgrammer`, and
-//! produces the raw reply frame ready to COBS-encode onto the wire.
-//!
-//! The handler does not own the USART or the mux. The firmware switches the
-//! link between UART mode (decode and reply) and UPDI mode (execute) around
-//! each command, so [`SessionHandler::decode`] and
-//! [`SessionHandler::execute`] are separate calls.
-//!
-//! A command may only be decoded while the link is in UART mode, and a
-//! returned [`Command`] must be executed before the next is decoded.
+//! The programmer's one USART is muxed between UART mode (decode and reply)
+//! and UPDI mode (execute), so [`SessionHandler::decode`] and
+//! [`SessionHandler::execute`] are separate calls. A decoded [`Command`]
+//! must be executed before the next is decoded.
 
 use cellguard_protocol::{
     Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget, decode_command,
@@ -25,7 +17,6 @@ pub const MAX_COMMAND_FRAME: usize = 1 + 2 + cellguard_protocol::PAGE_MAX + CRC_
 /// Decoded size of the largest reply frame (`PageData`).
 pub const MAX_REPLY_FRAME: usize = 1 + 3 + cellguard_protocol::PAGE_MAX + CRC_LEN;
 
-/// Length of the frame CRC in bytes.
 const CRC_LEN: usize = 2;
 
 const _: () = assert!(
@@ -33,8 +24,7 @@ const _: () = assert!(
     "rx must double as the page-read staging buffer"
 );
 
-/// A decoded session command. Page data lives in the handler, not here:
-/// [`SessionHandler::execute`] reads it back.
+/// A decoded session command. Page data lives in the handler, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Chip-erase the target and enter programming mode.
@@ -58,7 +48,6 @@ pub enum Command {
     End,
 }
 
-/// Maps a [`ProgError`] onto its wire status.
 const fn status_of<E>(err: &ProgError<E>) -> SessionStatus {
     match err {
         ProgError::Updi(_) => SessionStatus::Link,
@@ -71,10 +60,8 @@ const fn status_of<E>(err: &ProgError<E>) -> SessionStatus {
     }
 }
 
-/// The servant-side session state machine.
-///
-/// Owns the decode buffer, the reply buffer, and the one bit of session
-/// state. See the [module](self) docs for the firmware calling pattern.
+/// The servant-side session state machine. See the module docs for the
+/// firmware calling pattern.
 pub struct SessionHandler {
     decoder: Decoder,
     in_session: bool,
@@ -92,7 +79,7 @@ impl Default for SessionHandler {
 
 impl SessionHandler {
     /// Creates a handler. The all-zero initializer lets a `static` handler
-    /// land in `.bss` instead of carrying a flash image in `.data`.
+    /// land in `.bss` instead of `.data`.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -111,13 +98,9 @@ impl SessionHandler {
 
     /// Feeds one received wire byte from the UART link.
     ///
-    /// Returns a command when a complete, valid session command was decoded.
-    /// Malformed or corrupt frames produce nothing; the master's reply
-    /// timeout drives recovery.
-    ///
-    /// Out-of-line: the firmware feeds this from its event loop, and keeping
-    /// the decode path (COBS decoder plus frame codec) out of the loop body
-    /// relieves register pressure on small targets.
+    /// Malformed or corrupt frames produce nothing, and the master's reply
+    /// timeout drives recovery. Kept out of line to relieve register
+    /// pressure on small targets.
     #[inline(never)]
     pub fn decode(&mut self, byte: u8) -> Option<Command> {
         let Ok(Some(frame_len)) = self.decoder.feed(byte, &mut self.rx) else {
@@ -142,11 +125,9 @@ impl SessionHandler {
         }
     }
 
-    /// Runs `cmd` against `prog` and returns the raw reply frame, ready to
-    /// COBS-encode onto the link.
+    /// Runs `cmd` against `prog` and returns the raw reply frame.
     ///
-    /// `prog` must be a programmer for the mux-selected target and the link
-    /// must be in UPDI mode; only the decode path runs in UART mode.
+    /// The link must be in UPDI mode with the mux set to the target.
     #[must_use]
     pub fn execute<L: UpdiLink>(&mut self, cmd: Command, prog: &mut TinyProgrammer<L>) -> &[u8] {
         match cmd {
@@ -158,9 +139,8 @@ impl SessionHandler {
         }
     }
 
-    /// Abandons an open session after a link idle timeout: resets the target
-    /// out of programming mode and closes the session. A no-op when no
-    /// session is open.
+    /// Abandons an open session after a link idle timeout, resetting the
+    /// target out of programming mode. A no-op when no session is open.
     pub fn expire<L: UpdiLink>(&mut self, prog: &mut TinyProgrammer<L>) {
         if self.in_session {
             let _ = prog.leave();
@@ -212,8 +192,8 @@ impl SessionHandler {
         if len == 0 || len > cellguard_protocol::PAGE_MAX {
             return self.status_reply(SessionStatus::InvalidAddr, Some(addr));
         }
-        // The command frame in `rx` is consumed. Stage the data there and
-        // build the reply frame from it into `tx`.
+        // The command frame in `rx` is consumed, so the read data can be
+        // staged there.
         let Self { rx, tx, .. } = self;
         let data = rx.get_mut(3..3 + len).unwrap_or(&mut []);
         let status = match prog.read_flash(addr, data) {
@@ -234,16 +214,13 @@ impl SessionHandler {
         self.status_reply(status, None)
     }
 
-    /// Builds a status reply. `addr` extends the payload with the address the
-    /// status refers to, so the master can match the reply to its page
-    /// command.
     fn status_reply(&mut self, status: SessionStatus, addr: Option<u16>) -> &[u8] {
         write_reply(Reply::Status { status, addr }, &mut self.tx)
     }
 }
 
-/// Builds a raw reply frame in `tx`. Buffer sizes are static (see the buffer
-/// consts), so this always succeeds and the fallback slice is empty.
+/// Builds a raw reply frame in `tx`. The buffer is sized for the worst case,
+/// so the empty-slice fallback is unreachable.
 fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [u8] {
     let Some(len) = encode_reply(reply, tx) else {
         return &[];
@@ -281,8 +258,6 @@ mod tests {
         }
     }
 
-    /// Sends a raw frame to the handler, one byte at a time, collecting any
-    /// decoded command.
     fn send(handler: &mut SessionHandler, raw: &[u8]) -> Option<Command> {
         let mut wire = [0u8; 96];
         let n = encode_frame(raw, &mut wire).expect("wire buffer fits");
@@ -324,7 +299,6 @@ mod tests {
         raw
     }
 
-    /// Decodes a reply frame into the reply.
     fn parse_reply(raw: &[u8]) -> Reply<'_> {
         decode_reply(raw).expect("reply parses")
     }
@@ -565,11 +539,9 @@ mod tests {
     #[test]
     fn corrupt_and_malformed_frames_are_ignored() {
         let mut rig = Rig::new(MockTarget::tiny());
-        // A flipped body byte fails the frame CRC.
         let mut corrupt = begin_raw(SessionTarget::Cellagent);
         corrupt[0] ^= 0x01;
         assert!(send(&mut rig.handler, &corrupt).is_none());
-        // PageWrite with empty data cannot decode.
         let mut malformed = Vec::from([
             cellguard_protocol::SessionCmd::PageWrite.to_code(),
             0x00,
@@ -590,10 +562,8 @@ mod tests {
         assert!(rig.handler.in_session());
         rig.handler.expire(&mut rig.target);
         assert!(!rig.handler.in_session());
-        // Outside a session, expire is a no-op.
         rig.handler.expire(&mut rig.target);
 
-        // After expiry page commands are rejected again.
         let cmd = send(&mut rig.handler, &write_raw(0, &[1, 2])).expect("page write decodes");
         let reply = rig.handler.execute(cmd, &mut rig.target);
         let Reply::Status { status, .. } = parse_reply(reply) else {

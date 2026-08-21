@@ -1,13 +1,9 @@
 //! The signed firmware image format.
 //!
-//! An image is a fixed-size [`ImageHeader`] followed by the raw firmware
-//! payload. The header carries the metadata needed to route and check the
-//! image, a CRC-32 over the payload for corruption detection, and an
-//! HMAC-SHA256 tag over the header and payload for authenticity.
-//!
-//! This module defines only the format and its parsing. Signing and streaming
-//! verification live in the `cellcore` crate, so the `cellprog` programmer
-//! links no crypto.
+//! An image is a fixed-size [`ImageHeader`] followed by the raw payload. The
+//! header carries routing metadata, a CRC-32 over the payload, and an
+//! HMAC-SHA256 tag over header and payload. Signing and verification live in
+//! `cellcore`, so this crate links no crypto.
 
 use core::fmt;
 
@@ -25,8 +21,7 @@ const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 
 /// Number of leading header bytes covered by the authentication tag.
 ///
-/// The tag is computed over these bytes followed by the payload. It is every
-/// header field except the tag itself.
+/// Every header field except the tag itself.
 pub const MAC_PREFIX_LEN: usize = 32;
 
 /// Magic bytes at the start of every header.
@@ -113,8 +108,8 @@ pub struct ImageHeader {
     pub region: Region,
     /// Identifies the target device or board this image is built for.
     pub target_id: u16,
-    /// Firmware version, informational only. It is never used to reject an
-    /// image, so a downgrade to a known-good version is always allowed.
+    /// Firmware version, informational only. Never used to reject an image,
+    /// so downgrades stay possible.
     pub fw_version: u32,
     /// Length of the payload in bytes.
     pub payload_len: u32,
@@ -191,9 +186,8 @@ impl ImageHeader {
 
     /// Serializes the header to its canonical byte form.
     ///
-    /// Reserved bytes are written as zero. Callers that build and sign images
-    /// must compute the tag over the first [`MAC_PREFIX_LEN`] bytes of this
-    /// output followed by the payload.
+    /// Reserved bytes are written as zero. Signers compute the tag over the
+    /// first [`MAC_PREFIX_LEN`] bytes of this output followed by the payload.
     #[must_use]
     pub fn serialize(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];

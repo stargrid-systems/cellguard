@@ -1,8 +1,7 @@
 //! Serial-port transport with COBS-framed packet exchange.
 //!
-//! [`Transport`] wraps a [`serialport::SerialPort`] and the protocol's
-//! streaming COBS [`Decoder`]. [`Transport::exchange`] sends one command packet
-//! and blocks until a complete response frame is decoded.
+//! [`Transport::exchange`] sends one command packet and blocks until a
+//! complete response frame is decoded.
 
 use std::io::{self, Read, Write};
 use std::time::Duration;
@@ -10,15 +9,12 @@ use std::time::Duration;
 use cellguard_protocol::{DecodeError, Decoder, Kind, Packet, encode_frame, max_encoded_len};
 use serialport::SerialPort;
 
-/// Maximum decoded frame we can receive. The biggest response payload is a
-/// `PersistentState` (28 bytes) or a `PanicRecord` (64 bytes). Either fits well
-/// within this bound with room for future growth.
+/// The largest response payload is a `PersistentState` (28 B) or a
+/// `PanicRecord` (64 B), so 256 leaves headroom.
 const RX_BUF: usize = 256;
 
-/// Scratch for building the outgoing pre-COBS frame.
 const TX_RAW: usize = 256;
 
-/// Worst-case COBS-encoded outgoing frame.
 const TX_WIRE: usize = max_encoded_len(TX_RAW);
 
 /// Reads/writes `CellGuard` bus packets over a serial port.
@@ -30,10 +26,6 @@ pub struct Transport {
 
 impl Transport {
     /// Opens the serial port at `path` with `baud` 8N1 and a 2 s read timeout.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the port cannot be opened.
     pub fn open(path: &str, baud: u32) -> io::Result<Self> {
         let port = serialport::new(path, baud)
             .timeout(Duration::from_secs(2))
@@ -48,14 +40,8 @@ impl Transport {
 
     /// Sends a command packet addressed to `id` and blocks for the response.
     ///
-    /// Returns the parsed response packet. The response `id` is not checked:
-    /// the device always replies with the sender's `id`, and on a
-    /// point-to-point field-bus link there is exactly one responder.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error on I/O failure, COBS decode failure, or if the response
-    /// packet fails its CRC or carries an unknown kind.
+    /// The response `id` is not checked: the point-to-point link has exactly
+    /// one responder.
     pub fn exchange(&mut self, id: u8, kind: Kind, payload: &[u8]) -> io::Result<Reply> {
         self.send(id, kind, payload)?;
         self.recv()
@@ -121,8 +107,6 @@ impl Transport {
 
 /// A decoded response packet with an owned payload copy.
 pub struct Reply {
-    /// The response kind.
     pub kind: Kind,
-    /// The response payload bytes.
     pub payload: Vec<u8>,
 }

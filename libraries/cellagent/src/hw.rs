@@ -1,8 +1,7 @@
 //! Hardware abstraction traits for the cellagent.
 //!
-//! The firmware crate supplies concrete implementations of these traits backed
-//! by the AVR HAL. [`CellagentRuntime`](crate::CellagentRuntime) works with any
-//! implementation, so the logic is host-testable with mocks.
+//! The firmware crate supplies the implementations. The runtime works with
+//! any implementation, so the logic is host-testable with mocks.
 
 /// Controls the active balancer gates.
 pub trait GateControl {

@@ -1,14 +1,10 @@
 //! Drives the update agent from the bus.
 //!
-//! [`Dispatcher`] owns an [`UpdateAgent`] plus the COBS decode state and its
-//! receive buffer. Feed it wire bytes one at a time with [`Dispatcher::feed`].
-//! When a complete frame addressed to this node carries a bootloader command,
-//! it runs the agent and returns the COBS-encoded response to transmit.
-//!
-//! Frames that fail to decode, fail their CRCs, are addressed to another node,
-//! or are not bootloader commands are ignored (no response). Relaying frames
-//! for other nodes down the daisy chain is a separate concern and not handled
-//! here.
+//! Feed [`Dispatcher::feed`] one wire byte at a time. When a complete frame
+//! addressed to this node carries a bootloader command, it returns the
+//! COBS-encoded response to transmit. Frames that fail to decode, are
+//! addressed to another node, or are not bootloader commands are ignored.
+//! Relaying frames for other nodes is not handled here.
 
 use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
@@ -38,8 +34,8 @@ const MAX_RESPONSE_WIRE: usize = max_encoded_len(MAX_RESPONSE_FRAME);
 
 /// Bus driver for the update agent.
 ///
-/// `RX` sizes the receive buffer and must be large enough for the biggest
-/// incoming frame (a `Begin` header, or a `Data` chunk plus its overhead).
+/// `RX` must be large enough for the biggest incoming frame (a `Begin`
+/// header, or a `Data` chunk plus its overhead).
 pub struct Dispatcher<'k, S, K, St, const RX: usize> {
     agent: UpdateAgent<'k, S, K, St>,
     id: u8,
@@ -60,15 +56,13 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         }
     }
 
-    /// Returns the wrapped agent, e.g. to read its status or check
-    /// [`UpdateAgent::pending_program`].
+    /// Returns the wrapped agent.
     #[must_use]
     pub const fn agent(&self) -> &UpdateAgent<'k, S, K, St> {
         &self.agent
     }
 
-    /// Returns a mutable reference to the wrapped agent, e.g. to call
-    /// [`UpdateAgent::confirm_app_healthy`] after a successful exchange.
+    /// Returns a mutable reference to the wrapped agent.
     #[must_use]
     pub const fn agent_mut(&mut self) -> &mut UpdateAgent<'k, S, K, St> {
         &mut self.agent
@@ -93,8 +87,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
     /// Returns `Some(frame)` with the COBS-encoded response to transmit when a
     /// complete, valid, in-scope command was handled, otherwise `None`.
     pub fn feed(&mut self, byte: u8) -> Option<&[u8]> {
-        // `None` is a mid-frame feed. `Err` is bus noise the decoder already
-        // resynced from.
+        // `Err` is bus noise the decoder already resynced from.
         let Ok(Some(len)) = self.decoder.feed(byte, &mut self.rx) else {
             return None;
         };
@@ -104,10 +97,8 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         if packet.id != self.id {
             return None;
         }
-        // A packet whose kind is one of ours but whose payload does not decode
-        // gets an explicit Malformed nack, not silence. A kind outside the
-        // update protocol is not ours to judge: it stays silent so another
-        // handler (or another node) can own it.
+        // A known kind with a bad payload nacks Malformed. An unknown kind
+        // stays silent so another handler or node can own it.
         let command = match Command::from_packet(packet) {
             Ok(command) => command,
             Err(MapError::BadPayload) => {
@@ -288,7 +279,6 @@ mod tests {
     fn ignores_frame_for_other_node() {
         let mut key = KEY;
         let mut dispatcher = make_dispatcher(&mut key);
-        // A well-formed probe addressed to a different node id.
         let mut raw = [0u8; 32];
         let raw_len = Packet::write(NODE + 1, Kind::BootProbe, &[], &mut raw).unwrap();
         let mut encoder = Encoder::new(&raw[..raw_len]);

@@ -1,17 +1,11 @@
 //! The streaming programmer engine.
 //!
-//! [`program`] reads a staged image out of an [`ImageStore`] (the shared
-//! external EEPROM) and writes it into a target's program memory through a
-//! streaming [`NvmWriter`] (UPDI self-program or UPDI host). It is pure logic
-//! behind those two traits, so it fits small targets: nothing larger than the
-//! caller's scratch buffer is ever held in RAM.
-//!
-//! The engine does not check the HMAC. Authenticity was already established
-//! by the AVR128 before staging, and the programmer holds no key. It checks
-//! the payload CRC twice instead: once against the staged copy before erasing
-//! the target (so a corrupt EEPROM never destroys a working target), and once
-//! against the written flash before letting the target run (so a bad write is
-//! caught).
+//! [`program`] streams a staged image from an [`ImageStore`] into a target
+//! through an [`NvmWriter`]. Nothing larger than the caller's scratch buffer
+//! is held in RAM. The HMAC is not checked here: authenticity was established
+//! before staging. The payload CRC is checked twice, once against the staged
+//! copy before the target is erased, and once against the written flash
+//! before the target runs.
 
 use crc::Crc32;
 
@@ -23,19 +17,14 @@ const _: () = assert!(HEADER_LEN == HEADER_LEN_U32 as usize);
 
 /// Programs a staged image into a target.
 ///
-/// `image_offset` is where the image (header then payload) begins in `store`.
-/// `target_base` is where the payload is written in the target's program
-/// memory. `scratch` is the streaming buffer. A size that divides the target
-/// page (for example 64 bytes) works well.
-///
-/// On success the target has been written, verified, and released to run, and
-/// the parsed [`ImageHeader`] is returned.
+/// `image_offset` is where the image begins in `store`, `target_base` is
+/// where the payload goes in the target's program memory, and `scratch` is
+/// the streaming buffer. A size that divides the target page works well.
 ///
 /// # Errors
 ///
-/// Returns a [`ProgramError`] if the store or writer fails, the header does not
-/// parse, the staged copy does not match its CRC, the written flash does not
-/// match its CRC, or `scratch` is empty.
+/// Returns a [`ProgramError`] on any store or writer failure, an
+/// unparseable header, a CRC mismatch, or an empty `scratch`.
 pub fn program<S, W>(
     store: &mut S,
     writer: &mut W,
@@ -47,8 +36,8 @@ where
     S: ImageStore,
     W: NvmWriter,
 {
-    // An empty scratch would make `chunk_len` return 0 and the loops below
-    // would never advance, hanging the device. Report it instead.
+    // An empty scratch makes `chunk_len` return 0, so the loops below would
+    // never advance.
     if scratch.is_empty() {
         return Err(ProgramError::EmptyScratch);
     }
@@ -62,7 +51,6 @@ where
     let payload_offset = image_offset.saturating_add(HEADER_LEN_U32);
     let payload_len = header.payload_len;
 
-    // Pass 1: verify the staged copy before touching the target.
     let staged_crc = crc_over(
         |offset, buf| store.read(offset, buf).map_err(ProgramError::Store),
         payload_offset,
@@ -73,7 +61,6 @@ where
         return Err(ProgramError::CorruptSource);
     }
 
-    // Pass 2: erase and stream the payload into the target.
     writer.begin().map_err(ProgramError::Nvm)?;
     let mut offset = 0u32;
     while offset < payload_len {
@@ -88,7 +75,6 @@ where
         offset = offset.saturating_add(advance(n));
     }
 
-    // Pass 3: verify the written flash before releasing the target.
     let flash_crc = crc_over(
         |offset, buf| writer.read(offset, buf).map_err(ProgramError::Nvm),
         target_base,
@@ -105,31 +91,25 @@ where
 
 /// Whether a failed [`program`] attempt can succeed if retried.
 ///
-/// A corrupt staged source or an unparseable header never succeeds by
-/// retrying, so the bootloader gives up on them immediately. All other
-/// failures (store, NVM, verify, release) can be transient and are worth
-/// another attempt.
+/// A corrupt source or bad header never will, so the bootloader gives up on
+/// them immediately.
 #[must_use]
 pub const fn retryable<S, N>(err: &ProgramError<S, N>) -> bool {
     !matches!(err, ProgramError::CorruptSource | ProgramError::Header(_))
 }
 
-/// The number of bytes to move this step: the smaller of the scratch capacity
-/// and the bytes remaining.
 fn chunk_len(capacity: usize, remaining: u32) -> usize {
     let cap = u32::try_from(capacity).unwrap_or(u32::MAX);
     usize::try_from(remaining.min(cap)).unwrap_or(capacity)
 }
 
-/// Advances a u32 offset by `n` bytes, saturating on the impossible
-/// `usize`-wider-than-`u32` host.
 fn advance(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// CRCs `len` bytes read through `read`, which fills one chunk of `scratch`
-/// per call. The single shared loop serves both the store and flash passes.
-/// Monomorphizing it per source would duplicate the body.
+/// CRCs `len` bytes read through `read`, one scratch chunk at a time.
+/// Shared by the store and flash passes so the loop is not monomorphized per
+/// source.
 fn crc_over<E>(
     mut read: impl FnMut(u32, &mut [u8]) -> Result<(), E>,
     base: u32,
@@ -164,8 +144,8 @@ pub enum ProgramError<S, N> {
     CorruptSource,
     /// The written flash did not match its CRC (bad write).
     VerifyFailed,
-    /// Releasing the target after a successful write and verify failed. The
-    /// target's flash holds a valid image but was not released to run.
+    /// Release failed after a successful write and verify. Flash holds a
+    /// valid image but the target was not released to run.
     ReleaseFailed(N),
 }
 
@@ -206,8 +186,7 @@ mod tests {
         flash: [u8; FLASH_CAP],
         began: bool,
         finished: bool,
-        /// If set, corrupt the byte written at this offset (simulate a bad
-        /// write).
+        /// If set, flip the byte written at this offset.
         corrupt_at: Option<usize>,
     }
 
@@ -301,7 +280,6 @@ mod tests {
             buf: [0; STORE_CAP],
         };
         stage(&mut store, &payload);
-        // Corrupt a staged payload byte after the header CRC was fixed.
         store.buf[HEADER_LEN + 10] ^= 0x01;
         let mut writer = MockWriter::new();
         let mut scratch = [0u8; 64];
@@ -310,7 +288,6 @@ mod tests {
             program(&mut store, &mut writer, 0, 0, &mut scratch),
             Err(ProgramError::CorruptSource)
         );
-        // The target was never erased or released.
         assert!(!writer.began);
         assert!(!writer.finished);
     }
@@ -331,7 +308,6 @@ mod tests {
             Err(ProgramError::VerifyFailed)
         );
         assert!(writer.began);
-        // A bad image must not be released to run.
         assert!(!writer.finished);
     }
 }
