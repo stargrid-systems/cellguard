@@ -32,7 +32,18 @@ pub const PTR_SET: u8 = 2 << 2;
 pub const SIZE_24: u8 = 2;
 pub const SIZE_16: u8 = 1;
 /// Largest block one `REPEAT` can cover (count is a single byte, so 256).
-const REPEAT_MAX: usize = 256;
+/// `st_inc`/`ld_inc` move at most this much per call.
+pub const REPEAT_MAX: usize = 256;
+
+/// Converts a block length (1..=256, per the `st_inc`/`ld_inc` contract)
+/// into the iteration count a `REPEAT` needs. Length 256 wraps to 0, which
+/// `repeat` maps back to 256 on the wire.
+fn len_as_rpt(len: usize) -> u8 {
+    debug_assert!(len > 0 && len <= REPEAT_MAX);
+    #[expect(clippy::cast_possible_truncation, reason = "bounded by the assert")]
+    let rpt = len as u8;
+    rpt
+}
 
 /// UPDI control- and status-register addresses (the `CS` space).
 pub mod cs {
@@ -100,10 +111,8 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn ldcs(&mut self, reg: u8) -> Result<u8, UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_LDCS | (reg & 0x0F)])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.instr2(OP_LDCS | (reg & 0x0F))?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Writes a control/status register. `STCS` is not acknowledged.
@@ -112,8 +121,7 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn stcs(&mut self, reg: u8, val: u8) -> Result<(), UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_STCS | (reg & 0x0F), val])?;
-        Ok(())
+        self.instr3(OP_STCS | (reg & 0x0F), val)
     }
 
     /// Loads one byte from a 24-bit data-space address.
@@ -122,11 +130,8 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8(&mut self, addr: u32) -> Result<u8, UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_LDS | ADDR_24, a0, a1, a2])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.instr5(OP_LDS | ADDR_24, addr)?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Stores one byte to a 24-bit data-space address.
@@ -136,11 +141,9 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8(&mut self, addr: u32, val: u8) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_STS | ADDR_24, a0, a1, a2])?;
+        self.instr5(OP_STS | ADDR_24, addr)?;
         self.expect_ack()?;
-        self.link.send(&[val])?;
-        self.expect_ack()
+        self.send_acked(val)
     }
 
     /// Sets the pointer register to a 24-bit address for `ld_inc`/`st_inc`.
@@ -150,9 +153,7 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer(&mut self, addr: u32) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1, a2, _] = addr.to_le_bytes();
-        self.link
-            .send(&[SYNCH, OP_ST | PTR_SET | SIZE_24, a0, a1, a2])?;
+        self.instr5(OP_ST | PTR_SET | SIZE_24, addr)?;
         self.expect_ack()
     }
 
@@ -162,11 +163,8 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn lds8_16(&mut self, addr: u16) -> Result<u8, UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_LDS | ADDR_16, a0, a1])?;
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        Ok(b[0])
+        self.instr4(OP_LDS | ADDR_16, addr)?;
+        self.link.recv_byte().map_err(UpdiError::Link)
     }
 
     /// Stores one byte to a 16-bit data-space address.
@@ -176,11 +174,9 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn sts8_16(&mut self, addr: u16, val: u8) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link.send(&[SYNCH, OP_STS | ADDR_16, a0, a1])?;
+        self.instr4(OP_STS | ADDR_16, addr)?;
         self.expect_ack()?;
-        self.link.send(&[val])?;
-        self.expect_ack()
+        self.send_acked(val)
     }
 
     /// Sets the pointer register to a 16-bit address for `ld_inc`/`st_inc`.
@@ -190,46 +186,40 @@ impl<L: UpdiLink> Updi<L> {
     /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn set_pointer_16(&mut self, addr: u16) -> Result<(), UpdiError<L::Error>> {
-        let [a0, a1] = addr.to_le_bytes();
-        self.link
-            .send(&[SYNCH, OP_ST | PTR_SET | SIZE_16, a0, a1])?;
+        self.instr4(OP_ST | PTR_SET | SIZE_16, addr)?;
         self.expect_ack()
     }
 
-    /// Reads `buf.len()` bytes from the pointer, post-incrementing.
-    ///
-    /// A `REPEAT` blocks the load so all bytes arrive under one opcode. `buf`
-    /// must not be empty.
+    /// Reads `buf.len()` bytes from the pointer, post-incrementing, under one
+    /// `REPEAT` block. `buf` must not be empty nor longer than
+    /// [`REPEAT_MAX`]. Callers with larger buffers (AVR Dx 512-byte pages)
+    /// split into blocks themselves.
     ///
     /// # Errors
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn ld_inc(&mut self, buf: &mut [u8]) -> Result<(), UpdiError<L::Error>> {
-        for chunk in buf.chunks_mut(REPEAT_MAX) {
-            self.repeat(chunk.len())?;
-            self.link.send(&[SYNCH, OP_LD | PTR_INC])?;
-            self.link.recv(chunk)?;
-        }
-        Ok(())
+        debug_assert!(!buf.is_empty() && buf.len() <= REPEAT_MAX);
+        self.repeat(len_as_rpt(buf.len()))?;
+        self.instr2(OP_LD | PTR_INC)?;
+        self.link.recv(buf).map_err(UpdiError::Link)
     }
 
-    /// Writes `data` to the pointer, post-incrementing, acknowledged per byte.
-    ///
-    /// A `REPEAT` blocks the store so the block streams under one opcode.
-    /// `data` must not be empty.
+    /// Writes `data` to the pointer, post-incrementing, acknowledged per
+    /// byte, under one `REPEAT` block. `data` must not be empty nor longer
+    /// than [`REPEAT_MAX`]. Callers with larger buffers split into blocks
+    /// themselves.
     ///
     /// # Errors
     ///
     /// Returns [`UpdiError::NoAck`] if a byte is not acknowledged, or
     /// [`UpdiError::Link`] if the transport fails.
     pub fn st_inc(&mut self, data: &[u8]) -> Result<(), UpdiError<L::Error>> {
-        for chunk in data.chunks(REPEAT_MAX) {
-            self.repeat(chunk.len())?;
-            self.link.send(&[SYNCH, OP_ST | PTR_INC])?;
-            for &byte in chunk {
-                self.link.send(&[byte])?;
-                self.expect_ack()?;
-            }
+        debug_assert!(!data.is_empty() && data.len() <= REPEAT_MAX);
+        self.repeat(len_as_rpt(data.len()))?;
+        self.instr2(OP_ST | PTR_INC)?;
+        for &byte in data {
+            self.send_acked(byte)?;
         }
         Ok(())
     }
@@ -240,27 +230,72 @@ impl<L: UpdiLink> Updi<L> {
     ///
     /// Returns [`UpdiError::Link`] if the transport fails.
     pub fn key(&mut self, key: &[u8; 8]) -> Result<(), UpdiError<L::Error>> {
-        self.link.send(&[SYNCH, OP_KEY])?;
-        let mut reversed = *key;
-        reversed.reverse();
-        self.link.send(&reversed)?;
+        self.instr2(OP_KEY)?;
+        for &byte in key.iter().rev() {
+            self.link.send_byte(byte)?;
+        }
         Ok(())
     }
 
-    /// Emits a `REPEAT` so the next instruction runs `count` times. `count`
-    /// must be at least one.
-    fn repeat(&mut self, count: usize) -> Result<(), UpdiError<L::Error>> {
-        // REPEAT takes count-1: the next instruction runs (count-1)+1 times. A
-        // single byte bounds a page-sized block to 256, which is enough here.
-        let rpt = u8::try_from(count.saturating_sub(1)).unwrap_or(u8::MAX);
-        self.link.send(&[SYNCH, OP_REPEAT, rpt])?;
-        Ok(())
+    /// Sends `byte` and requires the target's ACK in reply.
+    ///
+    /// Fusing send and ack check keeps store phases to one call and one
+    /// error branch each.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdiError::NoAck`] if the target does not acknowledge, or
+    /// [`UpdiError::Link`] if the transport fails.
+    fn send_acked(&mut self, byte: u8) -> Result<(), UpdiError<L::Error>> {
+        self.link.send_byte(byte)?;
+        self.expect_ack()
     }
 
+    /// Emits a `REPEAT` so the next instruction runs `rpt` times. REPEAT
+    /// takes count-1 on the wire, so the next instruction runs `rpt`
+    /// iterations. Callers hold the block-length contract of
+    /// [`Self::st_inc`]/[`Self::ld_inc`], which bounds `rpt` to 256.
+    fn repeat(&mut self, rpt: u8) -> Result<(), UpdiError<L::Error>> {
+        self.instr3(OP_REPEAT, rpt.wrapping_sub(1))
+    }
+
+    /// Sends `SYNCH` plus an opcode through one shared out-of-line body.
+    /// Every instruction starts with these two bytes, so folding the constant
+    /// here drops one argument at every call site. The longer variants chain
+    /// on top of this one, so each body is one call plus one send.
+    #[inline(never)]
+    fn instr2(&mut self, opcode: u8) -> Result<(), UpdiError<L::Error>> {
+        self.link.send_byte(SYNCH)?;
+        self.link.send_byte(opcode).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and one operand byte.
+    #[inline(never)]
+    fn instr3(&mut self, opcode: u8, a: u8) -> Result<(), UpdiError<L::Error>> {
+        self.instr2(opcode)?;
+        self.link.send_byte(a).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and a 16-bit operand. The operand travels
+    /// as one register pair at the call site and splits here.
+    #[inline(never)]
+    fn instr4(&mut self, opcode: u8, a: u16) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1] = a.to_le_bytes();
+        self.instr3(opcode, a0)?;
+        self.link.send_byte(a1).map_err(UpdiError::Link)
+    }
+
+    /// Sends `SYNCH`, an opcode, and a 24-bit operand.
+    #[inline(never)]
+    fn instr5(&mut self, opcode: u8, a: u32) -> Result<(), UpdiError<L::Error>> {
+        let [a0, a1, a2, _] = a.to_le_bytes();
+        self.instr4(opcode, u16::from_le_bytes([a0, a1]))?;
+        self.link.send_byte(a2).map_err(UpdiError::Link)
+    }
+
+    #[inline]
     fn expect_ack(&mut self) -> Result<(), UpdiError<L::Error>> {
-        let mut b = [0u8];
-        self.link.recv(&mut b)?;
-        if b[0] == ACK {
+        if self.link.recv_byte()? == ACK {
             Ok(())
         } else {
             Err(UpdiError::NoAck)
@@ -329,17 +364,15 @@ mod tests {
             Ok(())
         }
 
-        fn send(&mut self, data: &[u8]) -> Result<(), ()> {
-            self.sent.extend(data);
+        fn send_byte(&mut self, byte: u8) -> Result<(), ()> {
+            self.sent.extend(&[byte]);
             Ok(())
         }
 
-        fn recv(&mut self, buf: &mut [u8]) -> Result<(), ()> {
-            for b in buf.iter_mut() {
-                *b = *self.recv_queue.as_slice().get(self.recv_pos).ok_or(())?;
-                self.recv_pos += 1;
-            }
-            Ok(())
+        fn recv_byte(&mut self) -> Result<u8, ()> {
+            let byte = *self.recv_queue.as_slice().get(self.recv_pos).ok_or(())?;
+            self.recv_pos += 1;
+            Ok(byte)
         }
     }
 

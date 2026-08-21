@@ -29,7 +29,7 @@
 #![no_std]
 #![warn(missing_docs)]
 
-pub use self::driver::{Updi, UpdiError};
+pub use self::driver::{REPEAT_MAX, Updi, UpdiError};
 pub use self::flash::FlashProg;
 pub use self::link::UpdiLink;
 pub use self::programmer::{PAGE_SIZE, ProgError, Programmer};

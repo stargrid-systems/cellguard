@@ -68,6 +68,10 @@ impl<T: SpiInstance> spi::ErrorType for Spi<T> {
 }
 
 impl<T: SpiInstance> SpiBus<u8> for Spi<T> {
+    // The byte loops are out-of-line so every transaction site (EEPROM
+    // headers, status reads, data streams) shares one loop body per
+    // direction. Inlining them duplicates the loop at each call site.
+    #[inline(never)]
     fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
         for w in words {
             *w = self.instance.transfer_byte(0);
@@ -75,6 +79,7 @@ impl<T: SpiInstance> SpiBus<u8> for Spi<T> {
         Ok(())
     }
 
+    #[inline(never)]
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
         for &w in words {
             let _ = self.instance.transfer_byte(w);

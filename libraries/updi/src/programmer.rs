@@ -6,7 +6,7 @@
 //! The data-space addresses, NVM command values, key strings, and status bits
 //! below come from the AVR128DB datasheet, cross-checked against `pymcuprog`.
 
-use crate::driver::{RESET_RELEASE, RESET_REQUEST, Updi, UpdiError, cs};
+use crate::driver::{REPEAT_MAX, RESET_RELEASE, RESET_REQUEST, Updi, UpdiError, cs};
 use crate::link::UpdiLink;
 
 /// Base of program flash in the 24-bit UPDI address space.
@@ -246,8 +246,9 @@ impl<L: UpdiLink> Programmer<L> {
         } else {
             segment.split_at(segment.len() - 1)
         };
-        if !head.is_empty() {
-            self.updi.st_inc(head)?;
+        // AVR Dx pages (512 B) exceed one REPEAT block, so stream in blocks.
+        for block in head.chunks(REPEAT_MAX) {
+            self.updi.st_inc(block)?;
         }
         if let [last] = tail {
             // Pad the odd tail with the erased value so the controller commits
@@ -279,7 +280,10 @@ impl<L: UpdiLink> Programmer<L> {
             return Err(ProgError::InvalidOffset);
         }
         self.updi.set_pointer(FLASH_BASE + flash_offset)?;
-        self.updi.ld_inc(buf)?;
+        // AVR Dx reads can exceed one REPEAT block, so read in blocks.
+        for block in buf.chunks_mut(REPEAT_MAX) {
+            self.updi.ld_inc(block)?;
+        }
         Ok(())
     }
 
