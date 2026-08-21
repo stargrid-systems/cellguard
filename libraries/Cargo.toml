@@ -5,6 +5,7 @@ members = [
     "avrxt-hal",
     "cat25",
     "cellboot",
+    "cellcore",
     "cellguard-panic",
     "cellguard-protocol",
     "crc",
