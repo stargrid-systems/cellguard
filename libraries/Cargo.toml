@@ -4,6 +4,7 @@ members = [
     "ads131m08",
     "avrxt-hal",
     "cat25",
+    "cellagent",
     "cellboot",
     "cellcore",
     "cellcore-runtime",
