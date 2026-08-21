@@ -97,6 +97,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellboot"
+version = "0.1.0"
+dependencies = [
+ "avrxt-hal",
+ "cat25",
+ "crc",
+ "embedded-hal",
+ "embedded-hal-mock",
+]
+
+[[package]]
+name = "cellguard-panic"
+version = "0.1.0"
+dependencies = [
+ "avrxt-hal",
+ "crc",
+]
+
+[[package]]
 name = "cellguard-protocol"
 version = "0.1.0"
 dependencies = [
