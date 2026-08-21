@@ -19,15 +19,19 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Kind {
-    /// Request: read the `ATtiny` 3-byte device id.
+    /// Request: read the board identity and firmware version. Response is
+    /// [`Kind::DeviceId`]. Payload: none.
     ReadDeviceId = 1,
-    /// Request: read the 10-byte serial number.
+    /// Request: read the node's serial number. Response is
+    /// [`Kind::SerialNumber`]. Payload: none.
     ReadSerialNumber = 2,
     /// Request: read the temperature.
     ReadTemperature = 3,
-    /// Response: device id.
+    /// Response: board identity and firmware version. Payload: 2-byte board
+    /// model (little-endian), 1-byte board revision, 4-byte firmware version
+    /// (little-endian). See the `identity` payload codecs.
     DeviceId = 4,
-    /// Response: serial number.
+    /// Response: the 16-byte serial number of the addressed node.
     SerialNumber = 5,
     /// Response: temperature.
     Temperature = 6,

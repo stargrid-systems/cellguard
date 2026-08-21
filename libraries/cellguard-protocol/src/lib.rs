@@ -14,6 +14,9 @@
 #![warn(missing_docs)]
 
 pub use self::cobs::{DecodeError, Decoder, Encoder, encode_frame, max_encoded_len};
+pub use self::identity::{
+    BOARD_MODEL_UNPROVISIONED, DeviceId, SERIAL_LEN, decode_serial, encode_serial,
+};
 pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 #[cfg(feature = "bootloader")]
@@ -35,6 +38,7 @@ pub use self::telemetry::{
 };
 
 mod cobs;
+mod identity;
 mod kind;
 mod packet;
 #[cfg(feature = "bootloader")]
