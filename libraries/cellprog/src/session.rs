@@ -47,7 +47,17 @@ pub const APP_FLASH_SIZE: u16 = updi::FLASH_SIZE - WALKER_SIZE;
 
 /// Payload size the `End` verifier reads per store call. Matches the command
 /// frame budget so the handler's receive buffer doubles as the scratch.
-const VERIFY_CHUNK: usize = cellguard_protocol::PAGE_MAX;
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the frame budget is far below u16 range"
+)]
+const VERIFY_CHUNK: u16 = cellguard_protocol::PAGE_MAX as u16;
+/// Offset of the payload inside a staged image: right past the header.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the header is far shorter than u16 range"
+)]
+const HEADER_OFFSET: u16 = cellboot::image::HEADER_LEN as u16;
 
 const _: () = assert!(
     MAX_COMMAND_FRAME >= 3 + cellguard_protocol::PAGE_MAX,
@@ -66,8 +76,10 @@ const _: () = assert!(updi::FLASH_SIZE == 4096);
 /// end. Implementations add the band's base offset.
 pub trait SelfStaging {
     /// Fills `buf` with staged-image bytes, starting `offset` bytes into the
-    /// image (offset 0 is the header). Returns `false` when the store fails.
-    fn read_staged(&mut self, offset: u32, buf: &mut [u8]) -> bool;
+    /// image (offset 0 is the header). The offset is image-internal, so it
+    /// always fits a `u16` (32-bit offset arithmetic is expensive on the
+    /// servant's 8-bit target). Returns `false` when the store fails.
+    fn read_staged(&mut self, offset: u16, buf: &mut [u8]) -> bool;
 }
 
 /// A decoded session command. Page data lives in the handler, not here.
@@ -370,7 +382,8 @@ fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [
 /// the header's own checksum.
 ///
 /// `scratch` is the handler's receive buffer; the command frame it held is
-/// consumed by the time `End` runs.
+/// consumed by the time `End` runs. Offsets stay `u16`: they are internal
+/// to the image, whose payload `End` caps at the app budget.
 fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {
     let Some(head) = scratch.first_chunk_mut::<{ cellboot::image::HEADER_LEN }>() else {
         return false;
@@ -379,38 +392,34 @@ fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {
         return false;
     }
     // Field offsets from `cellboot::image::ImageHeader::serialize`.
-    if head[0] != MAGIC[0]
-        || head[1] != MAGIC[1]
-        || head[2] != MAGIC[2]
-        || head[3] != MAGIC[3]
+    if head[0..4] != MAGIC
         || head[4] != cellboot::image::FORMAT_VERSION
         || Region::from_code(head[6]) != Some(Region::CellprogApp)
     {
         return false;
     }
-    let payload_len = u32::from_le_bytes([head[12], head[13], head[14], head[15]]);
-    if payload_len > u32::from(APP_FLASH_SIZE) {
+    // The low bytes carry the length: arming caps it at the app budget,
+    // which fits 12 bits.
+    let payload_len = u16::from_le_bytes([head[12], head[13]]);
+    if payload_len == 0 || payload_len > APP_FLASH_SIZE {
         return false;
     }
     let expected = u32::from_le_bytes([head[16], head[17], head[18], head[19]]);
 
     let mut crc = Crc32::new();
-    let mut done = 0u32;
-    while done < payload_len {
-        let take = VERIFY_CHUNK
-            .try_into()
-            .unwrap_or(u32::MAX)
-            .min(payload_len - done);
-        let n = usize::try_from(take).unwrap_or(VERIFY_CHUNK);
-        let Some(buf) = scratch.get_mut(..n) else {
+    let mut done = HEADER_OFFSET;
+    let mut rest = payload_len;
+    while rest != 0 {
+        let take = rest.min(VERIFY_CHUNK);
+        let Some(buf) = scratch.get_mut(..usize::from(take)) else {
             return false;
         };
-        let offset = cellboot::image::HEADER_LEN_U32.saturating_add(done);
-        if !stage.read_staged(offset, buf) {
+        if !stage.read_staged(done, buf) {
             return false;
         }
         crc.update(buf);
-        done = done.saturating_add(take);
+        done += take;
+        rest -= take;
     }
     crc.finalize() == expected
 }
@@ -814,12 +823,12 @@ mod tests {
     }
 
     impl super::SelfStaging for FakeBand {
-        fn read_staged(&mut self, offset: u32, buf: &mut [u8]) -> bool {
+        fn read_staged(&mut self, offset: u16, buf: &mut [u8]) -> bool {
             self.reads += 1;
             if self.fail_after.is_some_and(|limit| self.reads > limit) {
                 return false;
             }
-            let start = usize::try_from(offset).unwrap();
+            let start = usize::from(offset);
             let Some(bytes) = self.image.get(start..start + buf.len()) else {
                 return false;
             };
@@ -905,6 +914,16 @@ mod tests {
             run_self_session(&mut rig, &payload),
             SessionStatus::NvmError
         );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn empty_payload_never_arms() {
+        // An empty image would arm a walk that erases the whole app region.
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&[]);
+
+        assert_eq!(run_self_session(&mut rig, &[]), SessionStatus::NvmError);
         assert!(!rig.handler.self_update_armed());
     }
 

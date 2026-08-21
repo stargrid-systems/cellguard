@@ -231,7 +231,7 @@ fn halt() -> ! {
 struct NoStaging;
 
 impl SelfStaging for NoStaging {
-    fn read_staged(&mut self, _offset: u32, _buf: &mut [u8]) -> bool {
+    fn read_staged(&mut self, _offset: u16, _buf: &mut [u8]) -> bool {
         false
     }
 }
