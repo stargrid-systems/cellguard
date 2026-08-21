@@ -1,6 +1,16 @@
 [workspace]
 resolver = "3"
-members = ["ads131m08", "avrxt-hal", "cat25", "cellguard-protocol", "crc", "p3t1755", "tca9535", "updi"]
+members = [
+    "ads131m08",
+    "avrxt-hal",
+    "cat25",
+    "cellboot",
+    "cellguard-protocol",
+    "crc",
+    "p3t1755",
+    "tca9535",
+    "updi",
+]
 
 [workspace.package]
 authors = ["Simon Berger <simon@siku2.io>"]
@@ -33,12 +43,21 @@ unwrap_used = "warn"
 
 [workspace.dependencies]
 avrxt-hal = { path = "avrxt-hal" }
+cat25 = { path = "cat25" }
+cellagent = { path = "cellagent" }
+cellboot = { path = "cellboot" }
+cellcore = { path = "cellcore" }
+cellguard-panic = { path = "cellguard-panic" }
+cellguard-protocol = { path = "cellguard-protocol" }
+cellprog = { path = "cellprog" }
 crc = { path = "crc" }
+updi = { path = "updi" }
 
 avr-device = { version = "0.8", default-features = false }
 embedded-hal = { version = "1", default-features = false }
 embedded-hal-mock = { version = "0.11", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
+hmac-sha256 = { version = "1", default-features = false }
 ufmt = { version = "0.2", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
 
