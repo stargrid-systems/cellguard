@@ -11,6 +11,7 @@ use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, KEY_LEN, NackReason, Response};
+use crate::update::session_driver::StagedImage;
 use crate::update::verify::Verifier;
 
 /// Where one image is staged within an [`ImageStore`].
@@ -338,6 +339,20 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         self.state.staged = StagedState::Empty;
         self.state.staged_region = None;
         self.state.last_outcome = outcome;
+    }
+}
+
+/// The session driver streams the committed image straight out of the
+/// agent's store: the master owns the staging EEPROMs, and the programmer
+/// servant has no EEPROM access of its own.
+impl<S: ImageStore, K: KeyStore, St: StateStore> StagedImage for UpdateAgent<'_, S, K, St> {
+    fn read_staged(&mut self, region: Region, offset: u32, buf: &mut [u8]) -> bool {
+        let Some(slot) = self.layout.slot(region) else {
+            return false;
+        };
+        self.store
+            .read(slot.offset.saturating_add(offset), buf)
+            .is_ok()
     }
 }
 

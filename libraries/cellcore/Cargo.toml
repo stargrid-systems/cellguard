@@ -13,6 +13,7 @@ rust-version.workspace = true
 cellboot = { workspace = true }
 cellguard-protocol = { workspace = true, features = ["bootloader"] }
 crc = { workspace = true }
+embedded-io = { workspace = true }
 # opt_size rolls the SHA-256 round functions instead of fully inlining them.
 # On AVR this is a 14 KiB flash saving. The verify path is paced by the
 # 9600-baud field bus, so the throughput loss is invisible.
