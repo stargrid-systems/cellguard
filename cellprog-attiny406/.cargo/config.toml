@@ -1,0 +1,12 @@
+[build]
+target = "avr-none"
+# The avr-none linker script sizes the text region from the deviceinfo note,
+# so the full 4K flash of the ATtiny406 is already bound. -mrelax lets the
+# linker shrink call/jump sequences. rustc never passes it itself.
+rustflags = ["-C", "target-cpu=attiny406", "-C", "link-arg=-mrelax"]
+
+[target.'cfg(target_arch = "avr")']
+runner = "ravedude"
+
+[unstable]
+build-std = ["core"]
