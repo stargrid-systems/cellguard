@@ -134,6 +134,7 @@ dependencies = [
  "cellboot",
  "cellcore",
  "cellguard-protocol",
+ "crc",
  "embedded-io",
 ]
 
