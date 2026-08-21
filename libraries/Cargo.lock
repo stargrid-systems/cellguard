@@ -97,6 +97,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellagent"
+version = "0.1.0"
+dependencies = [
+ "cellguard-protocol",
+ "embedded-io",
+]
+
+[[package]]
 name = "cellboot"
 version = "0.1.0"
 dependencies = [
@@ -105,6 +113,27 @@ dependencies = [
  "crc",
  "embedded-hal",
  "embedded-hal-mock",
+]
+
+[[package]]
+name = "cellcore"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-panic",
+ "cellguard-protocol",
+ "crc",
+ "hmac-sha256",
+]
+
+[[package]]
+name = "cellcore-runtime"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellcore",
+ "cellguard-protocol",
+ "embedded-io",
 ]
 
 [[package]]
@@ -121,6 +150,16 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "zerocopy",
+]
+
+[[package]]
+name = "cellprog"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-protocol",
+ "crc",
+ "updi",
 ]
 
 [[package]]
@@ -263,6 +302,12 @@ checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
 ]
+
+[[package]]
+name = "hmac-sha256"
+version = "1.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
 name = "icu_collections"
