@@ -1,0 +1,39 @@
+cargo-features = ["panic-immediate-abort"]
+[package]
+name = "cellagent-attiny406"
+version = "0.1.0"
+description = "Cellagent firmware for the production CellGuard board (ATTINY406)."
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+rust-version = "1.93"
+
+[[bin]]
+name = "cellagent-attiny406"
+test = false
+bench = false
+
+[dependencies]
+avr-device = { version = "0.8", features = ["attiny406", "rt"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
+cellagent = { path = "../libraries/cellagent" }
+cellguard-protocol = { path = "../libraries/cellguard-protocol" }
+embedded-hal = { version = "1", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+
+[profile.dev]
+panic = "immediate-abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "immediate-abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "z"

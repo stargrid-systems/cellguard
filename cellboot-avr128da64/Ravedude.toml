@@ -1,13 +1,13 @@
 [general]
 
 [board]
-name = "avr128db48"
+name = "avr128da64"
 
 [board.reset]
 automatic = true
 
 [board.avrdude]
-programmer = "pkobn_updi"
-partno = "avr128db48"
+programmer = "pickit_basic_updi"
+partno = "avr128da64"
 baudrate = -1
 do-chip-erase = true

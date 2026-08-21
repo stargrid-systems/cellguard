@@ -1,13 +1,13 @@
 [general]
 
 [board]
-name = "attiny416"
+name = "attiny406"
 
 [board.reset]
 automatic = true
 
 [board.avrdude]
-programmer = "xplainedmini_updi"
-partno = "attiny416"
+programmer = "pickit_basic_updi"
+partno = "attiny406"
 baudrate = -1
 do-chip-erase = true
