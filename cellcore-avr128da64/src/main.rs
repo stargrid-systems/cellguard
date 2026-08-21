@@ -310,6 +310,7 @@ impl TelemetryHandler for BoardBalancing {
         self.inner.tick(now);
         if let Ok(now) = u16::try_from(now) {
             self.inner.hw_mut().heartbeat(now);
+            self.inner.hw_mut().poll_alive(now);
         }
     }
 }

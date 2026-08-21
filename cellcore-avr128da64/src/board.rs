@@ -29,6 +29,9 @@ use tca9535::{Address, Configuration, Output as ExpanderOut, PinIndex as Pin, Tc
 /// per the cellprog supervision contract.
 const HEARTBEAT_TICKS: u16 = 256;
 
+/// ALIVE freshness window in RTC ticks: four missed 256-tick toggles.
+const ALIVE_WINDOW_TICKS: u16 = 1024;
+
 const PWM_TOP: u16 = avrxt_hal::tcd::MAX_TOP;
 /// Bleed-PWM clock: 24 MHz / 4 = 6 MHz, so the ramp modulates at ~1.47 kHz.
 const PWM_PRESCALE: PwmPrescaler = PwmPrescaler::Div4;
@@ -112,6 +115,8 @@ pub struct Board {
     alive: Input,
     last_alive: bool,
     alive_edge_seen: bool,
+    last_alive_edge: u16,
+    now: u16,
     last_heartbeat: u16,
     /// ADC A (U800): cell voltages on ch0-3, LM61 on ch4.
     adc_a: Option<Adc>,
@@ -234,6 +239,8 @@ impl Board {
             alive,
             last_alive: false,
             alive_edge_seen: false,
+            last_alive_edge: 0,
+            now: 0,
             last_heartbeat: 0,
             adc_a,
             adc_b,
@@ -293,11 +300,13 @@ impl Board {
         }
     }
 
-    pub fn poll_alive(&mut self) {
+    pub fn poll_alive(&mut self, now: u16) {
+        self.now = now;
         let level = self.alive.is_high().unwrap_or(self.last_alive);
         if level != self.last_alive {
             self.last_alive = level;
             self.alive_edge_seen = true;
+            self.last_alive_edge = now;
         }
     }
 
@@ -426,8 +435,8 @@ impl BalancingHw for Board {
     }
 
     fn cellagent_alive(&mut self) -> bool {
-        self.poll_alive();
-        self.alive_edge_seen
+        self.poll_alive(self.now);
+        self.alive_edge_seen && self.now.wrapping_sub(self.last_alive_edge) < ALIVE_WINDOW_TICKS
     }
 }
 
