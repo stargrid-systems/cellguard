@@ -413,7 +413,8 @@ impl BalancingHw for Board {
             }
         }
         out[1] = self.lm61_centi;
-        // Slot 2 (routed cellagent LM61) stays invalid in this revision.
+        // Slot 2 is served by the balancing layer from its routed-poll
+        // cache.
     }
 
     fn tiny_all_off(&mut self) -> bool {

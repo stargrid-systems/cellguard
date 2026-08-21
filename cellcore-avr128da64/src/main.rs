@@ -247,6 +247,7 @@ fn main() -> ! {
     loop {
         runtime.tick(u32::from(rtc.count()));
         runtime.try_service();
+        runtime.try_poll_agent_temp();
     }
 }
 
@@ -298,6 +299,10 @@ impl TelemetryHandler for BoardBalancing {
         {
             self.inner.note_gate_mask(mask);
         }
+    }
+
+    fn note_agent_temp(&mut self, temp: Option<i16>) {
+        self.inner.note_agent_temp(temp);
     }
 
     fn on_tick(&mut self, now: u32) {

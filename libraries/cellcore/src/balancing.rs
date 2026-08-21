@@ -6,6 +6,9 @@
 //! The bleed actuators start safe (masks and duty zero) and the refresh
 //! timeout trips them back to zero when the host stops sending bleed
 //! commands. The timeout is inert until the first command arms it.
+//!
+//! Temps slot 2 serves the routed cellagent sensor from a cache that
+//! [`Balancing::note_agent_temp`] refreshes.
 
 use cellguard_protocol::{
     CELLS, Kind, RAILS, RailSnapshot, Snapshot, TEMP_INVALID, TEMPS, TempSnapshot, decode_bleed,
@@ -15,6 +18,10 @@ use cellguard_protocol::{
 /// Caller ticks (any free-running unit) after which an unrefreshed bleed
 /// command trips to the safe state.
 pub const DEFAULT_BLEED_TIMEOUT_TICKS: u32 = 4096;
+
+/// Missed routed temperature polls before the cached cellagent reading
+/// expires to `TEMP_INVALID`.
+const AGENT_TEMP_MISS_LIMIT: u8 = 3;
 
 /// The hardware seam behind the balancing layer.
 ///
@@ -38,7 +45,8 @@ pub trait BalancingHw {
     /// Fills the latest rail snapshot.
     fn rails(&mut self, out: &mut RailSnapshot);
     /// Fills the latest temperature snapshot, `TEMP_INVALID` per missing
-    /// sensor.
+    /// sensor. The layer overwrites the routed-cellagent slot from its
+    /// cache.
     fn temps(&mut self, out: &mut TempSnapshot);
     /// The `TINY_ALL_OFF` net readback.
     fn tiny_all_off(&mut self) -> bool;
@@ -58,6 +66,8 @@ pub struct Balancing<H: BalancingHw> {
     timeout_ticks: u32,
     last_refresh: u32,
     armed: bool,
+    agent_temp: i16,
+    agent_temp_misses: u8,
 }
 
 impl<H: BalancingHw> Balancing<H> {
@@ -79,6 +89,8 @@ impl<H: BalancingHw> Balancing<H> {
             timeout_ticks,
             last_refresh: 0,
             armed: false,
+            agent_temp: TEMP_INVALID,
+            agent_temp_misses: 0,
         }
     }
 
@@ -98,6 +110,20 @@ impl<H: BalancingHw> Balancing<H> {
     /// [`Kind::BalancerStatus`].
     pub const fn note_gate_mask(&mut self, mask: u8) {
         self.gate_mask = mask;
+    }
+
+    /// Records one routed cellagent temperature poll. Consecutive misses
+    /// expire the cache to `TEMP_INVALID`.
+    pub const fn note_agent_temp(&mut self, temp: Option<i16>) {
+        if let Some(centi) = temp {
+            self.agent_temp = centi;
+            self.agent_temp_misses = 0;
+        } else {
+            self.agent_temp_misses = self.agent_temp_misses.saturating_add(1);
+            if self.agent_temp_misses >= AGENT_TEMP_MISS_LIMIT {
+                self.agent_temp = TEMP_INVALID;
+            }
+        }
     }
 
     /// Drives the bleed safe when the refresh window elapsed. Call every
@@ -152,6 +178,9 @@ impl<H: BalancingHw> Balancing<H> {
             Kind::ReadTemperatures => {
                 let mut temps = [TEMP_INVALID; TEMPS];
                 self.hw.temps(&mut temps);
+                // Slot 2 is the routed cellagent sensor, served from the
+                // poll cache.
+                temps[2] = self.agent_temp;
                 let payload = encode_temps(&temps, out)?;
                 Some((Kind::Temperatures, payload.len()))
             }
@@ -329,6 +358,36 @@ mod tests {
         let temps = cellguard_protocol::decode_temps(out.get(..len).unwrap()).unwrap();
         assert_eq!(temps[0], 2500);
         assert_eq!(temps[2], cellguard_protocol::TEMP_INVALID);
+    }
+
+    #[test]
+    fn routed_agent_temp_serves_slot_2_with_staleness() {
+        fn read_slot2(bal: &mut Balancing<MockHw>) -> i16 {
+            let mut out = [0u8; 32];
+            let (_, len) = bal
+                .handle(0, cellguard_protocol::Kind::ReadTemperatures, &[], &mut out)
+                .unwrap();
+            let temps = cellguard_protocol::decode_temps(out.get(..len).unwrap()).unwrap();
+            temps[2]
+        }
+
+        let mut bal = Balancing::new(MockHw::default());
+
+        assert_eq!(read_slot2(&mut bal), cellguard_protocol::TEMP_INVALID);
+
+        bal.note_agent_temp(Some(2100));
+        assert_eq!(read_slot2(&mut bal), 2100);
+
+        bal.note_agent_temp(None);
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), 2100);
+
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), cellguard_protocol::TEMP_INVALID);
+
+        bal.note_agent_temp(Some(2050));
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), 2050);
     }
 
     #[test]

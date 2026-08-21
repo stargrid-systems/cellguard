@@ -4,8 +4,12 @@
 //! `embedded_io` links: the field bus, the `cellprog` programmer, and an
 //! optional downstream node. It forwards agent-bound bus frames and relays
 //! replies, answers node-local kinds through a [`TelemetryHandler`], and
-//! hands committed images to the programmer. A silent agent gets a
+//! Hands committed images to the programmer. A silent agent gets a
 //! `Nack(RouteTimeout)` so the host exchange always completes.
+//!
+//! [`CoreRuntime::try_poll_agent_temp`] polls the downstream node's
+//! temperature on a slow cadence and reports it through the telemetry
+//! handler. Like a forward it is bounded, but it stays off the bus.
 //!
 //! Handoff is consume-before-signal: [`Dispatcher::take_pending_program`]
 //! clears the staged image before the programmer is signaled, so a reset
@@ -37,6 +41,13 @@ const AGENT_RX: usize = 64;
 /// how long a dead node can stall the bus.
 const AGENT_REPLY_BUDGET: usize = 40;
 
+/// Routed temperature poll cadence in ticks (about 1 s at 1.024 kHz).
+const AGENT_TEMP_POLL_TICKS: u32 = 1024;
+
+/// Raw length of the poll request: header, empty payload, payload CRC.
+const AGENT_TEMP_REQ_RAW: usize =
+    cellguard_protocol::HEADER_LEN + cellguard_protocol::PAYLOAD_CRC_LEN;
+
 /// Payload byte of the `RouteTimeout` nack.
 const ROUTE_TIMEOUT_PAYLOAD: [u8; 1] = [NackReason::RouteTimeout.to_code()];
 
@@ -65,6 +76,10 @@ pub trait TelemetryHandler {
     /// Observes a frame after it was written to the agent link.
     fn note_forwarded(&mut self, _kind: Kind, _payload: &[u8]) {}
 
+    /// Outcome of one routed temperature poll: centi-degrees Celsius, or
+    /// `None` for a missed reply.
+    fn note_agent_temp(&mut self, _temp: Option<i16>) {}
+
     /// Called once per [`CoreRuntime::tick`].
     fn on_tick(&mut self, _now: u32) {}
 }
@@ -92,6 +107,7 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     route_decoder: Decoder,
     route_scratch: [u8; AGENT_RX],
     reply_decoder: Decoder,
+    last_agent_poll: u32,
     telemetry: Option<&'k mut dyn TelemetryHandler>,
     now: u32,
 }
@@ -132,6 +148,7 @@ where
             route_decoder: Decoder::new(),
             route_scratch: [0; AGENT_RX],
             reply_decoder: Decoder::new(),
+            last_agent_poll: 0,
             telemetry: None,
             now: 0,
         }
@@ -152,6 +169,23 @@ where
         self.now = now;
         if let Some(handler) = self.telemetry.as_deref_mut() {
             handler.on_tick(now);
+        }
+    }
+
+    /// Runs one routed [`Kind::ReadTemperature`] poll when the cadence
+    /// elapsed and reports the outcome through
+    /// [`TelemetryHandler::note_agent_temp`]. No-ops without a telemetry
+    /// handler or before one cadence period passed.
+    pub fn try_poll_agent_temp(&mut self) {
+        if self.telemetry.is_none()
+            || self.now.wrapping_sub(self.last_agent_poll) < AGENT_TEMP_POLL_TICKS
+        {
+            return;
+        }
+        self.last_agent_poll = self.now;
+        let temp = self.poll_agent_temp();
+        if let Some(handler) = self.telemetry.as_deref_mut() {
+            handler.note_agent_temp(temp);
         }
     }
 
@@ -293,6 +327,36 @@ where
                 let _ = self.bus.write_all(bytes);
             }
         }
+    }
+
+    /// Exchanges one `ReadTemperature` request with the downstream node.
+    fn poll_agent_temp(&mut self) -> Option<i16> {
+        let mut raw = [0u8; AGENT_TEMP_REQ_RAW];
+        let len = Packet::write(self.agent_id, Kind::ReadTemperature, &[], &mut raw).ok()?;
+        let mut wire = [0u8; cellguard_protocol::max_encoded_len(AGENT_TEMP_REQ_RAW)];
+        let wire_len = cellguard_protocol::encode_frame(raw.get(..len)?, &mut wire)?;
+        self.agent
+            .write_all(wire.get(..wire_len).unwrap_or(&[]))
+            .ok()?;
+
+        let mut scratch = [0u8; AGENT_RX];
+        self.reply_decoder = Decoder::new();
+        for _ in 0..AGENT_REPLY_BUDGET {
+            let mut byte = [0u8; 1];
+            if self.agent.read_exact(&mut byte).is_err() {
+                continue;
+            }
+            if let Ok(Some(n)) = self.reply_decoder.feed(byte[0], &mut scratch)
+                && let Some(reply) = scratch.get(..n)
+            {
+                return Packet::parse(reply)
+                    .ok()
+                    .filter(|packet| packet.kind == Kind::Temperature)
+                    .and_then(|packet| <[u8; 2]>::try_from(packet.payload).ok())
+                    .map(i16::from_le_bytes);
+            }
+        }
+        None
     }
 
     fn forward(&mut self, frame: &[u8]) {
@@ -547,6 +611,10 @@ mod tests {
     }
 
     fn decode_kind(frame: &[u8]) -> Kind {
+        decode_packet(frame).1
+    }
+
+    fn decode_packet(frame: &[u8]) -> (u8, Kind) {
         let mut scratch = [0u8; 128];
         let mut decoder = Decoder::new();
         let mut done = None;
@@ -556,7 +624,8 @@ mod tests {
             }
         }
         let n = done.expect("response frame did not complete");
-        Packet::parse(&scratch[..n]).unwrap().kind
+        let packet = Packet::parse(&scratch[..n]).unwrap();
+        (packet.id, packet.kind)
     }
 
     #[test]
@@ -718,6 +787,7 @@ mod tests {
 
     struct EchoHandler {
         noted: std::vec::Vec<(Kind, u8)>,
+        agent_temps: std::vec::Vec<Option<i16>>,
     }
 
     impl super::TelemetryHandler for EchoHandler {
@@ -743,6 +813,10 @@ mod tests {
                 self.noted.push((kind, mask));
             }
         }
+
+        fn note_agent_temp(&mut self, temp: Option<i16>) {
+            self.agent_temps.push(temp);
+        }
     }
 
     #[test]
@@ -751,6 +825,7 @@ mod tests {
         let runtime = runtime_with(&mut key, PersistentState::new(1));
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
         };
         let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
         feed_command(runtime, Kind::ReadRails, &[]);
@@ -763,6 +838,7 @@ mod tests {
         let runtime = runtime_with(&mut key, PersistentState::new(1));
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
         };
         let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
         feed_command(runtime, Kind::BootProbe, &[]);
@@ -775,11 +851,80 @@ mod tests {
         let runtime = runtime_with(&mut key, PersistentState::new(1));
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
         };
         {
             let mut runtime = runtime.with_telemetry(&mut handler, NODE);
             feed_from(&mut runtime, AGENT_ID, Kind::SetBalancer, &[0x03]);
         }
         assert_eq!(handler.noted, std::vec![(Kind::SetBalancer, 0x03)]);
+    }
+
+    #[test]
+    fn agent_temp_poll_reaches_the_handler_and_not_the_bus() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime
+                .agent
+                .queue_packet(Kind::Temperature, &2500i16.to_le_bytes());
+
+            runtime.tick(0);
+            runtime.try_poll_agent_temp();
+            assert!(runtime.agent.written.is_empty());
+
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+
+            let (id, kind) = decode_packet(&runtime.agent.written);
+            assert_eq!(kind, Kind::ReadTemperature);
+            assert_eq!(id, AGENT_ID);
+            assert!(runtime.bus.written.is_empty());
+        }
+        assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
+    }
+
+    #[test]
+    fn agent_temp_poll_misses_silently_and_respects_the_cadence() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+            let sent = runtime.agent.written.len();
+
+            runtime.try_poll_agent_temp();
+            assert_eq!(runtime.agent.written.len(), sent);
+            assert!(runtime.bus.written.is_empty());
+        }
+        assert_eq!(handler.agent_temps, std::vec![None]);
+    }
+
+    #[test]
+    fn agent_temp_poll_rejects_a_foreign_reply() {
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.agent.queue_packet(Kind::BalancerGateState, &[0x03]);
+
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+        }
+        assert_eq!(handler.agent_temps, std::vec![None]);
     }
 }
