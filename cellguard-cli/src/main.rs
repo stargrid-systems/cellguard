@@ -14,7 +14,8 @@ use cellboot::state::{PersistentState, STATE_LEN};
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
-    BalancerStatus, Kind, RAIL_ORDER, RailSnapshot, Snapshot, TEMP_ORDER, decode_temps,
+    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RailSnapshot, Snapshot,
+    TEMP_ORDER, decode_serial, decode_temps,
 };
 use clap::{Parser, Subcommand};
 use hmac_sha256::HMAC;
@@ -75,6 +76,16 @@ enum Command {
     },
     /// Probe the cellcore for its current updater state.
     Probe {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        node: u8,
+        #[arg(long, default_value_t = DEFAULT_BAUD)]
+        baud: u32,
+    },
+    /// Query a node's identity: board model and revision, serial number,
+    /// firmware version.
+    Identity {
         #[arg(long)]
         port: String,
         #[arg(long)]
@@ -275,6 +286,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             &port, node, &payload, target, key, target_id, fw_version, baud, chunk_size,
         ),
         Command::Probe { port, node, baud } => probe(&port, node, baud),
+        Command::Identity { port, node, baud } => identity(&port, node, baud),
         Command::PanicProbe { port, node, baud } => panic_probe(&port, node, baud),
         Command::Cells { port, node, baud } => {
             read_snapshot(&port, node, baud, SnapshotKind::Cells)
@@ -419,6 +431,38 @@ fn probe(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
         }
         other => Err(format!("expected BootStatus, got {other:?}").into()),
     }
+}
+
+fn identity(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
+    let mut transport = Transport::open(port, baud)?;
+    let id_reply = transport.exchange(node, Kind::ReadDeviceId, &[])?;
+    if id_reply.kind != Kind::DeviceId {
+        return Err(format!("expected DeviceId, got {:?}", id_reply.kind).into());
+    }
+    let id = DeviceId::decode(&id_reply.payload).ok_or("device-id payload has the wrong shape")?;
+
+    let serial_reply = transport.exchange(node, Kind::ReadSerialNumber, &[])?;
+    if serial_reply.kind != Kind::SerialNumber {
+        return Err(format!("expected SerialNumber, got {:?}", serial_reply.kind).into());
+    }
+    let serial =
+        decode_serial(&serial_reply.payload).ok_or("serial payload has the wrong shape")?;
+
+    if id.board_model == BOARD_MODEL_UNPROVISIONED {
+        println!("board  : unprovisioned (no factory record)");
+    } else {
+        println!(
+            "board  : model {} rev {}",
+            id.board_model, id.board_revision
+        );
+    }
+    println!("fw     : {}", id.fw_version);
+    print!("serial : ");
+    for byte in serial {
+        print!("{byte:02X}");
+    }
+    println!();
+    Ok(())
 }
 
 fn panic_probe(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
