@@ -12,6 +12,7 @@
 #![no_std]
 #![warn(missing_docs)]
 
+pub mod identity;
 pub mod kat;
 pub mod update;
 
