@@ -11,8 +11,8 @@
 //! [`Balancing::note_agent_temp`] refreshes.
 
 use cellguard_protocol::{
-    CELLS, Kind, RAILS, RailSnapshot, Snapshot, TEMP_INVALID, TEMPS, TempSnapshot, decode_bleed,
-    decode_pwm, encode_temps,
+    CELLS, Kind, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAILS, RailSnapshot, Snapshot, TEMP_INVALID,
+    TEMPS, TempSnapshot, decode_bleed, decode_pwm, encode_temps,
 };
 
 /// Caller ticks (any free-running unit) after which an unrefreshed bleed
@@ -63,6 +63,7 @@ pub struct Balancing<H: BalancingHw> {
     en_36r5: u8,
     duty: u16,
     gate_mask: u8,
+    power_flags: u8,
     timeout_ticks: u32,
     last_refresh: u32,
     armed: bool,
@@ -86,6 +87,7 @@ impl<H: BalancingHw> Balancing<H> {
             en_36r5: 0,
             duty: 0,
             gate_mask: 0,
+            power_flags: 0,
             timeout_ticks,
             last_refresh: 0,
             armed: false,
@@ -192,8 +194,8 @@ impl<H: BalancingHw> Balancing<H> {
                     gate_mask: self.gate_mask,
                     tiny_all_off: self.hw.tiny_all_off(),
                     emergency_gate_off: self.hw.emergency_gate_off(),
-                    active_balancer_on: false,
-                    en_all: false,
+                    active_balancer_on: self.power_flags & POWER_ACTIVE_BALANCER != 0,
+                    en_all: self.power_flags & POWER_EN_ALL != 0,
                     cellagent_alive: self.hw.cellagent_alive(),
                 };
                 let payload = status.encode(out)?;
@@ -219,6 +221,7 @@ impl<H: BalancingHw> Balancing<H> {
             Kind::SetPower => {
                 let flags = *payload.first()?;
                 self.hw.set_power(flags);
+                self.power_flags = flags;
                 Some((Kind::Ack, 0))
             }
             Kind::GateOff => {
@@ -418,6 +421,42 @@ mod tests {
         assert_eq!(status.gate_mask, 0x03);
         assert!(status.tiny_all_off);
         assert!(status.cellagent_alive);
+    }
+
+    #[test]
+    fn balancer_status_mirrors_commanded_power_flags() {
+        let mut bal = Balancing::new(MockHw::default());
+        let mut out = [0u8; 32];
+
+        let mut read_status = |bal: &mut Balancing<MockHw>| {
+            let (_, len) = bal
+                .handle(
+                    0,
+                    cellguard_protocol::Kind::ReadBalancerStatus,
+                    &[],
+                    &mut out,
+                )
+                .unwrap();
+            BalancerStatus::decode(out.get(..len).unwrap()).unwrap()
+        };
+
+        let status = read_status(&mut bal);
+        assert!(!status.active_balancer_on);
+        assert!(!status.en_all);
+
+        handle(
+            &mut bal,
+            cellguard_protocol::Kind::SetPower,
+            &[POWER_ACTIVE_BALANCER | POWER_EN_ALL],
+        );
+        let status = read_status(&mut bal);
+        assert!(status.active_balancer_on);
+        assert!(status.en_all);
+
+        handle(&mut bal, cellguard_protocol::Kind::SetPower, &[0]);
+        let status = read_status(&mut bal);
+        assert!(!status.active_balancer_on);
+        assert!(!status.en_all);
     }
 
     #[test]
