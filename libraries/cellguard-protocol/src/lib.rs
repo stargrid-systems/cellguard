@@ -27,6 +27,12 @@ pub use self::session::{
 };
 #[cfg(all(feature = "bootloader", feature = "page-read"))]
 pub use self::session::{decode_read, encode_read};
+#[cfg(feature = "telemetry")]
+pub use self::telemetry::{
+    BalancerStatus, BleedMasks, CELLS, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAIL_ORDER, RAILS,
+    RailSnapshot, Seq, Snapshot, TEMP_INVALID, TEMP_ORDER, TEMPS, TempSnapshot, decode_bleed,
+    decode_pwm, decode_temps, encode_temps,
+};
 
 mod cobs;
 mod kind;
@@ -35,3 +41,5 @@ mod packet;
 mod prog;
 #[cfg(feature = "bootloader")]
 mod session;
+#[cfg(feature = "telemetry")]
+mod telemetry;
