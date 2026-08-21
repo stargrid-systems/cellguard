@@ -4,7 +4,8 @@
 
 //! CellGuard programmer firmware for the ATtiny406 (U1003). The cellcore
 //! orchestrates: the programmer executes one session command at a time and
-//! reflashes the cellagent over UPDI (mux channel 3).
+//! reflashes the cellagent over UPDI (mux channel 3). Self-update sessions
+//! are rejected until the verification path fits the flash (issue #60).
 //!
 //! The single USART reaches the outside only through the U1004 analog mux.
 //! While it talks UPDI its UART link to the cellcore is physically
@@ -31,6 +32,7 @@ use avrxt_hal::usart::{Frame, Usart};
 use avrxt_hal::wdt::{Period, Watchdog};
 use cellguard_protocol::Encoder;
 use cellprog::SessionHandler;
+use cellprog::session::SelfStaging;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use updi::TinyProgrammer;
@@ -125,11 +127,13 @@ fn main() -> ! {
             // Command traffic proves the cellcore is alive: refresh the
             // heartbeat baseline.
             last_edge = last_command;
-            link_to_updi(&mut usart, &mut mux);
+            if handler.uses_updi(&cmd) {
+                link_to_updi(&mut usart, &mut mux);
+            }
             let reply = {
                 let link = UsartUpdiLink::new(&mut usart);
                 let mut prog = TinyProgrammer::new(link);
-                handler.execute(cmd, &mut prog)
+                handler.execute(cmd, &mut prog, &mut NoStaging)
             };
             link_to_uart(&mut usart, &mut mux);
             send_reply(&mut usart, reply);
@@ -220,6 +224,16 @@ fn halt() -> ! {
         reason = "nothing left to do after a fatal init error"
     )]
     loop {}
+}
+
+/// Self-update staging stub: `End` of a self session always fails its
+/// verification check, so nothing ever arms (issue #60).
+struct NoStaging;
+
+impl SelfStaging for NoStaging {
+    fn read_staged(&mut self, _offset: u32, _buf: &mut [u8]) -> bool {
+        false
+    }
 }
 
 const _: () = assert!(
