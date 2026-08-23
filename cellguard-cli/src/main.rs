@@ -14,8 +14,8 @@ use cellboot::state::{PersistentState, STATE_LEN};
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
-    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RailSnapshot, Snapshot,
-    TEMP_ORDER, TempSnapshot, decode_serial,
+    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RailSnapshot,
+    SerialNumber, Snapshot, TEMP_ORDER, TempSnapshot,
 };
 use clap::{Parser, Subcommand};
 use hmac_sha256::HMAC;
@@ -446,7 +446,7 @@ fn identity(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
         return Err(format!("expected SerialNumber, got {:?}", serial_reply.kind).into());
     }
     let serial =
-        decode_serial(&serial_reply.payload).ok_or("serial payload has the wrong shape")?;
+        SerialNumber::decode(&serial_reply.payload).ok_or("serial payload has the wrong shape")?;
 
     if id.board_model == BOARD_MODEL_UNPROVISIONED {
         println!("board  : unprovisioned (no factory record)");
@@ -458,7 +458,7 @@ fn identity(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
     }
     println!("fw     : {}", id.fw_version);
     print!("serial : ");
-    for byte in serial {
+    for byte in serial.serial {
         print!("{byte:02X}");
     }
     println!();

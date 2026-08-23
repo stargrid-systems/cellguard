@@ -59,28 +59,40 @@ impl DeviceId {
     }
 }
 
-/// Encodes `serial` into `out`, returning the payload slice for a
-/// [`Kind::SerialNumber`](crate::Kind::SerialNumber) reply.
-#[must_use]
-pub fn encode_serial<'a>(serial: &[u8; SERIAL_LEN], out: &'a mut [u8]) -> Option<&'a [u8]> {
-    out.get_mut(..SERIAL_LEN)?.copy_from_slice(serial);
-    out.get(..SERIAL_LEN)
+/// Decoded [`Kind::SerialNumber`](crate::Kind::SerialNumber) payload: the
+/// node's serial number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SerialNumber {
+    /// The serial bytes.
+    pub serial: [u8; SERIAL_LEN],
 }
 
-/// Decodes a [`Kind::SerialNumber`](crate::Kind::SerialNumber) payload into
-/// the node's serial number.
-#[must_use]
-pub fn decode_serial(payload: &[u8]) -> Option<[u8; SERIAL_LEN]> {
-    let (serial, rest) = payload.split_first_chunk::<SERIAL_LEN>()?;
-    if !rest.is_empty() {
-        return None;
+impl SerialNumber {
+    /// Payload length of the encoded form.
+    pub const PAYLOAD_LEN: usize = SERIAL_LEN;
+
+    /// Encodes into `out`, returning the payload slice.
+    #[must_use]
+    pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(&self.serial);
+        out.get(..Self::PAYLOAD_LEN)
     }
-    Some(*serial)
+
+    /// Decodes a payload into a serial number.
+    #[must_use]
+    pub fn decode(payload: &[u8]) -> Option<Self> {
+        let (serial, rest) = payload.split_first_chunk::<SERIAL_LEN>()?;
+        if !rest.is_empty() {
+            return None;
+        }
+        Some(Self { serial: *serial })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BOARD_MODEL_UNPROVISIONED, DeviceId, SERIAL_LEN, decode_serial, encode_serial};
+    use super::{BOARD_MODEL_UNPROVISIONED, DeviceId, SERIAL_LEN, SerialNumber};
 
     #[test]
     fn device_id_roundtrips() {
@@ -112,14 +124,16 @@ mod tests {
 
     #[test]
     fn serial_roundtrips_and_rejects_wrong_length() {
-        let serial = [0xAB; SERIAL_LEN];
+        let serial = SerialNumber {
+            serial: [0xAB; SERIAL_LEN],
+        };
         let mut buf = [0u8; SERIAL_LEN + 1];
-        let payload = encode_serial(&serial, &mut buf).expect("fits");
-        assert_eq!(decode_serial(payload), Some(serial));
+        let payload = serial.encode(&mut buf).expect("fits");
+        assert_eq!(SerialNumber::decode(payload), Some(serial));
 
-        assert!(decode_serial(&[0; SERIAL_LEN - 1]).is_none());
-        assert!(decode_serial(&[0; SERIAL_LEN + 1]).is_none());
-        assert!(encode_serial(&serial, &mut [0u8; SERIAL_LEN - 1]).is_none());
+        assert!(SerialNumber::decode(&[0; SERIAL_LEN - 1]).is_none());
+        assert!(SerialNumber::decode(&[0; SERIAL_LEN + 1]).is_none());
+        assert!(serial.encode(&mut [0u8; SERIAL_LEN - 1]).is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! never blocks boot.
 
 use cellboot::factory::{FactoryRecord, SERIAL_LEN as FACTORY_SERIAL_LEN};
-use cellguard_protocol::{BOARD_MODEL_UNPROVISIONED, DeviceId, Kind, SERIAL_LEN, encode_serial};
+use cellguard_protocol::{BOARD_MODEL_UNPROVISIONED, DeviceId, Kind, SERIAL_LEN, SerialNumber};
 
 // The factory record and the wire payload must agree on the serial width.
 const _: () = assert!(FACTORY_SERIAL_LEN == SERIAL_LEN);
@@ -16,7 +16,7 @@ const _: () = assert!(FACTORY_SERIAL_LEN == SERIAL_LEN);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Identity {
     id: DeviceId,
-    serial: [u8; SERIAL_LEN],
+    serial: SerialNumber,
 }
 
 impl Identity {
@@ -37,12 +37,16 @@ impl Identity {
                 board_revision: 0,
                 fw_version,
             },
-            serial: chip_serial,
+            serial: SerialNumber {
+                serial: chip_serial,
+            },
         };
         if let Some(record) = record {
             this.id.board_model = record.board_model;
             this.id.board_revision = record.board_revision;
-            this.serial = record.serial_cellcore;
+            this.serial = SerialNumber {
+                serial: record.serial_cellcore,
+            };
         }
         this
     }
@@ -57,7 +61,7 @@ impl Identity {
                 Some((Kind::DeviceId, payload.len()))
             }
             Kind::ReadSerialNumber => {
-                let payload = encode_serial(&self.serial, out)?;
+                let payload = self.serial.encode(out)?;
                 Some((Kind::SerialNumber, payload.len()))
             }
             _ => None,
@@ -68,7 +72,7 @@ impl Identity {
 #[cfg(test)]
 mod tests {
     use cellboot::factory::FactoryRecord;
-    use cellguard_protocol::{DeviceId, Kind, decode_serial};
+    use cellguard_protocol::{DeviceId, Kind, SerialNumber};
 
     use super::Identity;
 
@@ -105,7 +109,10 @@ mod tests {
 
         let (kind, out, len) = reply(&identity, Kind::ReadSerialNumber).unwrap();
         assert_eq!(kind, Kind::SerialNumber);
-        assert_eq!(decode_serial(&out[..len]), Some([0x11; 16]));
+        assert_eq!(
+            SerialNumber::decode(&out[..len]),
+            Some(SerialNumber { serial: [0x11; 16] })
+        );
     }
 
     #[test]
@@ -123,7 +130,12 @@ mod tests {
 
         let (kind, out, len) = reply(&identity, Kind::ReadSerialNumber).unwrap();
         assert_eq!(kind, Kind::SerialNumber);
-        assert_eq!(decode_serial(&out[..len]), Some(CHIP_SERIAL));
+        assert_eq!(
+            SerialNumber::decode(&out[..len]),
+            Some(SerialNumber {
+                serial: CHIP_SERIAL
+            })
+        );
     }
 
     #[test]
