@@ -10,6 +10,13 @@
 //! Every message has a [`Kind`] from one central registry, so a trace tool can
 //! decode any packet. Bootloader kinds are gated behind the `bootloader`
 //! feature but keep fixed discriminants.
+//!
+//! # Features
+//!
+//! - `bootloader`: the bootloader message kinds, the staged-image programmer
+//!   messages, and the programmer session protocol.
+//! - `page-read`: the session flash read-back path (`PageRead`/`PageData`).
+//!   Costs 722 B on the `ATtiny406` servant.
 #![no_std]
 #![warn(missing_docs)]
 
@@ -18,9 +25,15 @@ pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 #[cfg(feature = "bootloader")]
 pub use self::prog::{ProgSource, ProgStatus};
+#[cfg(feature = "bootloader")]
+pub use self::session::{
+    Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget,
+};
 
 mod cobs;
 mod kind;
 mod packet;
 #[cfg(feature = "bootloader")]
 mod prog;
+#[cfg(feature = "bootloader")]
+mod session;
