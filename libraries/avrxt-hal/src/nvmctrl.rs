@@ -2,7 +2,9 @@
 //! 0/1-series.
 //!
 //! [`Nvm`] reads and writes the on-chip EEPROM. On AVR128 it also writes the
-//! USERROW and self-programs flash.
+//! USERROW and self-programs flash. On tinyAVR 0/1-series it additionally
+//! exposes the flash self-write primitives (`load_flash_byte`,
+//! `erase_write_flash_page`) used by self-update walkers.
 //!
 //! EEPROM write models differ by family. AVR128 arms `EEERWR` first, then each
 //! store triggers a byte-level erase-write. tinyAVR stores first, then `ERWP`
@@ -24,6 +26,8 @@ use core::mem::MaybeUninit;
 
 #[cfg(feature = "_avr128")]
 pub use self::avr128::FlashInstance;
+#[cfg(feature = "_tinyavr")]
+pub use self::tinyavr::{FLASH_BASE, FLASH_PAGE_SIZE, FLASH_SIZE};
 use crate::clock::CcpUnlock;
 
 #[cfg(feature = "_avr128")]

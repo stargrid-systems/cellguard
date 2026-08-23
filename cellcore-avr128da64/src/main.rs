@@ -58,6 +58,8 @@ const CELLAGENT_ID: u8 = 3;
 const TARGET_ID: u16 = 1;
 /// The cellagent's image target_id. Placeholder until provisioned.
 const CELLAGENT_TARGET_ID: u16 = 2;
+/// The cellprog programmer's image target_id. Placeholder until provisioned.
+const CELLPROG_TARGET_ID: u16 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -146,11 +148,15 @@ fn main() -> ! {
     let staging = StagingLayout {
         application: RegionSlot {
             offset: 0,
-            capacity: layout::CELLAGENT_OFFSET,
+            capacity: layout::CELLPROG_OFFSET,
         },
         cellagent: RegionSlot {
             offset: layout::CELLAGENT_OFFSET,
             capacity: layout::CELLAGENT_CAP,
+        },
+        cellprog: RegionSlot {
+            offset: layout::CELLPROG_OFFSET,
+            capacity: layout::CELLPROG_CAP,
         },
         bootloader: RegionSlot {
             offset: layout::BOOT_BAND_OFFSET,
@@ -162,6 +168,7 @@ fn main() -> ! {
         staging,
         TARGET_ID,
         CELLAGENT_TARGET_ID,
+        CELLPROG_TARGET_ID,
         &mut key,
         NoKeyStore,
         state_store,

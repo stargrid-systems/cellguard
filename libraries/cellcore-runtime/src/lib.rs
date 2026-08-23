@@ -383,7 +383,8 @@ mod tests {
     use cellcore::update::dispatch::Dispatcher;
     use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
     use cellguard_protocol::{
-        Command as WireCommand, Decoder, Encoder, Kind, Packet, Reply, SessionStatus, encode_frame,
+        Command as WireCommand, Decoder, Encoder, Kind, Packet, Reply, SessionStatus,
+        SessionTarget, encode_frame,
     };
 
     use super::CoreRuntime;
@@ -391,6 +392,7 @@ mod tests {
     const KEY: [u8; 16] = *b"runtime-test-key";
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
+    const CELLPROG_TARGET: u16 = 0x35;
     const NODE: u8 = 7;
     const AGENT_ID: u8 = 9;
     const CAP: usize = 4096;
@@ -611,7 +613,11 @@ mod tests {
             },
             cellagent: RegionSlot {
                 offset: 3072,
-                capacity: 1024,
+                capacity: 512,
+            },
+            cellprog: RegionSlot {
+                offset: 3584,
+                capacity: 512,
             },
         }
     }
@@ -619,10 +625,15 @@ mod tests {
     /// Writes an image (header plus payload) into the region's slot of the
     /// shared backing store, as a commit would have.
     fn stage_image(backing: &RefCell<[u8; CAP]>, region: Region, payload: &[u8]) {
+        let target_id = match region {
+            Region::CellagentApp => CELLAGENT_TARGET,
+            Region::CellprogApp => CELLPROG_TARGET,
+            _ => TARGET,
+        };
         let header = ImageHeader {
             kind: ImageKind::Application,
             region,
-            target_id: TARGET,
+            target_id,
             fw_version: 9,
             payload_len: u32::try_from(payload.len()).unwrap(),
             payload_crc32: crc::checksum32(payload),
@@ -632,6 +643,7 @@ mod tests {
             Region::ApplicationCode => 0,
             Region::Bootloader => 2048,
             Region::CellagentApp => 3072,
+            Region::CellprogApp => 3584,
             _ => panic!("not a firmware slot"),
         };
         let mut image = header.serialize().to_vec();
@@ -650,6 +662,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             key,
             NoKeyStore,
             NullStateStore,
@@ -787,6 +800,42 @@ mod tests {
         runtime.service(0);
         run_session(&mut runtime);
         assert_eq!(runtime.prog.commands.len(), sent);
+    }
+
+    #[test]
+    fn committed_cellprog_image_drives_a_self_session() {
+        let payload = [0xA5u8; 70];
+        let backing = RefCell::new([0u8; CAP]);
+        stage_image(&backing, Region::CellprogApp, &payload);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready_state(Region::CellprogApp), &backing);
+
+        run_session(&mut runtime);
+
+        assert_eq!(
+            runtime.prog.flash, payload,
+            "the servant received the image"
+        );
+        // The session must open with a Begin for the self target.
+        let mut scratch = [0u8; 96];
+        let mut decoder = Decoder::new();
+        let mut first = None;
+        for &byte in &runtime.prog.written {
+            if let Ok(Some(n)) = decoder.feed(byte, &mut scratch) {
+                first = Some(n);
+                break;
+            }
+        }
+        let n = first.expect("at least one frame was written");
+        assert_eq!(
+            WireCommand::decode(&scratch[..n]).unwrap(),
+            WireCommand::Begin(SessionTarget::CellprogSelf)
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().staged,
+            StagedState::Empty,
+            "the image is consumed"
+        );
     }
 
     #[test]

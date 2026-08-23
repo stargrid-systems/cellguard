@@ -17,9 +17,11 @@
 //! idempotent, and a re-sent `Begin` restarts from blank flash. A non-`Ok`
 //! status reply is authoritative and fails the session without retry.
 //!
-//! Only the cellagent is flashed over this link ([`target_for`]). An
-//! application image stays staged for the bootloader's self-program path,
-//! and a bootloader image is bench-only.
+//! The cellagent and the programmer are flashed over this link
+//! ([`target_for`]): the programmer receives a `CellprogSelf` session, which
+//! stages the image and rewrites itself after reset. An application image
+//! stays staged for the bootloader's self-program path, and a bootloader
+//! image is bench-only.
 
 use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, Region};
 use cellguard_protocol::{
@@ -66,6 +68,7 @@ pub trait StagedImage {
 pub const fn target_for(region: Region) -> Option<SessionTarget> {
     match region {
         Region::CellagentApp => Some(SessionTarget::Cellagent),
+        Region::CellprogApp => Some(SessionTarget::CellprogSelf),
         _ => None,
     }
 }
@@ -672,10 +675,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_cellagent_region_maps_to_a_target() {
+    fn cellagent_and_cellprog_regions_map_to_targets() {
         assert_eq!(
             target_for(Region::CellagentApp),
             Some(SessionTarget::Cellagent)
+        );
+        assert_eq!(
+            target_for(Region::CellprogApp),
+            Some(SessionTarget::CellprogSelf)
         );
         assert_eq!(target_for(Region::ApplicationCode), None);
         assert_eq!(target_for(Region::Bootloader), None);
