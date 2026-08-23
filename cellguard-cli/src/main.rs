@@ -15,7 +15,7 @@ use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
     BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RailSnapshot, Snapshot,
-    TEMP_ORDER, decode_serial, decode_temps,
+    TEMP_ORDER, TempSnapshot, decode_serial,
 };
 use clap::{Parser, Subcommand};
 use hmac_sha256::HMAC;
@@ -643,8 +643,8 @@ fn temps(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
     if reply.kind != Kind::Temperatures {
         return Err(format!("expected Temperatures, got {:?}", reply.kind).into());
     }
-    let temps = decode_temps(&reply.payload).ok_or("temps payload has the wrong shape")?;
-    for (name, centi) in TEMP_ORDER.iter().zip(temps) {
+    let temps = TempSnapshot::decode(&reply.payload).ok_or("temps payload has the wrong shape")?;
+    for (name, centi) in TEMP_ORDER.iter().zip(temps.temps) {
         if centi == cellguard_protocol::TEMP_INVALID {
             println!("{name}: unavailable");
         } else {
