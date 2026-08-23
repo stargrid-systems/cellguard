@@ -125,30 +125,39 @@ impl RailSnapshot {
 }
 
 /// Decoded temperature frame: centi-degrees Celsius in [`TEMP_ORDER`].
-pub type TempSnapshot = [i16; TEMPS];
-
-/// Encodes a temperature snapshot into `out`, returning the payload slice.
-#[must_use]
-pub fn encode_temps<'a>(temps: &TempSnapshot, out: &'a mut [u8]) -> Option<&'a [u8]> {
-    let len = TEMPS * 2;
-    for (slot, temp) in out.get_mut(..len)?.chunks_exact_mut(2).zip(temps) {
-        slot.copy_from_slice(&temp.to_le_bytes());
-    }
-    out.get(..len)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TempSnapshot {
+    /// Centi-degrees Celsius, one entry per sensor in [`TEMP_ORDER`].
+    pub temps: [i16; TEMPS],
 }
 
-/// Decodes a temperature snapshot payload.
-#[must_use]
-pub fn decode_temps(payload: &[u8]) -> Option<TempSnapshot> {
-    if payload.len() != TEMPS * 2 {
-        return None;
+impl TempSnapshot {
+    /// Payload length of the encoded form.
+    pub const PAYLOAD_LEN: usize = TEMPS * 2;
+
+    /// Encodes into `out`, returning the payload slice.
+    #[must_use]
+    pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
+        let buf = out.get_mut(..Self::PAYLOAD_LEN)?.chunks_exact_mut(2);
+        for (slot, temp) in buf.zip(self.temps) {
+            slot.copy_from_slice(&temp.to_le_bytes());
+        }
+        out.get(..Self::PAYLOAD_LEN)
     }
-    let mut temps = [0i16; TEMPS];
-    for (slot, temp) in temps.iter_mut().zip(payload.chunks_exact(2)) {
-        let bytes: [u8; 2] = temp.try_into().ok()?;
-        *slot = i16::from_le_bytes(bytes);
+
+    /// Decodes a payload into a temperature snapshot.
+    #[must_use]
+    pub fn decode(payload: &[u8]) -> Option<Self> {
+        if payload.len() != Self::PAYLOAD_LEN {
+            return None;
+        }
+        let mut temps = [0i16; TEMPS];
+        for (slot, temp) in temps.iter_mut().zip(payload.chunks_exact(2)) {
+            let bytes: [u8; 2] = temp.try_into().ok()?;
+            *slot = i16::from_le_bytes(bytes);
+        }
+        Some(Self { temps })
     }
-    Some(temps)
 }
 
 /// Decoded [`Kind::BalancerStatus`](crate::Kind::BalancerStatus) payload.
@@ -239,22 +248,34 @@ pub struct BleedMasks {
     pub en_36r5: u8,
 }
 
-/// Decodes a [`Kind::SetBleed`](crate::Kind::SetBleed) payload.
-#[must_use]
-pub fn decode_bleed(payload: &[u8]) -> Option<BleedMasks> {
-    let (masks, _) = payload.split_first_chunk::<2>()?;
-    Some(BleedMasks {
-        en_3r6: masks[0],
-        en_36r5: masks[1],
-    })
+impl BleedMasks {
+    /// Decodes a [`Kind::SetBleed`](crate::Kind::SetBleed) payload.
+    #[must_use]
+    pub fn decode(payload: &[u8]) -> Option<Self> {
+        let (masks, _) = payload.split_first_chunk::<2>()?;
+        Some(Self {
+            en_3r6: masks[0],
+            en_36r5: masks[1],
+        })
+    }
 }
 
-/// Decodes a [`Kind::SetBleedPwm`](crate::Kind::SetBleedPwm) payload into a
-/// duty in 1/65536 units.
-#[must_use]
-pub fn decode_pwm(payload: &[u8]) -> Option<u16> {
-    let (bytes, _) = payload.split_first_chunk::<2>()?;
-    Some(u16::from_le_bytes(*bytes))
+/// Decoded [`Kind::SetBleedPwm`](crate::Kind::SetBleedPwm) payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BleedPwm {
+    /// PWM duty in 1/65536 units. 0 disables modulation.
+    pub duty: u16,
+}
+
+impl BleedPwm {
+    /// Decodes a [`Kind::SetBleedPwm`](crate::Kind::SetBleedPwm) payload.
+    #[must_use]
+    pub fn decode(payload: &[u8]) -> Option<Self> {
+        let (bytes, _) = payload.split_first_chunk::<2>()?;
+        Some(Self {
+            duty: u16::from_le_bytes(*bytes),
+        })
+    }
 }
 
 /// `SetPower` flag: `ACTIVE_BALANCER_ON` (U103 P04).
@@ -265,8 +286,8 @@ pub const POWER_EN_ALL: u8 = 1 << 1;
 #[cfg(test)]
 mod tests {
     use super::{
-        BalancerStatus, BleedMasks, RAIL_ORDER, RAILS, RailSnapshot, Snapshot, TEMP_INVALID,
-        TEMP_ORDER, TEMPS, TempSnapshot, decode_bleed, decode_pwm, decode_temps, encode_temps,
+        BalancerStatus, BleedMasks, BleedPwm, RAIL_ORDER, RAILS, RailSnapshot, Snapshot,
+        TEMP_INVALID, TEMP_ORDER, TEMPS, TempSnapshot,
     };
 
     #[test]
@@ -278,6 +299,13 @@ mod tests {
         let mut buf = [0u8; Snapshot::PAYLOAD_LEN + 4];
         let payload = snap.encode(&mut buf).expect("fits");
         assert_eq!(payload.len(), Snapshot::PAYLOAD_LEN);
+        assert_eq!(
+            payload,
+            &[
+                0x7F, 0x56, 0x34, 0x12, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x80, 0xFF,
+                0xFF, 0xFF, 0x7F,
+            ]
+        );
         assert_eq!(Snapshot::decode(payload), Some(snap));
     }
 
@@ -304,6 +332,13 @@ mod tests {
         };
         let mut buf = [0u8; RailSnapshot::PAYLOAD_LEN + 2];
         let payload = snap.encode(&mut buf).expect("fits");
+        assert_eq!(
+            payload,
+            &[
+                0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x05, 0x00, 0x06, 0x00, 0xFF, 0x03,
+                0x00, 0x00,
+            ]
+        );
         assert_eq!(RailSnapshot::decode(payload), Some(snap));
     }
 
@@ -320,10 +355,23 @@ mod tests {
     #[test]
     fn temps_roundtrip_and_order_documented() {
         assert_eq!(TEMP_ORDER.len(), TEMPS);
-        let temps: TempSnapshot = [2500, -1010, TEMP_INVALID];
-        let mut buf = [0u8; TEMPS * 2 + 1];
-        let payload = encode_temps(&temps, &mut buf).expect("fits");
-        assert_eq!(decode_temps(payload), Some(temps));
+        let snap = TempSnapshot {
+            temps: [2500, -1010, TEMP_INVALID],
+        };
+        let mut buf = [0u8; TempSnapshot::PAYLOAD_LEN + 1];
+        let payload = snap.encode(&mut buf).expect("fits");
+        assert_eq!(payload, &[0xC4, 0x09, 0x0E, 0xFC, 0x00, 0x80]);
+        assert_eq!(TempSnapshot::decode(payload), Some(snap));
+    }
+
+    #[test]
+    fn temps_reject_wrong_length() {
+        assert!(TempSnapshot::decode(&[0; 5]).is_none());
+        assert!(
+            TempSnapshot { temps: [0; TEMPS] }
+                .encode(&mut [0u8; 5])
+                .is_none()
+        );
     }
 
     #[test]
@@ -341,21 +389,25 @@ mod tests {
         };
         let mut buf = [0u8; BalancerStatus::PAYLOAD_LEN + 1];
         let payload = status.encode(&mut buf).expect("fits");
+        assert_eq!(payload, &[0x0F, 0x05, 0xEF, 0xBE, 0x03, 0x1B, 0x00, 0x00]);
         assert_eq!(BalancerStatus::decode(payload), Some(status));
     }
 
     #[test]
     fn bleed_and_pwm_decode() {
         assert_eq!(
-            decode_bleed(&[0x0F, 0x01]),
+            BleedMasks::decode(&[0x0F, 0x01]),
             Some(BleedMasks {
                 en_3r6: 0x0F,
                 en_36r5: 0x01
             })
         );
-        assert!(decode_bleed(&[0x01]).is_none());
-        assert_eq!(decode_pwm(&[0xEF, 0xBE]), Some(0xBEEF));
-        assert!(decode_pwm(&[0xEF]).is_none());
+        assert!(BleedMasks::decode(&[0x01]).is_none());
+        assert_eq!(
+            BleedPwm::decode(&[0xEF, 0xBE]),
+            Some(BleedPwm { duty: 0xBEEF })
+        );
+        assert!(BleedPwm::decode(&[0xEF]).is_none());
     }
 
     #[test]

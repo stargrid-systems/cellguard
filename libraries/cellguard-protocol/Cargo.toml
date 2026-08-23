@@ -12,7 +12,6 @@ rust-version.workspace = true
 [features]
 bootloader = []
 page-read = []
-# Adds the balancing-test telemetry kinds and payload codecs. Additive.
 telemetry = []
 
 [dependencies]
