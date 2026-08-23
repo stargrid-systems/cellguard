@@ -14,7 +14,7 @@ use cellboot::state::{PersistentState, STATE_LEN};
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
-    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RailSnapshot,
+    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RAILS, RailSnapshot,
     SerialNumber, Snapshot, TEMP_ORDER, TempSnapshot,
 };
 use clap::{Parser, Subcommand};
@@ -119,6 +119,9 @@ enum Command {
         node: u8,
         #[arg(long, default_value_t = DEFAULT_BAUD)]
         baud: u32,
+        /// S501 `INA_REF` position: `gnd` (unipolar) or `3v3` (bipolar).
+        #[arg(long, value_enum, default_value_t = InaRef::Gnd)]
+        ina_ref: InaRef,
     },
     /// Read the supply rails.
     Rails {
@@ -289,11 +292,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Command::Identity { port, node, baud } => identity(&port, node, baud),
         Command::PanicProbe { port, node, baud } => panic_probe(&port, node, baud),
         Command::Cells { port, node, baud } => {
-            read_snapshot(&port, node, baud, SnapshotKind::Cells)
+            read_snapshot(&port, node, baud, SnapshotKind::Cells, InaRef::Gnd)
         }
-        Command::Currents { port, node, baud } => {
-            read_snapshot(&port, node, baud, SnapshotKind::Currents)
-        }
+        Command::Currents {
+            port,
+            node,
+            baud,
+            ina_ref,
+        } => read_snapshot(&port, node, baud, SnapshotKind::Currents, ina_ref),
         Command::Rails { port, node, baud } => rails(&port, node, baud),
         Command::Temps { port, node, baud } => temps(&port, node, baud),
         Command::Balance { port, node, baud } => balance_status(&port, node, baud),
@@ -582,12 +588,34 @@ const ADS_FULL_SCALE: f32 = 8_388_608.0;
 const CELL_DIVIDER: f32 = 0.0330;
 /// INA190 transfer: volts out per ampere (47 mOhm shunt, gain 25).
 const INA_V_PER_A: f32 = 1.175;
+/// INA190 REF midpoint in bipolar mode (S501 at 3.15 V).
+const INA_REF_MIDPOINT_V: f32 = 3.15;
+
+/// The S501 `INA_REF` bench position the current readings assume.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum InaRef {
+    /// Unipolar: zero current reads zero.
+    #[value(name = "gnd")]
+    Gnd,
+    /// Bipolar: the output centers at the INA190 REF midpoint.
+    #[value(name = "3v3")]
+    V3v3,
+}
+
+fn ina_amps(volts: f32, ina_ref: InaRef) -> f32 {
+    let offset = match ina_ref {
+        InaRef::Gnd => 0.0,
+        InaRef::V3v3 => INA_REF_MIDPOINT_V,
+    };
+    (volts - offset) / INA_V_PER_A
+}
 
 fn read_snapshot(
     port: &str,
     node: u8,
     baud: u32,
     what: SnapshotKind,
+    ina_ref: InaRef,
 ) -> Result<(), Box<dyn Error>> {
     let mut transport = Transport::open(port, baud)?;
     let (kind, label) = match what {
@@ -613,7 +641,7 @@ fn read_snapshot(
                 println!("cell {}: raw {code}, {:.1} mV", i + 1, cell_mv);
             }
             SnapshotKind::Currents => {
-                let amps = volts / INA_V_PER_A;
+                let amps = ina_amps(volts, ina_ref);
                 println!("cell {}: raw {code}, {amps:.3} A", i + 1);
             }
         }
@@ -622,6 +650,12 @@ fn read_snapshot(
     Ok(())
 }
 
+/// Rail ADC reference in millivolts (10-bit MCU ADC).
+const RAIL_VREF_MV: f32 = 1800.0;
+const RAIL_FULL_SCALE: f32 = 1023.0;
+/// Rail divider ratios in `RAIL_ORDER`.
+const RAIL_DIVIDER: [f32; RAILS] = [0.052, 0.052, 0.0536, 0.0536, 0.0536, 0.5, 0.0536, 0.0536];
+
 fn rails(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
     let mut transport = Transport::open(port, baud)?;
     let reply = transport.exchange(node, Kind::ReadRails, &[])?;
@@ -629,8 +663,9 @@ fn rails(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
         return Err(format!("expected Rails, got {:?}", reply.kind).into());
     }
     let snap = RailSnapshot::decode(&reply.payload).ok_or("rails payload has the wrong shape")?;
-    for (name, code) in RAIL_ORDER.iter().zip(snap.codes) {
-        println!("{name}: {code}");
+    for ((name, code), ratio) in RAIL_ORDER.iter().zip(snap.codes).zip(RAIL_DIVIDER) {
+        let mv = f32::from(code) / RAIL_FULL_SCALE * RAIL_VREF_MV / ratio;
+        println!("{name}: {code} ({mv:.0} mV)");
     }
     Ok(())
 }

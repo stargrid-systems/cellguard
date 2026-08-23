@@ -6,15 +6,22 @@
 //! The bleed actuators start safe (masks and duty zero) and the refresh
 //! timeout trips them back to zero when the host stops sending bleed
 //! commands. The timeout is inert until the first command arms it.
+//!
+//! Temps slot 2 serves the routed cellagent sensor from a cache that
+//! [`Balancing::note_agent_temp`] refreshes.
 
 use cellguard_protocol::{
-    BleedMasks, BleedPwm, CELLS, Kind, RAILS, RailSnapshot, Snapshot, TEMP_INVALID, TEMPS,
-    TempSnapshot,
+    BleedMasks, BleedPwm, CELLS, Kind, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAILS, RailSnapshot,
+    Snapshot, TEMP_INVALID, TEMPS, TempSnapshot,
 };
 
 /// Caller ticks (any free-running unit) after which an unrefreshed bleed
 /// command trips to the safe state.
 pub const DEFAULT_BLEED_TIMEOUT_TICKS: u32 = 4096;
+
+/// Missed routed temperature polls before the cached cellagent reading
+/// expires to `TEMP_INVALID`.
+const AGENT_TEMP_MISS_LIMIT: u8 = 3;
 
 /// The hardware seam behind the balancing layer.
 ///
@@ -38,7 +45,8 @@ pub trait BalancingHw {
     /// Fills the latest rail snapshot.
     fn rails(&mut self, out: &mut RailSnapshot);
     /// Fills the latest temperature snapshot, `TEMP_INVALID` per missing
-    /// sensor.
+    /// sensor. The layer overwrites the routed-cellagent slot from its
+    /// cache.
     fn temps(&mut self, out: &mut TempSnapshot);
     /// The `TINY_ALL_OFF` net readback.
     fn tiny_all_off(&mut self) -> bool;
@@ -55,9 +63,12 @@ pub struct Balancing<H: BalancingHw> {
     en_36r5: u8,
     duty: u16,
     gate_mask: u8,
+    power_flags: u8,
     timeout_ticks: u32,
     last_refresh: u32,
     armed: bool,
+    agent_temp: i16,
+    agent_temp_misses: u8,
 }
 
 impl<H: BalancingHw> Balancing<H> {
@@ -76,9 +87,12 @@ impl<H: BalancingHw> Balancing<H> {
             en_36r5: 0,
             duty: 0,
             gate_mask: 0,
+            power_flags: 0,
             timeout_ticks,
             last_refresh: 0,
             armed: false,
+            agent_temp: TEMP_INVALID,
+            agent_temp_misses: 0,
         }
     }
 
@@ -98,6 +112,20 @@ impl<H: BalancingHw> Balancing<H> {
     /// [`Kind::BalancerStatus`].
     pub const fn note_gate_mask(&mut self, mask: u8) {
         self.gate_mask = mask;
+    }
+
+    /// Records one routed cellagent temperature poll. Consecutive misses
+    /// expire the cache to `TEMP_INVALID`.
+    pub const fn note_agent_temp(&mut self, temp: Option<i16>) {
+        if let Some(centi) = temp {
+            self.agent_temp = centi;
+            self.agent_temp_misses = 0;
+        } else {
+            self.agent_temp_misses = self.agent_temp_misses.saturating_add(1);
+            if self.agent_temp_misses >= AGENT_TEMP_MISS_LIMIT {
+                self.agent_temp = TEMP_INVALID;
+            }
+        }
     }
 
     /// Drives the bleed safe when the refresh window elapsed. Call every
@@ -154,6 +182,9 @@ impl<H: BalancingHw> Balancing<H> {
                     temps: [TEMP_INVALID; TEMPS],
                 };
                 self.hw.temps(&mut snap);
+                // Slot 2 is the routed cellagent sensor, served from the
+                // poll cache.
+                snap.temps[2] = self.agent_temp;
                 let payload = snap.encode(out)?;
                 Some((Kind::Temperatures, payload.len()))
             }
@@ -165,8 +196,8 @@ impl<H: BalancingHw> Balancing<H> {
                     gate_mask: self.gate_mask,
                     tiny_all_off: self.hw.tiny_all_off(),
                     emergency_gate_off: self.hw.emergency_gate_off(),
-                    active_balancer_on: false,
-                    en_all: false,
+                    active_balancer_on: self.power_flags & POWER_ACTIVE_BALANCER != 0,
+                    en_all: self.power_flags & POWER_EN_ALL != 0,
                     cellagent_alive: self.hw.cellagent_alive(),
                 };
                 let payload = status.encode(out)?;
@@ -192,6 +223,7 @@ impl<H: BalancingHw> Balancing<H> {
             Kind::SetPower => {
                 let flags = *payload.first()?;
                 self.hw.set_power(flags);
+                self.power_flags = flags;
                 Some((Kind::Ack, 0))
             }
             Kind::GateOff => {
@@ -335,6 +367,36 @@ mod tests {
     }
 
     #[test]
+    fn routed_agent_temp_serves_slot_2_with_staleness() {
+        fn read_slot2(bal: &mut Balancing<MockHw>) -> i16 {
+            let mut out = [0u8; 32];
+            let (_, len) = bal
+                .handle(0, cellguard_protocol::Kind::ReadTemperatures, &[], &mut out)
+                .unwrap();
+            let snap = cellguard_protocol::TempSnapshot::decode(out.get(..len).unwrap()).unwrap();
+            snap.temps[2]
+        }
+
+        let mut bal = Balancing::new(MockHw::default());
+
+        assert_eq!(read_slot2(&mut bal), cellguard_protocol::TEMP_INVALID);
+
+        bal.note_agent_temp(Some(2100));
+        assert_eq!(read_slot2(&mut bal), 2100);
+
+        bal.note_agent_temp(None);
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), 2100);
+
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), cellguard_protocol::TEMP_INVALID);
+
+        bal.note_agent_temp(Some(2050));
+        bal.note_agent_temp(None);
+        assert_eq!(read_slot2(&mut bal), 2050);
+    }
+
+    #[test]
     fn balancer_status_reports_commanded_and_sensed_state() {
         let mut bal = Balancing::new(MockHw::default());
         bal.hw.tiny_all_off = true;
@@ -362,6 +424,42 @@ mod tests {
         assert_eq!(status.gate_mask, 0x03);
         assert!(status.tiny_all_off);
         assert!(status.cellagent_alive);
+    }
+
+    #[test]
+    fn balancer_status_mirrors_commanded_power_flags() {
+        let mut bal = Balancing::new(MockHw::default());
+        let mut out = [0u8; 32];
+
+        let mut read_status = |bal: &mut Balancing<MockHw>| {
+            let (_, len) = bal
+                .handle(
+                    0,
+                    cellguard_protocol::Kind::ReadBalancerStatus,
+                    &[],
+                    &mut out,
+                )
+                .unwrap();
+            BalancerStatus::decode(out.get(..len).unwrap()).unwrap()
+        };
+
+        let status = read_status(&mut bal);
+        assert!(!status.active_balancer_on);
+        assert!(!status.en_all);
+
+        handle(
+            &mut bal,
+            cellguard_protocol::Kind::SetPower,
+            &[POWER_ACTIVE_BALANCER | POWER_EN_ALL],
+        );
+        let status = read_status(&mut bal);
+        assert!(status.active_balancer_on);
+        assert!(status.en_all);
+
+        handle(&mut bal, cellguard_protocol::Kind::SetPower, &[0]);
+        let status = read_status(&mut bal);
+        assert!(!status.active_balancer_on);
+        assert!(!status.en_all);
     }
 
     #[test]

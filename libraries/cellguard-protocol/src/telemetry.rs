@@ -10,7 +10,8 @@
 //! - Balance currents (ADC B ch0-3, IR mux position 0): INA190A1 over a 47
 //!   milliohm shunt, gain 25, so `I = V_out / (1.175 V/A)` where `V_out`
 //!   converts from the code like a cell voltage. The `INA_REF` switch `S501`
-//!   selects the range: GND is unipolar, 3.15 V is bipolar.
+//!   selects the range: GND is unipolar, 3.15 V is bipolar (subtract the REF
+//!   midpoint before scaling).
 //! - Rails: 10-bit MCU ADC with a 1.8 V reference. Divider scale: VBAT A/B =
 //!   0.052, `3V3`/`3V3B`/`5V0`/`12V_CON`/`20V_MOS` = 0.0536, `1V8AN` = 0.5.
 //! - Temperatures: centi-degrees Celsius, measured at the source.

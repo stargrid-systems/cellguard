@@ -271,6 +271,7 @@ fn main() -> ! {
     loop {
         runtime.tick(u32::from(rtc.count()));
         runtime.try_service();
+        runtime.try_poll_agent_temp();
     }
 }
 
@@ -330,11 +331,16 @@ impl TelemetryHandler for NodeTelemetry {
         }
     }
 
+    fn note_agent_temp(&mut self, temp: Option<i16>) {
+        self.balancing.note_agent_temp(temp);
+    }
+
     fn on_tick(&mut self, now: u32) {
         self.balancing.hw_mut().poll_adcs();
         self.balancing.tick(now);
         if let Ok(now) = u16::try_from(now) {
             self.balancing.hw_mut().heartbeat(now);
+            self.balancing.hw_mut().poll_alive(now);
         }
     }
 }
