@@ -1,0 +1,2 @@
+4096
+# Maximum flash footprint in bytes (avr-size text+data) on the 4K ATtiny406.

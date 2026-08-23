@@ -1,0 +1,3 @@
+122880
+# Maximum flash footprint in bytes (avr-size text+data). The AVR128DA64 app
+# section is the 120K after the 8K boot section.
