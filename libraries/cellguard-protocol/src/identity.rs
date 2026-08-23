@@ -5,6 +5,11 @@
 //! [`Kind::ReadSerialNumber`](crate::Kind::ReadSerialNumber) for its serial
 //! number. Payloads are little-endian throughout, like every other frame.
 
+use core::mem::size_of;
+
+use zerocopy::byteorder::little_endian::{U16, U32};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 /// Length of the serial number in a
 /// [`Kind::SerialNumber`](crate::Kind::SerialNumber) payload. Matches the
 /// AVR128 SIGROW serial and the factory record.
@@ -13,6 +18,15 @@ pub const SERIAL_LEN: usize = 16;
 /// Board model marking an unprovisioned board: the node has no factory
 /// record and reports its chip identity.
 pub const BOARD_MODEL_UNPROVISIONED: u16 = 0;
+
+/// Wire form of a [`DeviceId`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct DeviceIdWire {
+    board_model: U16,
+    board_revision: u8,
+    fw_version: U32,
+}
 
 /// Decoded [`Kind::DeviceId`](crate::Kind::DeviceId) payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,35 +42,38 @@ pub struct DeviceId {
 
 impl DeviceId {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = 7;
+    pub const PAYLOAD_LEN: usize = size_of::<DeviceIdWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
-        let buf = out.get_mut(..Self::PAYLOAD_LEN)?;
-        let (model, rest) = buf.split_at_mut(2);
-        model.copy_from_slice(&self.board_model.to_le_bytes());
-        let (revision, rest) = rest.split_first_mut()?;
-        *revision = self.board_revision;
-        rest.copy_from_slice(&self.fw_version.to_le_bytes());
+        let wire = DeviceIdWire {
+            board_model: U16::new(self.board_model),
+            board_revision: self.board_revision,
+            fw_version: U32::new(self.fw_version),
+        };
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a device id.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() != Self::PAYLOAD_LEN {
-            return None;
-        }
-        let (model, rest) = payload.split_first_chunk::<2>()?;
-        let (revision, rest) = rest.split_first_chunk::<1>()?;
-        let (fw_version, _) = rest.split_first_chunk::<4>()?;
+        let wire = DeviceIdWire::ref_from_bytes(payload).ok()?;
         Some(Self {
-            board_model: u16::from_le_bytes(*model),
-            board_revision: revision[0],
-            fw_version: u32::from_le_bytes(*fw_version),
+            board_model: wire.board_model.get(),
+            board_revision: wire.board_revision,
+            fw_version: wire.fw_version.get(),
         })
     }
+}
+
+/// Wire form of a [`SerialNumber`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct SerialNumberWire {
+    serial: [u8; SERIAL_LEN],
 }
 
 /// Decoded [`Kind::SerialNumber`](crate::Kind::SerialNumber) payload: the
@@ -69,24 +86,26 @@ pub struct SerialNumber {
 
 impl SerialNumber {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = SERIAL_LEN;
+    pub const PAYLOAD_LEN: usize = size_of::<SerialNumberWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
+        let wire = SerialNumberWire {
+            serial: self.serial,
+        };
         out.get_mut(..Self::PAYLOAD_LEN)?
-            .copy_from_slice(&self.serial);
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a serial number.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        let (serial, rest) = payload.split_first_chunk::<SERIAL_LEN>()?;
-        if !rest.is_empty() {
-            return None;
-        }
-        Some(Self { serial: *serial })
+        let wire = SerialNumberWire::ref_from_bytes(payload).ok()?;
+        Some(Self {
+            serial: wire.serial,
+        })
     }
 }
 
@@ -95,7 +114,7 @@ mod tests {
     use super::{BOARD_MODEL_UNPROVISIONED, DeviceId, SERIAL_LEN, SerialNumber};
 
     #[test]
-    fn device_id_roundtrips() {
+    fn device_id_wire_bytes_are_frozen() {
         let id = DeviceId {
             board_model: 0x1234,
             board_revision: 0x56,
@@ -103,7 +122,11 @@ mod tests {
         };
         let mut buf = [0u8; DeviceId::PAYLOAD_LEN + 3];
         let payload = id.encode(&mut buf).expect("fits");
-        assert_eq!(payload.len(), DeviceId::PAYLOAD_LEN);
+        assert_eq!(
+            payload,
+            &[0x34, 0x12, 0x56, 0xDE, 0xC0, 0xAD, 0x0B],
+            "model LE, revision, fw version LE"
+        );
         assert_eq!(DeviceId::decode(payload), Some(id));
     }
 
@@ -129,6 +152,7 @@ mod tests {
         };
         let mut buf = [0u8; SERIAL_LEN + 1];
         let payload = serial.encode(&mut buf).expect("fits");
+        assert_eq!(payload, &[0xAB; SERIAL_LEN]);
         assert_eq!(SerialNumber::decode(payload), Some(serial));
 
         assert!(SerialNumber::decode(&[0; SERIAL_LEN - 1]).is_none());
