@@ -102,7 +102,7 @@ fn main() -> ! {
                     clear(&nvm, &cpu, layout::PANIC_OFFSET);
                     dp.RSTCTRL.software_reset(&cpu);
                 }
-                Err(err) if programmer::retryable(&err) => {
+                Err(err) if err.retryable() => {
                     state.program_attempts += 1;
                     let _ = state_store.store(&state.serialize());
                     dp.RSTCTRL.software_reset(&cpu);

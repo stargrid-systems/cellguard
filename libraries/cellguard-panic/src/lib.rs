@@ -8,8 +8,8 @@
 //!
 //! # Features
 //!
-//! - `hal` (off by default): EEPROM-backed panic storage and the
-//!   `store_and_decide` policy. Requires `avrxt-hal`.
+//! - `hal`: EEPROM-backed panic storage and the `store_and_decide` policy.
+//!   Requires `avrxt-hal`.
 
 #![no_std]
 
