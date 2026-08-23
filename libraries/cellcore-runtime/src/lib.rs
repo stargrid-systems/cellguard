@@ -4,15 +4,23 @@
 //! `embedded_io` links: the field bus, the `cellprog` programmer, and an
 //! optional downstream node. It forwards agent-bound bus frames and relays
 //! replies, answers node-local kinds through a [`TelemetryHandler`], and
-//! hands committed images to the programmer. A silent agent gets a
-//! `Nack(RouteTimeout)` so the host exchange always completes.
+//! flashes committed cellagent images through the programmer session. A
+//! silent agent gets a `Nack(RouteTimeout)` so the host exchange always
+//! completes.
 //!
-//! Handoff is consume-before-signal: [`Dispatcher::take_pending_program`]
-//! clears the staged image before the programmer is signaled, so a reset
-//! mid-programming cannot re-trigger the same flash on reboot. The cost is
-//! a lost update if the programmer-link write fails. The programmer and
-//! agent links must have a receive timeout, because the runtime polls them
-//! one bounded read at a time.
+//! The session advances one step per service call, so a multi-second flash
+//! never stalls the event loop. The staged image is consumed before the
+//! session's first command (see [`Dispatcher::take_pending_program`]), so a
+//! reset mid-session cannot re-trigger the same flash on reboot.
+//! Application and bootloader images stay staged for their owners: the
+//! bootloader self-programs an application image, and a bootloader image is
+//! bench-only. A session failure is recorded through
+//! `UpdateAgent::record_program_failure`. A bus transfer that interleaves
+//! with a running session can overwrite the staged bytes mid-stream, but
+//! the only writer is the host that just committed the image.
+//!
+//! The programmer and agent links must have a receive timeout, because the
+//! runtime polls them one bounded read at a time.
 
 #![no_std]
 #![warn(missing_docs)]
@@ -20,12 +28,11 @@
 #[cfg(test)]
 extern crate std;
 
-use cellboot::image::Region;
 use cellboot::io::{ImageStore, KeyStore, StateStore};
 use cellcore::update::command::NackReason;
 use cellcore::update::dispatch::Dispatcher;
-use cellcore::update::handoff::{self, PROGRAM_WIRE, RESULT_FRAME};
-use cellguard_protocol::{Decoder, Header, Kind, Packet, ProgStatus};
+use cellcore::update::session_driver::{Progress, SessionDriver, target_for};
+use cellguard_protocol::{Decoder, Header, Kind, Packet};
 use embedded_io::{Read, Write};
 
 /// Receive budget for one forwarded agent frame. Agent-bound commands are
@@ -79,16 +86,11 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     prog: Prog,
     agent: Agent,
     agent_id: u8,
-    prog_id: u8,
     node_id: u8,
     /// Guards that `confirm_app_healthy` is persisted at most once per boot.
     app_confirmed: bool,
-    /// Set after a handoff frame is written, cleared when a `ProgResult`
-    /// reply arrives. While set, each serviced byte polls the programmer
-    /// link.
-    awaiting_prog_result: bool,
-    prog_decoder: Decoder,
-    prog_scratch: [u8; RESULT_FRAME],
+    /// Idle unless a cellagent flash is in flight.
+    session: SessionDriver,
     route_decoder: Decoder,
     route_scratch: [u8; AGENT_RX],
     reply_decoder: Decoder,
@@ -113,7 +115,6 @@ where
         dispatcher: Dispatcher<'k, S, K, St, RX>,
         bus: Bus,
         prog: Prog,
-        prog_id: u8,
         agent: Agent,
         agent_id: u8,
     ) -> Self {
@@ -123,12 +124,9 @@ where
             prog,
             agent,
             agent_id,
-            prog_id,
             node_id: 0,
             app_confirmed: false,
-            awaiting_prog_result: false,
-            prog_decoder: Decoder::new(),
-            prog_scratch: [0; RESULT_FRAME],
+            session: SessionDriver::new(),
             route_decoder: Decoder::new(),
             route_scratch: [0; AGENT_RX],
             reply_decoder: Decoder::new(),
@@ -168,15 +166,15 @@ where
     /// Attempts to read and service one bus byte.
     ///
     /// Returns immediately when no byte arrives within the bus receive
-    /// timeout, after polling an in-flight programmer reply.
+    /// timeout, after advancing an in-flight programming session.
     pub fn try_service(&mut self) {
         let mut buf = [0u8; 1];
         if self.bus.read_exact(&mut buf).is_ok()
             && let Some(&byte) = buf.first()
         {
             self.service(byte);
-        } else if self.awaiting_prog_result {
-            self.poll_prog_result();
+        } else {
+            self.pump_session();
         }
     }
 
@@ -184,7 +182,7 @@ where
     ///
     /// The first successful exchange in a boot also marks the running
     /// application healthy. Link errors are swallowed: a dropped bus
-    /// response is retried on the next byte, a dropped handoff is not.
+    /// response is retried on the next byte.
     pub fn service(&mut self, byte: u8) {
         self.route(byte);
         if let Some(response) = self.dispatcher.feed(byte) {
@@ -194,11 +192,32 @@ where
                 self.app_confirmed = true;
             }
         }
-        if let Some(region) = self.dispatcher.agent().pending_program() {
-            self.hand_off(region);
+        self.pump_session();
+    }
+
+    /// Starts a committed cellagent flash and advances an in-flight session
+    /// by one step. Regions the programmer link cannot flash stay staged,
+    /// and any session failure is recorded as a program failure.
+    fn pump_session(&mut self) {
+        if self.session.idle()
+            && let Some(region) = self.dispatcher.agent().pending_program()
+            && let Some(target) = target_for(region)
+        {
+            let _ = self.dispatcher.take_pending_program();
+            if self
+                .session
+                .start(target, region, self.dispatcher.agent_mut())
+                .is_err()
+            {
+                self.dispatcher.agent_mut().record_program_failure();
+            }
         }
-        if self.awaiting_prog_result {
-            self.poll_prog_result();
+        if matches!(
+            self.session
+                .pump(&mut self.prog, self.dispatcher.agent_mut()),
+            Progress::Failed(_)
+        ) {
+            self.dispatcher.agent_mut().record_program_failure();
         }
     }
 
@@ -351,60 +370,21 @@ where
             }
         }
     }
-
-    /// Signals the programmer to flash the committed `region`.
-    ///
-    /// Consume-before-signal (see the module docs): a failed write to the
-    /// link loses the update.
-    fn hand_off(&mut self, region: Region) {
-        let mut frame = [0u8; PROGRAM_WIRE];
-        let Some(len) = handoff::program_frame(self.prog_id, region, &mut frame) else {
-            return;
-        };
-        let _ = self.dispatcher.take_pending_program();
-        if let Some(bytes) = frame.get(..len)
-            && self.prog.write_all(bytes).is_ok()
-        {
-            self.awaiting_prog_result = true;
-        }
-    }
-
-    /// Polls the programmer link for the `ProgResult` reply of an in-flight
-    /// handoff, one bounded read per call. A read timeout or link error
-    /// leaves the poll armed. A completed frame clears it, and only a
-    /// reported failure is recorded.
-    fn poll_prog_result(&mut self) {
-        let mut byte = [0u8; 1];
-        if self.prog.read_exact(&mut byte).is_err() {
-            return;
-        }
-        let Ok(Some(n)) = self.prog_decoder.feed(byte[0], &mut self.prog_scratch) else {
-            return;
-        };
-        self.awaiting_prog_result = false;
-        if n == 0 {
-            return;
-        }
-        let status = Packet::parse(self.prog_scratch.get(..n).unwrap_or(&[]))
-            .ok()
-            .and_then(|packet| handoff::parse_result(&packet));
-        if let Some(status) = status
-            && status != ProgStatus::Ok
-        {
-            self.dispatcher.agent_mut().record_program_failure();
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use cellboot::image::Region;
+    use core::cell::RefCell;
+
+    use cellboot::image::{ImageHeader, ImageKind, Region};
     use cellboot::io::NoKeyStore;
     use cellboot::state::{AppHealth, PersistentState, StagedState, UpdateOutcome};
-    use cellboot::testutil::{MemStore as MemStoreImpl, NullStateStore};
+    use cellboot::testutil::{NullStateStore, SharedImageStore};
     use cellcore::update::dispatch::Dispatcher;
     use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
-    use cellguard_protocol::{Decoder, Encoder, Kind, Packet, ProgStatus};
+    use cellguard_protocol::{
+        Command as WireCommand, Decoder, Encoder, Kind, Packet, Reply, SessionStatus, encode_frame,
+    };
 
     use super::CoreRuntime;
 
@@ -412,11 +392,25 @@ mod tests {
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
     const NODE: u8 = 7;
-    const PROG_ID: u8 = 4;
     const AGENT_ID: u8 = 9;
     const CAP: usize = 4096;
-    type MemStore = MemStoreImpl<CAP>;
+    const HEADER_LEN: usize = 64;
 
+    /// The runtime under test: a shared backing store so tests can stage and
+    /// corrupt images while the agent owns the store, plus a bus mock, a
+    /// programmer-servant mock, and an agent-link mock.
+    type Runtime<'k, 'a> = CoreRuntime<
+        'k,
+        SharedImageStore<'a, CAP>,
+        NoKeyStore,
+        NullStateStore,
+        MockLink,
+        ServantLink,
+        MockLink,
+        512,
+    >;
+
+    /// A link that records everything written and yields scripted read bytes.
     #[derive(Default)]
     struct MockLink {
         written: std::vec::Vec<u8>,
@@ -424,9 +418,10 @@ mod tests {
     }
 
     impl MockLink {
-        fn queue_packet(&mut self, kind: Kind, payload: &[u8]) {
+        /// Encodes a packet as a COBS frame and queues it for reading.
+        fn queue_packet(&mut self, id: u8, kind: Kind, payload: &[u8]) {
             let mut raw = [0u8; 64];
-            let n = Packet::write(PROG_ID, kind, payload, &mut raw).unwrap();
+            let n = Packet::write(id, kind, payload, &mut raw).unwrap();
             let mut encoder = Encoder::new(&raw[..n]);
             while let Some(byte) = encoder.pull() {
                 self.readable.push(byte);
@@ -458,6 +453,152 @@ mod tests {
         }
     }
 
+    /// Which command the servant observed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Cmd {
+        Begin,
+        PageWrite,
+        End,
+    }
+
+    /// A decoded command, copied out of the decode buffer so the mock can
+    /// mutate itself while executing it.
+    enum Owned {
+        Begin,
+        PageWrite { addr: u16, data: std::vec::Vec<u8> },
+        End,
+    }
+
+    /// A programmer-servant mock: decodes written commands with the real
+    /// codec, runs a minimal servant against a fake flash, and queues real
+    /// reply frames.
+    struct ServantLink {
+        written: std::vec::Vec<u8>,
+        readable: std::vec::Vec<u8>,
+        decoder: Decoder,
+        scratch: [u8; 96],
+        in_session: bool,
+        flash: std::vec::Vec<u8>,
+        commands: std::vec::Vec<Cmd>,
+        /// Status to reply to page commands instead of writing flash.
+        fail_status: Option<SessionStatus>,
+        /// Swallow all replies, simulating a dead link.
+        silent: bool,
+    }
+
+    impl ServantLink {
+        fn new() -> Self {
+            Self {
+                written: std::vec::Vec::new(),
+                readable: std::vec::Vec::new(),
+                decoder: Decoder::new(),
+                scratch: [0; 96],
+                in_session: false,
+                flash: std::vec::Vec::new(),
+                commands: std::vec::Vec::new(),
+                fail_status: None,
+                silent: false,
+            }
+        }
+
+        /// Feeds one written wire byte, servicing any completed command.
+        fn on_byte(&mut self, byte: u8) {
+            let Ok(Some(n)) = self.decoder.feed(byte, &mut self.scratch) else {
+                return;
+            };
+            let Some(frame) = self.scratch.get(..n) else {
+                return;
+            };
+            let owned = match WireCommand::decode(frame) {
+                Some(WireCommand::Begin(_)) => Owned::Begin,
+                Some(WireCommand::PageWrite { addr, data }) => Owned::PageWrite {
+                    addr,
+                    data: data.to_vec(),
+                },
+                Some(WireCommand::End) => Owned::End,
+                _ => return,
+            };
+            let reply = self.execute(owned);
+            if self.silent {
+                return;
+            }
+            let mut raw = [0u8; 1 + 3 + cellguard_protocol::PAGE_MAX + 2];
+            let n = reply.encode(&mut raw).unwrap();
+            let mut wire = [0u8; 96];
+            let wire_len = encode_frame(&raw[..n], &mut wire).unwrap();
+            self.readable.extend_from_slice(&wire[..wire_len]);
+        }
+
+        /// Runs one decoded command against the fake flash and returns its
+        /// reply.
+        fn execute(&mut self, cmd: Owned) -> Reply<'static> {
+            match cmd {
+                Owned::Begin => {
+                    self.in_session = true;
+                    self.commands.push(Cmd::Begin);
+                    Reply::Status {
+                        status: SessionStatus::Ok,
+                        addr: None,
+                    }
+                }
+                Owned::PageWrite { addr, data } => {
+                    self.commands.push(Cmd::PageWrite);
+                    let status = if !self.in_session {
+                        SessionStatus::BadState
+                    } else if let Some(status) = self.fail_status {
+                        status
+                    } else {
+                        let at = usize::from(addr);
+                        if self.flash.len() < at + data.len() {
+                            self.flash.resize(at + data.len(), 0xFF);
+                        }
+                        self.flash[at..at + data.len()].copy_from_slice(&data);
+                        SessionStatus::Ok
+                    };
+                    Reply::Status {
+                        status,
+                        addr: Some(addr),
+                    }
+                }
+                Owned::End => {
+                    self.in_session = false;
+                    self.commands.push(Cmd::End);
+                    Reply::Status {
+                        status: SessionStatus::Ok,
+                        addr: None,
+                    }
+                }
+            }
+        }
+    }
+
+    impl embedded_io::ErrorType for ServantLink {
+        type Error = core::convert::Infallible;
+    }
+
+    impl embedded_io::Write for ServantLink {
+        fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.written.extend_from_slice(buf);
+            for &byte in buf {
+                self.on_byte(byte);
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl embedded_io::Read for ServantLink {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            let n = buf.len().min(self.readable.len());
+            buf[..n].copy_from_slice(&self.readable[..n]);
+            self.readable.drain(..n);
+            Ok(n)
+        }
+    }
+
     fn layout() -> StagingLayout {
         StagingLayout {
             application: RegionSlot {
@@ -475,13 +616,37 @@ mod tests {
         }
     }
 
-    fn runtime_with(
-        key: &mut [u8; 16],
+    /// Writes an image (header plus payload) into the region's slot of the
+    /// shared backing store, as a commit would have.
+    fn stage_image(backing: &RefCell<[u8; CAP]>, region: Region, payload: &[u8]) {
+        let header = ImageHeader {
+            kind: ImageKind::Application,
+            region,
+            target_id: TARGET,
+            fw_version: 9,
+            payload_len: u32::try_from(payload.len()).unwrap(),
+            payload_crc32: crc::checksum32(payload),
+            hmac: [0u8; 32],
+        };
+        let offset = match region {
+            Region::ApplicationCode => 0,
+            Region::Bootloader => 2048,
+            Region::CellagentApp => 3072,
+            _ => panic!("not a firmware slot"),
+        };
+        let mut image = header.serialize().to_vec();
+        image.extend_from_slice(payload);
+        let mut backing = backing.borrow_mut();
+        backing[offset..offset + image.len()].copy_from_slice(&image);
+    }
+
+    fn runtime_with<'k, 'a>(
+        key: &'k mut [u8; 16],
         state: PersistentState,
-    ) -> CoreRuntime<'_, MemStore, NoKeyStore, NullStateStore, MockLink, MockLink, MockLink, 512>
-    {
+        backing: &'a RefCell<[u8; CAP]>,
+    ) -> Runtime<'k, 'a> {
         let agent = UpdateAgent::new(
-            MemStore::new(),
+            SharedImageStore::new(backing),
             layout(),
             TARGET,
             CELLAGENT_TARGET,
@@ -494,28 +659,14 @@ mod tests {
         CoreRuntime::new(
             dispatcher,
             MockLink::default(),
-            MockLink::default(),
-            PROG_ID,
+            ServantLink::new(),
             MockLink::default(),
             AGENT_ID,
         )
     }
 
-    fn feed_from(
-        runtime: &mut CoreRuntime<
-            '_,
-            MemStore,
-            NoKeyStore,
-            NullStateStore,
-            MockLink,
-            MockLink,
-            MockLink,
-            512,
-        >,
-        id: u8,
-        kind: Kind,
-        payload: &[u8],
-    ) {
+    /// Feeds a COBS-encoded frame addressed to `id` byte by byte.
+    fn feed_from(runtime: &mut Runtime<'_, '_>, id: u8, kind: Kind, payload: &[u8]) {
         let mut raw = [0u8; 64];
         let raw_len = Packet::write(id, kind, payload, &mut raw).unwrap();
         let mut encoder = Encoder::new(&raw[..raw_len]);
@@ -524,26 +675,9 @@ mod tests {
         }
     }
 
-    fn feed_command(
-        runtime: &mut CoreRuntime<
-            '_,
-            MemStore,
-            NoKeyStore,
-            NullStateStore,
-            MockLink,
-            MockLink,
-            MockLink,
-            512,
-        >,
-        kind: Kind,
-        payload: &[u8],
-    ) {
-        let mut raw = [0u8; 64];
-        let raw_len = Packet::write(NODE, kind, payload, &mut raw).unwrap();
-        let mut encoder = Encoder::new(&raw[..raw_len]);
-        while let Some(byte) = encoder.pull() {
-            runtime.service(byte);
-        }
+    /// Feeds a COBS-encoded command frame byte by byte.
+    fn feed_command(runtime: &mut Runtime<'_, '_>, kind: Kind, payload: &[u8]) {
+        feed_from(runtime, NODE, kind, payload);
     }
 
     fn decode_kind(frame: &[u8]) -> Kind {
@@ -559,111 +693,11 @@ mod tests {
         Packet::parse(&scratch[..n]).unwrap().kind
     }
 
-    #[test]
-    fn probe_is_answered_on_the_bus_only() {
-        let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, PersistentState::new(1));
-        feed_command(&mut runtime, Kind::BootProbe, &[]);
-
-        assert_eq!(decode_kind(&runtime.bus.written), Kind::BootStatus);
-        assert!(
-            runtime.prog.written.is_empty(),
-            "a probe must not signal the programmer"
-        );
-    }
-
-    #[test]
-    fn first_successful_exchange_marks_app_healthy() {
-        let mut state = PersistentState::new(1);
-        state.boot_count = 3;
-        state.app_health = AppHealth::Unknown;
-        let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, state);
-
-        assert_eq!(
-            runtime.dispatcher.agent().status().app_health,
-            AppHealth::Unknown
-        );
-        feed_command(&mut runtime, Kind::BootProbe, &[]);
-        assert_eq!(
-            runtime.dispatcher.agent().status().app_health,
-            AppHealth::Good
-        );
-        assert_eq!(runtime.dispatcher.agent().status().boot_count, 0);
-    }
-
-    #[test]
-    fn committed_image_is_handed_off_once() {
-        let ready = PersistentState {
-            agent_version: 1,
-            app_version: 0,
-            staged_version: 9,
-            app_health: AppHealth::Unknown,
-            staged: StagedState::Ready,
-            staged_region: Some(Region::ApplicationCode),
-            last_outcome: UpdateOutcome::None,
-            program_attempts: 0,
-            boot_count: 0,
-        };
-        let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, ready);
-
-        // A bare COBS delimiter decodes to no command, so only the
-        // pending-program path runs.
-        runtime.service(0);
-        assert!(
-            !runtime.prog.written.is_empty(),
-            "a ready image must be signaled to the programmer"
-        );
-        assert_eq!(decode_kind(&runtime.prog.written), Kind::ProgProgram);
-        assert_eq!(
-            runtime.dispatcher.agent().status().staged,
-            StagedState::Empty
-        );
-
-        let sent = runtime.prog.written.len();
-        runtime.service(0);
-        assert_eq!(runtime.prog.written.len(), sent);
-    }
-
-    #[test]
-    fn programmer_ok_reply_keeps_success_outcome() {
-        let ready = ready_state(Region::CellagentApp);
-        let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, ready);
-        runtime
-            .prog
-            .queue_packet(Kind::ProgResult, &[ProgStatus::Ok.to_code()]);
-
-        // The reply is consumed one byte per try_service call.
-        runtime.service(0);
-        for _ in 0..32 {
+    /// Drives the runtime until its programming session goes idle again.
+    fn run_session(runtime: &mut Runtime<'_, '_>) {
+        for _ in 0..2_000 {
             runtime.try_service();
         }
-        assert_eq!(
-            runtime.dispatcher.agent().status().last_outcome,
-            UpdateOutcome::Success
-        );
-        assert!(!runtime.awaiting_prog_result);
-    }
-
-    #[test]
-    fn programmer_failure_reply_records_program_failed() {
-        let ready = ready_state(Region::CellagentApp);
-        let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, ready);
-        runtime
-            .prog
-            .queue_packet(Kind::ProgResult, &[ProgStatus::OkReleaseFailed.to_code()]);
-
-        runtime.service(0);
-        for _ in 0..32 {
-            runtime.try_service();
-        }
-        assert_eq!(
-            runtime.dispatcher.agent().status().last_outcome,
-            UpdateOutcome::ProgramFailed
-        );
     }
 
     fn ready_state(region: Region) -> PersistentState {
@@ -681,10 +715,172 @@ mod tests {
     }
 
     #[test]
-    fn agent_bound_frame_is_forwarded_and_reply_relayed() {
+    fn probe_is_answered_on_the_bus_only() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, PersistentState::new(1));
-        runtime.agent.queue_packet(Kind::BalancerGateState, &[0x03]);
+        let mut runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        feed_command(&mut runtime, Kind::BootProbe, &[]);
+
+        assert_eq!(decode_kind(&runtime.bus.written), Kind::BootStatus);
+        assert!(
+            runtime.prog.written.is_empty(),
+            "a probe must not start a session"
+        );
+    }
+
+    #[test]
+    fn first_successful_exchange_marks_app_healthy() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut state = PersistentState::new(1);
+        state.boot_count = 3;
+        state.app_health = AppHealth::Unknown;
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, state, &backing);
+
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Unknown
+        );
+        feed_command(&mut runtime, Kind::BootProbe, &[]);
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Good
+        );
+        assert_eq!(runtime.dispatcher.agent().status().boot_count, 0);
+    }
+
+    #[test]
+    fn committed_cellagent_image_is_flashed_over_one_session() {
+        let payload: std::vec::Vec<u8> = (0..150u32).map(|i| u8::try_from(i).unwrap()).collect();
+        let backing = RefCell::new([0u8; CAP]);
+        stage_image(&backing, Region::CellagentApp, &payload);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready_state(Region::CellagentApp), &backing);
+
+        run_session(&mut runtime);
+
+        assert_eq!(
+            runtime.prog.flash, payload,
+            "the servant received the image"
+        );
+        assert_eq!(
+            runtime.prog.commands.first(),
+            Some(&Cmd::Begin),
+            "the session must open with Begin"
+        );
+        assert_eq!(
+            runtime.prog.commands.last(),
+            Some(&Cmd::End),
+            "the session must close with End"
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().staged,
+            StagedState::Empty,
+            "the image is consumed"
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::Success
+        );
+
+        let sent = runtime.prog.commands.len();
+        runtime.service(0);
+        run_session(&mut runtime);
+        assert_eq!(runtime.prog.commands.len(), sent);
+    }
+
+    #[test]
+    fn committed_app_and_bootloader_images_stay_staged() {
+        for region in [Region::ApplicationCode, Region::Bootloader] {
+            let backing = RefCell::new([0u8; CAP]);
+            stage_image(&backing, region, &[1, 2, 3]);
+            let mut key = KEY;
+            let mut runtime = runtime_with(&mut key, ready_state(region), &backing);
+
+            runtime.service(0);
+            run_session(&mut runtime);
+
+            assert!(
+                runtime.prog.written.is_empty(),
+                "{region:?} must not be flashed over the programmer link"
+            );
+            assert_eq!(
+                runtime.dispatcher.agent().status().staged,
+                StagedState::Ready,
+                "{region:?} stays staged for its owner"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_session_records_program_failed() {
+        let backing = RefCell::new([0u8; CAP]);
+        stage_image(&backing, Region::CellagentApp, &[1, 2, 3, 4]);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready_state(Region::CellagentApp), &backing);
+        runtime.prog.fail_status = Some(SessionStatus::NotAlive);
+
+        run_session(&mut runtime);
+
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::ProgramFailed
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().staged,
+            StagedState::Empty
+        );
+    }
+
+    #[test]
+    fn silent_servant_records_program_failed() {
+        let backing = RefCell::new([0u8; CAP]);
+        stage_image(&backing, Region::CellagentApp, &[1, 2, 3, 4]);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready_state(Region::CellagentApp), &backing);
+        runtime.prog.silent = true;
+
+        run_session(&mut runtime);
+
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::ProgramFailed
+        );
+    }
+
+    #[test]
+    fn corrupt_staged_image_never_signals_the_programmer() {
+        let backing = RefCell::new([0u8; CAP]);
+        stage_image(&backing, Region::CellagentApp, &[7u8; 100]);
+        backing.borrow_mut()[3072 + HEADER_LEN + 5] ^= 0x01;
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, ready_state(Region::CellagentApp), &backing);
+
+        runtime.service(0);
+        run_session(&mut runtime);
+
+        assert!(
+            runtime.prog.written.is_empty(),
+            "a corrupt source must never reach the servant"
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().last_outcome,
+            UpdateOutcome::ProgramFailed
+        );
+        assert_eq!(
+            runtime.dispatcher.agent().status().staged,
+            StagedState::Empty
+        );
+    }
+
+    #[test]
+    fn agent_bound_frame_is_forwarded_and_reply_relayed() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let mut runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        runtime
+            .agent
+            .queue_packet(AGENT_ID, Kind::BalancerGateState, &[0x03]);
 
         feed_from(&mut runtime, AGENT_ID, Kind::ReadBalancerGateState, &[]);
 
@@ -697,8 +893,9 @@ mod tests {
 
     #[test]
     fn silent_agent_gets_a_route_timeout_nack() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
 
         feed_from(&mut runtime, AGENT_ID, Kind::SetBalancer, &[0x01]);
 
@@ -707,8 +904,9 @@ mod tests {
 
     #[test]
     fn own_frames_still_answer_and_do_not_touch_the_agent_link() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let mut runtime = runtime_with(&mut key, PersistentState::new(1));
+        let mut runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
 
         feed_command(&mut runtime, Kind::BootProbe, &[]);
 
@@ -716,6 +914,8 @@ mod tests {
         assert!(runtime.agent.written.is_empty());
     }
 
+    /// A telemetry handler that answers `ReadRails` and records forwarded
+    /// kinds.
     struct EchoHandler {
         noted: std::vec::Vec<(Kind, u8)>,
     }
@@ -747,8 +947,9 @@ mod tests {
 
     #[test]
     fn telemetry_kinds_are_answered_by_the_side_handler() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
         };
@@ -759,8 +960,9 @@ mod tests {
 
     #[test]
     fn boot_kinds_still_reach_the_update_agent_alongside_telemetry() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
         };
@@ -771,8 +973,9 @@ mod tests {
 
     #[test]
     fn forwarded_set_balancer_notifies_the_handler() {
+        let backing = RefCell::new([0u8; CAP]);
         let mut key = KEY;
-        let runtime = runtime_with(&mut key, PersistentState::new(1));
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
         let mut handler = EchoHandler {
             noted: std::vec::Vec::new(),
         };

@@ -188,13 +188,13 @@ impl PersistentState {
         }
     }
 
-    /// Marks the staged image as successfully programmed and hands it off.
+    /// Marks the staged image as successfully programmed and consumed.
     ///
     /// Clears the staged slot, records `Success`, and resets
     /// `program_attempts`. For an application image it also advances
-    /// `app_version` and resets `app_health` and `boot_count`. The agent
-    /// handoff and the bootloader self-program path share this single
-    /// transition so the two cannot drift.
+    /// `app_version` and resets `app_health` and `boot_count`. The agent's
+    /// programming-session path and the bootloader self-program path share
+    /// this single transition so the two cannot drift.
     pub fn mark_programmed(&mut self, region: Region) {
         if region == Region::ApplicationCode {
             self.app_version = self.staged_version;

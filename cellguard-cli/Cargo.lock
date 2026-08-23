@@ -79,6 +79,7 @@ dependencies = [
  "cellguard-panic",
  "cellguard-protocol",
  "crc",
+ "embedded-io",
  "hmac-sha256",
 ]
 
@@ -181,6 +182,12 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "crc"
 version = "0.1.0"
+
+[[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
 
 [[package]]
 name = "heck"

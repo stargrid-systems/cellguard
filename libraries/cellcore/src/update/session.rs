@@ -2,7 +2,9 @@
 //!
 //! [`UpdateAgent`] answers [`Command`]s from the host, streams the payload
 //! into an [`ImageStore`], and verifies the image before marking it ready.
-//! It never programs flash itself.
+//! It never programs flash itself: after a successful commit,
+//! [`UpdateAgent::pending_program`] names the region the caller can flash
+//! through the programmer session (see [`crate::update::session_driver`]).
 
 use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, ImageKind, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
@@ -11,6 +13,7 @@ use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, KEY_LEN, NackReason, Response};
+use crate::update::session_driver::StagedImage;
 use crate::update::verify::Verifier;
 
 /// Where one image is staged within an [`ImageStore`].
@@ -144,11 +147,12 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let _ = self.state_store.store(&self.state.serialize());
     }
 
-    /// Records that the programmer failed to flash a handed-off image.
+    /// Records that a programming session failed to flash a handed-off
+    /// image.
     ///
-    /// The handoff already recorded `Success` before the programmer ran, so
-    /// this flips the persisted outcome to `ProgramFailed` and keeps a probe
-    /// honest.
+    /// The session consumes the staged image and records `Success` before
+    /// it starts, so this flips the persisted outcome to `ProgramFailed`
+    /// and keeps a probe honest.
     pub fn record_program_failure(&mut self) {
         if self.state.last_outcome != UpdateOutcome::ProgramFailed {
             self.state.last_outcome = UpdateOutcome::ProgramFailed;
@@ -157,6 +161,9 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     }
 
     /// Returns the region ready to be programmed after a successful commit.
+    ///
+    /// The caller uses this to start a programming session or to leave the
+    /// image staged for the bootloader.
     #[must_use]
     pub const fn pending_program(&self) -> Option<Region> {
         match self.state.staged {
@@ -165,14 +172,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         }
     }
 
-    /// Consumes the staged image as it is handed off to the programmer.
+    /// Consumes the staged image as its programming session starts.
     ///
     /// Returns the region to program, or `None` when nothing is staged and
-    /// ready. Programming resets the core (the programmer halts it over
-    /// UPDI), so the core never sees the result and the handoff is final:
-    /// the staged image is cleared, an application image advances the
-    /// recorded `app_version`, and the outcome is recorded as a success.
-    /// A state-store write failure is not surfaced, since the in-RAM state
+    /// ready. The image is consumed before the session's first command, so
+    /// a reset mid-session cannot re-trigger the same flash on reboot: the
+    /// staged image is cleared, an application image advances the recorded
+    /// `app_version`, and the outcome is recorded as a success. A
+    /// state-store write failure is not surfaced, since the in-RAM state
     /// still drives the current boot.
     ///
     /// There is no rollback enforcement: if programming never happens, the
@@ -338,6 +345,20 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         self.state.staged = StagedState::Empty;
         self.state.staged_region = None;
         self.state.last_outcome = outcome;
+    }
+}
+
+/// The session driver streams the committed image straight out of the
+/// agent's store: the master owns the staging EEPROMs, and the programmer
+/// servant has no EEPROM access of its own.
+impl<S: ImageStore, K: KeyStore, St: StateStore> StagedImage for UpdateAgent<'_, S, K, St> {
+    fn read_staged(&mut self, region: Region, offset: u32, buf: &mut [u8]) -> bool {
+        let Some(slot) = self.layout.slot(region) else {
+            return false;
+        };
+        self.store
+            .read(slot.offset.saturating_add(offset), buf)
+            .is_ok()
     }
 }
 
@@ -841,7 +862,7 @@ mod tests {
 
     /// A `Begin` whose store write fails must clear a previously staged
     /// image: a stale `Ready` must not survive to trigger an unintended
-    /// handoff.
+    /// programming session.
     #[test]
     fn begin_storage_failure_clears_stale_ready() {
         let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);

@@ -123,6 +123,7 @@ dependencies = [
  "cellguard-panic",
  "cellguard-protocol",
  "crc",
+ "embedded-io",
  "hmac-sha256",
 ]
 
@@ -133,6 +134,7 @@ dependencies = [
  "cellboot",
  "cellcore",
  "cellguard-protocol",
+ "crc",
  "embedded-io",
 ]
 
@@ -156,7 +158,6 @@ dependencies = [
 name = "cellprog"
 version = "0.1.0"
 dependencies = [
- "cellboot",
  "cellguard-protocol",
  "crc",
  "updi",

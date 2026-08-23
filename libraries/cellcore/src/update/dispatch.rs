@@ -68,7 +68,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         &mut self.agent
     }
 
-    /// Consumes a staged image as it is handed off to the programmer.
+    /// Consumes a staged image as its programming session starts.
     ///
     /// See [`UpdateAgent::take_pending_program`].
     #[must_use]
