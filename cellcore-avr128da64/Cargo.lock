@@ -113,6 +113,7 @@ dependencies = [
  "cat25",
  "crc",
  "embedded-hal",
+ "zerocopy",
 ]
 
 [[package]]

@@ -19,6 +19,10 @@
 //! - 60..64: CRC-32 over bytes 0..60, little-endian
 
 use core::fmt;
+use core::mem::size_of;
+
+use zerocopy::byteorder::little_endian::{U16, U32};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 /// Factory record length in bytes.
 pub const RECORD_LEN: usize = 64;
@@ -35,6 +39,23 @@ pub const SERIAL_LEN: usize = 16;
 
 /// Offset of the record CRC. Every byte before it is covered by the CRC.
 const CRC_OFFSET: usize = RECORD_LEN - 4;
+
+/// Wire form of a [`FactoryRecord`]: the 64 bytes in the factory EEPROM.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct FactoryWire {
+    magic: [u8; 4],
+    format_version: u8,
+    board_model: U16,
+    board_revision: u8,
+    reserved: [u8; 4],
+    serial_cellcore: [u8; SERIAL_LEN],
+    serial_cellagent: [u8; SERIAL_LEN],
+    serial_cellprog: [u8; SERIAL_LEN],
+    crc: U32,
+}
+
+const _: () = assert!(size_of::<FactoryWire>() == RECORD_LEN);
 
 /// The parsed factory record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,16 +77,21 @@ impl FactoryRecord {
     /// Serializes the record into its canonical, CRC-protected byte form.
     #[must_use]
     pub fn serialize(&self) -> [u8; RECORD_LEN] {
+        let wire = FactoryWire {
+            magic: MAGIC,
+            format_version: FORMAT_VERSION,
+            board_model: U16::new(self.board_model),
+            board_revision: self.board_revision,
+            reserved: [0; 4],
+            serial_cellcore: self.serial_cellcore,
+            serial_cellagent: self.serial_cellagent,
+            serial_cellprog: self.serial_cellprog,
+            crc: U32::new(0),
+        };
         let mut out = [0u8; RECORD_LEN];
-        out[0..4].copy_from_slice(&MAGIC);
-        out[4] = FORMAT_VERSION;
-        out[5..7].copy_from_slice(&self.board_model.to_le_bytes());
-        out[7] = self.board_revision;
-        out[12..28].copy_from_slice(&self.serial_cellcore);
-        out[28..44].copy_from_slice(&self.serial_cellagent);
-        out[44..60].copy_from_slice(&self.serial_cellprog);
-        let crc = crc::checksum32(&out[0..CRC_OFFSET]);
-        out[CRC_OFFSET..RECORD_LEN].copy_from_slice(&crc.to_le_bytes());
+        out.copy_from_slice(wire.as_bytes());
+        let crc = crc::checksum32(&out[..CRC_OFFSET]);
+        out[CRC_OFFSET..].copy_from_slice(U32::new(crc).as_bytes());
         out
     }
 
@@ -78,35 +104,22 @@ impl FactoryRecord {
     /// caller should treat an error as an unprovisioned board, not a reason
     /// to halt.
     pub fn parse(bytes: &[u8; RECORD_LEN]) -> Result<Self, ParseError> {
-        let stored_crc = u32::from_le_bytes([
-            bytes[CRC_OFFSET],
-            bytes[CRC_OFFSET + 1],
-            bytes[CRC_OFFSET + 2],
-            bytes[CRC_OFFSET + 3],
-        ]);
-        if crc::checksum32(&bytes[0..CRC_OFFSET]) != stored_crc {
+        let wire = FactoryWire::ref_from_bytes(bytes).map_err(|_| ParseError::BadCrc)?;
+        if crc::checksum32(&bytes[..CRC_OFFSET]) != wire.crc.get() {
             return Err(ParseError::BadCrc);
         }
-        if [bytes[0], bytes[1], bytes[2], bytes[3]] != MAGIC {
+        if wire.magic != MAGIC {
             return Err(ParseError::BadMagic);
         }
-        if bytes[4] != FORMAT_VERSION {
-            return Err(ParseError::UnsupportedFormat(bytes[4]));
+        if wire.format_version != FORMAT_VERSION {
+            return Err(ParseError::UnsupportedFormat(wire.format_version));
         }
-
-        let mut serial_cellcore = [0u8; SERIAL_LEN];
-        serial_cellcore.copy_from_slice(&bytes[12..28]);
-        let mut serial_cellagent = [0u8; SERIAL_LEN];
-        serial_cellagent.copy_from_slice(&bytes[28..44]);
-        let mut serial_cellprog = [0u8; SERIAL_LEN];
-        serial_cellprog.copy_from_slice(&bytes[44..60]);
-
         Ok(Self {
-            board_model: u16::from_le_bytes([bytes[5], bytes[6]]),
-            board_revision: bytes[7],
-            serial_cellcore,
-            serial_cellagent,
-            serial_cellprog,
+            board_model: wire.board_model.get(),
+            board_revision: wire.board_revision,
+            serial_cellcore: wire.serial_cellcore,
+            serial_cellagent: wire.serial_cellagent,
+            serial_cellprog: wire.serial_cellprog,
         })
     }
 }
@@ -139,7 +152,7 @@ impl core::error::Error for ParseError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{FactoryRecord, MAGIC, ParseError, RECORD_LEN};
+    use super::{FORMAT_VERSION, FactoryRecord, MAGIC, ParseError, RECORD_LEN};
 
     fn sample() -> FactoryRecord {
         FactoryRecord {
@@ -155,6 +168,18 @@ mod tests {
     fn roundtrip() {
         let record = sample();
         assert_eq!(FactoryRecord::parse(&record.serialize()), Ok(record));
+    }
+
+    #[test]
+    fn wire_layout_is_frozen() {
+        let bytes = sample().serialize();
+        assert_eq!(&bytes[0..4], &MAGIC);
+        assert_eq!(bytes[4], FORMAT_VERSION);
+        assert_eq!(&bytes[5..7], &[0xEE, 0x0B]);
+        assert_eq!(bytes[7], 7);
+        assert_eq!(&bytes[8..12], &[0; 4]);
+        let crc = crc::checksum32(&bytes[..60]);
+        assert_eq!(&bytes[60..64], &crc.to_le_bytes());
     }
 
     #[test]

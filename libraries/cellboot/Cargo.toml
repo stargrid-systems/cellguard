@@ -19,6 +19,7 @@ avrxt-hal = { workspace = true, optional = true }
 cat25 = { workspace = true, optional = true }
 crc = { workspace = true }
 embedded-hal = { workspace = true, optional = true }
+zerocopy = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 embedded-hal-mock = { workspace = true, features = ["eh1"] }
