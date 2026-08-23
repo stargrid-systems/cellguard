@@ -113,6 +113,7 @@ dependencies = [
  "crc",
  "embedded-hal",
  "embedded-hal-mock",
+ "zerocopy",
 ]
 
 [[package]]
