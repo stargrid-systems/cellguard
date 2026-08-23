@@ -17,6 +17,7 @@
 //!   messages, and the programmer session protocol.
 //! - `page-read`: the session flash read-back path (`PageRead`/`PageData`).
 //!   Costs 722 B on the `ATtiny406` servant.
+//! - `telemetry`: the balancing-test telemetry kinds and payload codecs.
 #![no_std]
 #![warn(missing_docs)]
 
@@ -29,6 +30,11 @@ pub use self::prog::{ProgSource, ProgStatus};
 pub use self::session::{
     Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget,
 };
+#[cfg(feature = "telemetry")]
+pub use self::telemetry::{
+    BalancerStatus, BleedMasks, BleedPwm, CELLS, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAIL_ORDER,
+    RAILS, RailSnapshot, Seq, Snapshot, TEMP_INVALID, TEMP_ORDER, TEMPS, TempSnapshot,
+};
 
 mod cobs;
 mod kind;
@@ -37,3 +43,5 @@ mod packet;
 mod prog;
 #[cfg(feature = "bootloader")]
 mod session;
+#[cfg(feature = "telemetry")]
+mod telemetry;
