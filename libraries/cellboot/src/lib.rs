@@ -8,11 +8,9 @@
 //!
 //! # Features
 //!
-//! Additive and off by default.
-//!
 //! - `drivers`: the shared `drivers::Cat25Store` EEPROM adapter.
 //! - `avr128`: the AVR128 on-chip `drivers` adapters. Pulls in `avrxt-hal`, so
-//!   `avr-none` targets only.
+//!   it only builds for `avr-none` targets.
 //! - `testutil`: in-RAM test mocks. Test-only.
 #![no_std]
 #![warn(missing_docs)]
