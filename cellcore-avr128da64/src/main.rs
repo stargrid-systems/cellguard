@@ -21,14 +21,17 @@ use avrxt_hal::delay::Delay;
 use avrxt_hal::gpio::Port;
 use avrxt_hal::nvmctrl::Nvm;
 use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
+use avrxt_hal::sigrow::Sigrow;
 use avrxt_hal::spi::{Prescaler as SpiPrescaler, Spi};
 use avrxt_hal::twi::Twi;
 use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
-use cellboot::io::{BandedStore, NoKeyStore};
+use cellboot::factory::{self, FactoryRecord};
+use cellboot::io::{BandedStore, ImageStore, NoKeyStore};
 use cellboot::{layout, state};
 use cellcore::balancing::Balancing;
+use cellcore::identity::Identity;
 use cellcore::update::command::KEY_LEN;
 use cellcore::update::dispatch::Dispatcher;
 use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
@@ -45,7 +48,7 @@ mod board;
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
 /// Debug UART baud (USART5, bring-up).
-const BUS_BAUD: u32 = 9_600;
+const BUS_BAUD: u32 = 1_000_000;
 /// Baud on the local links to the PROG programmer (USART3) and the
 /// cellagent (USART4).
 const PROG_BAUD: u32 = 115_200;
@@ -145,6 +148,22 @@ fn main() -> ! {
     let boot = Cat25Store::new(Cat25::new(boot_dev, CAT25128, Delay::new(F_CPU.hz())));
     let store = BandedStore::new(app, boot);
 
+    // Factory identity (U106, CAT25128, CS PG7). A bad record falls back to
+    // the SIGROW serial and the unprovisioned board model.
+    let cs_factory = portg.p7.into_output_high();
+    let factory_dev = RefCellDevice::new_no_delay(&spi, cs_factory).unwrap_or_else(|_| halt());
+    let mut factory = Cat25Store::new(Cat25::new(factory_dev, CAT25128, Delay::new(F_CPU.hz())));
+    let mut record = [0u8; factory::RECORD_LEN];
+    let factory_record = factory
+        .read(0, &mut record)
+        .ok()
+        .and_then(|()| FactoryRecord::parse(&record).ok());
+    let identity = Identity::from_factory_record(
+        factory_record,
+        Sigrow::new(&dp.SIGROW).serial_number(),
+        AGENT_VERSION,
+    );
+
     let staging = StagingLayout {
         application: RegionSlot {
             offset: 0,
@@ -236,10 +255,10 @@ fn main() -> ! {
         porte.p6.into_input(),
         porte.p7.into_input(),
     );
-    let mut balancing = BoardBalancing::new(board);
+    let mut node = NodeTelemetry::new(identity, board);
 
     let mut runtime = CoreRuntime::new(dispatcher, bus, prog, agent_link, CELLAGENT_ID)
-        .with_telemetry(&mut balancing, NODE_ID);
+        .with_telemetry(&mut node, NODE_ID);
 
     // This boot is healthy, so any prior panic was transient. Clear the
     // crash-loop counter.
@@ -273,21 +292,24 @@ fn halt() -> ! {
     }
 }
 
-/// Local newtype so the orphan rule lets this crate implement the runtime's
-/// telemetry handler for the balancing layer over this board.
-struct BoardBalancing {
-    inner: Balancing<Board>,
+/// Node-local request kinds: the device identity, then the balancing layer
+/// over this board. The orphan rule wants this wrapper in the firmware
+/// crate.
+struct NodeTelemetry {
+    identity: Identity,
+    balancing: Balancing<Board>,
 }
 
-impl BoardBalancing {
-    fn new(board: Board) -> Self {
+impl NodeTelemetry {
+    fn new(identity: Identity, board: Board) -> Self {
         Self {
-            inner: Balancing::new(board),
+            identity,
+            balancing: Balancing::new(board),
         }
     }
 }
 
-impl TelemetryHandler for BoardBalancing {
+impl TelemetryHandler for NodeTelemetry {
     fn handle(
         &mut self,
         now: u32,
@@ -295,27 +317,30 @@ impl TelemetryHandler for BoardBalancing {
         payload: &[u8],
         out: &mut [u8],
     ) -> Option<(cellguard_protocol::Kind, usize)> {
-        Balancing::handle(&mut self.inner, now, kind, payload, out)
+        if let Some(reply) = self.identity.handle(kind, out) {
+            return Some(reply);
+        }
+        Balancing::handle(&mut self.balancing, now, kind, payload, out)
     }
 
     fn note_forwarded(&mut self, kind: cellguard_protocol::Kind, payload: &[u8]) {
         if kind == cellguard_protocol::Kind::SetBalancer
             && let Some(&mask) = payload.first()
         {
-            self.inner.note_gate_mask(mask);
+            self.balancing.note_gate_mask(mask);
         }
     }
 
     fn note_agent_temp(&mut self, temp: Option<i16>) {
-        self.inner.note_agent_temp(temp);
+        self.balancing.note_agent_temp(temp);
     }
 
     fn on_tick(&mut self, now: u32) {
-        self.inner.hw_mut().poll_adcs();
-        self.inner.tick(now);
+        self.balancing.hw_mut().poll_adcs();
+        self.balancing.tick(now);
         if let Ok(now) = u16::try_from(now) {
-            self.inner.hw_mut().heartbeat(now);
-            self.inner.hw_mut().poll_alive(now);
+            self.balancing.hw_mut().heartbeat(now);
+            self.balancing.hw_mut().poll_alive(now);
         }
     }
 }

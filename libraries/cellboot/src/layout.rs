@@ -13,6 +13,9 @@ pub const BOOT_SECTION_SIZE: u32 = 16 * 512;
 pub const APP_EEPROM_CAP: u32 = 128 * 1024;
 /// Boot staging EEPROM capacity (U105, CAT25128, 16 KB).
 pub const BOOT_EEPROM_CAP: u32 = 16 * 1024;
+/// Factory EEPROM capacity (U106, CAT25128, 16 KB). Cellcore-only and never
+/// a firmware-update target.
+pub const FACTORY_EEPROM_CAP: u32 = 16 * 1024;
 /// Cellagent band capacity, carved from the end of the app EEPROM.
 pub const CELLAGENT_CAP: u32 = 4 * 1024;
 /// Cellprog self-update band capacity, carved from the end of the app

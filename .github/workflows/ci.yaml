@@ -115,6 +115,17 @@ jobs:
       - name: Build
         working-directory: ${{ matrix.workspace }}
         run: cargo build --release --locked
+      # Library-only AVR workspaces such as avrxt-hal link no ELF, so there
+      # is nothing to measure.
+      - name: Flash size gate
+        if: steps.target.outputs.avr == 'true'
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          shopt -s nullglob
+          elfs=(target/avr-none/release/*.elf)
+          if (( ${#elfs[@]} > 0 )); then
+            "$GITHUB_WORKSPACE/.github/scripts/flash-size-gate.sh" "$PWD"
+          fi
 
   ci-pass:
     name: ci-pass

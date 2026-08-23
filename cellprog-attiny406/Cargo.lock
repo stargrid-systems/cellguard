@@ -96,6 +96,7 @@ name = "cellboot"
 version = "0.1.0"
 dependencies = [
  "crc",
+ "zerocopy",
 ]
 
 [[package]]
