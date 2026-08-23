@@ -1,0 +1,30 @@
+[package]
+name = "cellcore"
+version = "0.1.0"
+description = "Hardware-independent update-agent logic for the CellGuard core MCU."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cellboot = { workspace = true }
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
+crc = { workspace = true }
+# opt_size rolls the SHA-256 round functions instead of fully inlining them.
+# On AVR this is a 14 KiB flash saving. The verify path is paced by the
+# 9600-baud field bus, so the throughput loss is invisible.
+hmac-sha256 = { workspace = true, features = ["opt_size"] }
+cellguard-panic = { workspace = true }
+
+[features]
+sign = []
+telemetry = ["cellguard-protocol/telemetry"]
+
+[dev-dependencies]
+cellboot = { workspace = true, features = ["testutil"] }
+
+[lints]
+workspace = true

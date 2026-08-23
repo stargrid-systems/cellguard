@@ -108,6 +108,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellcore"
+version = "0.1.0"
+dependencies = [
+ "cellboot",
+ "cellguard-panic",
+ "cellguard-protocol",
+ "crc",
+ "hmac-sha256",
+]
+
+[[package]]
 name = "cellguard-panic"
 version = "0.1.0"
 dependencies = [
@@ -263,6 +274,12 @@ checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
 ]
+
+[[package]]
+name = "hmac-sha256"
+version = "1.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 
 [[package]]
 name = "icu_collections"
