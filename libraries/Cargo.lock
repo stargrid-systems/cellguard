@@ -97,6 +97,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellagent"
+version = "0.1.0"
+dependencies = [
+ "cellguard-protocol",
+ "embedded-io",
+]
+
+[[package]]
 name = "cellboot"
 version = "0.1.0"
 dependencies = [
