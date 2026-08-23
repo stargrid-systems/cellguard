@@ -77,6 +77,11 @@ pub enum Kind {
     /// Payload: 1 byte bitmask (bit 0 = `GATE_A`, bit 1 = `GATE_B`, bit 2 =
     /// `ALL_OFF`).
     SetBalancer = 20,
+    /// Request: report the last panic record. Available on every node.
+    PanicProbe = 21,
+    /// Response: the panic record, in reply to [`Kind::PanicProbe`]. An empty
+    /// payload means no panic is recorded for this session.
+    PanicStatus = 22,
     /// Programmer session request (main MCU to `cellprog`): chip-erase the
     /// target and enter programming mode. Payload: 1 target byte.
     #[cfg(feature = "bootloader")]

@@ -1,0 +1,20 @@
+[package]
+name = "cellguard-panic"
+version = "0.1.0"
+description = "Persistent panic record and crash-loop policy for the CellGuard firmware."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+hal = ["dep:avrxt-hal"]
+
+[dependencies]
+crc.workspace = true
+avrxt-hal = { workspace = true, optional = true }
+
+[lints]
+workspace = true
