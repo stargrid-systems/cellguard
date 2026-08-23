@@ -89,15 +89,6 @@ where
     Ok(header)
 }
 
-/// Whether a failed [`program`] attempt can succeed if retried.
-///
-/// A corrupt source or bad header never will, so the bootloader gives up on
-/// them immediately.
-#[must_use]
-pub const fn retryable<S, N>(err: &ProgramError<S, N>) -> bool {
-    !matches!(err, ProgramError::CorruptSource | ProgramError::Header(_))
-}
-
 fn chunk_len(capacity: usize, remaining: u32) -> usize {
     let cap = u32::try_from(capacity).unwrap_or(u32::MAX);
     usize::try_from(remaining.min(cap)).unwrap_or(capacity)
@@ -147,6 +138,17 @@ pub enum ProgramError<S, N> {
     /// Release failed after a successful write and verify. Flash holds a
     /// valid image but the target was not released to run.
     ReleaseFailed(N),
+}
+
+impl<S, N> ProgramError<S, N> {
+    /// Whether a failed [`program`] attempt can succeed if retried.
+    ///
+    /// A corrupt source or bad header never will, so the bootloader gives up
+    /// on them immediately.
+    #[must_use]
+    pub const fn retryable(&self) -> bool {
+        !matches!(self, Self::CorruptSource | Self::Header(_))
+    }
 }
 
 #[cfg(test)]
