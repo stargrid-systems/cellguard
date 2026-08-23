@@ -11,6 +11,9 @@
 #![no_std]
 #![warn(missing_docs)]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod identity;
 pub mod kat;
 pub mod update;

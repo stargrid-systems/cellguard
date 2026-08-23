@@ -28,7 +28,7 @@ use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::factory::{self, FactoryRecord};
-use cellboot::io::{BandedStore, ImageStore, NoKeyStore};
+use cellboot::io::{BandedStore, NoKeyStore};
 use cellboot::{layout, state};
 use cellcore::balancing::Balancing;
 use cellcore::identity::Identity;
@@ -55,14 +55,14 @@ const PROG_BAUD: u32 = 115_200;
 
 /// This node's address on the field bus. Placeholder until provisioned.
 const NODE_ID: u8 = 1;
-/// The programmer's node address on the local link. Placeholder.
-const PROG_ID: u8 = 2;
 /// The cellagent's node address on its control link.
 const CELLAGENT_ID: u8 = 3;
 /// The image `target_id` this device accepts. Placeholder until provisioned.
 const TARGET_ID: u16 = 1;
 /// The cellagent's image target_id. Placeholder until provisioned.
 const CELLAGENT_TARGET_ID: u16 = 2;
+/// The cellprog programmer's image target_id. Placeholder until provisioned.
+const CELLPROG_TARGET_ID: u16 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
 
@@ -70,8 +70,8 @@ const AGENT_VERSION: u32 = 1;
 const PANIC_THRESHOLD: u8 = 3;
 
 const BUS_RX_TIMEOUT_MS: u32 = 10;
-/// USART3 receive timeout in ms. Bounds the per-tick programmer-reply poll
-/// while a handoff waits for its `ProgResult`.
+/// USART3 receive timeout in ms. Bounds each programmer-link read while a
+/// session waits for its next reply.
 const PROG_RX_TIMEOUT_MS: u32 = 5;
 /// USART4 receive timeout in ms. Bounds a read while waiting for a
 /// forwarded cellagent reply.
@@ -167,11 +167,15 @@ fn main() -> ! {
     let staging = StagingLayout {
         application: RegionSlot {
             offset: 0,
-            capacity: layout::CELLAGENT_OFFSET,
+            capacity: layout::CELLPROG_OFFSET,
         },
         cellagent: RegionSlot {
             offset: layout::CELLAGENT_OFFSET,
             capacity: layout::CELLAGENT_CAP,
+        },
+        cellprog: RegionSlot {
+            offset: layout::CELLPROG_OFFSET,
+            capacity: layout::CELLPROG_CAP,
         },
         bootloader: RegionSlot {
             offset: layout::BOOT_BAND_OFFSET,
@@ -183,6 +187,7 @@ fn main() -> ! {
         staging,
         TARGET_ID,
         CELLAGENT_TARGET_ID,
+        CELLPROG_TARGET_ID,
         &mut key,
         NoKeyStore,
         state_store,
@@ -252,7 +257,7 @@ fn main() -> ! {
     );
     let mut node = NodeTelemetry::new(identity, board);
 
-    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, PROG_ID, agent_link, CELLAGENT_ID)
+    let mut runtime = CoreRuntime::new(dispatcher, bus, prog, agent_link, CELLAGENT_ID)
         .with_telemetry(&mut node, NODE_ID);
 
     // This boot is healthy, so any prior panic was transient. Clear the

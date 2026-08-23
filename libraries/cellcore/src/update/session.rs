@@ -2,7 +2,9 @@
 //!
 //! [`UpdateAgent`] answers [`Command`]s from the host, streams the payload
 //! into an [`ImageStore`], and verifies the image before marking it ready.
-//! It never programs flash itself.
+//! It never programs flash itself: after a successful commit,
+//! [`UpdateAgent::pending_program`] names the region the caller can flash
+//! through the programmer session (see [`crate::update::session_driver`]).
 
 use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, ImageKind, Region};
 use cellboot::io::{ImageStore, KeyStore, StateStore};
@@ -11,6 +13,7 @@ use cellguard_panic::PanicRecord;
 use hmac_sha256::HMAC;
 
 use crate::update::command::{Command, KEY_LEN, NackReason, Response};
+use crate::update::session_driver::StagedImage;
 use crate::update::verify::Verifier;
 
 /// Where one image is staged within an [`ImageStore`].
@@ -34,6 +37,8 @@ pub struct StagingLayout {
     pub bootloader: RegionSlot,
     /// Slot for [`Region::CellagentApp`].
     pub cellagent: RegionSlot,
+    /// Slot for [`Region::CellprogApp`].
+    pub cellprog: RegionSlot,
 }
 
 impl StagingLayout {
@@ -42,6 +47,7 @@ impl StagingLayout {
             Region::ApplicationCode => Some(self.application),
             Region::Bootloader => Some(self.bootloader),
             Region::CellagentApp => Some(self.cellagent),
+            Region::CellprogApp => Some(self.cellprog),
             // The factory region, and any region added later, is not a
             // firmware-update target.
             _ => None,
@@ -72,6 +78,7 @@ pub struct UpdateAgent<'k, S, K, St> {
     layout: StagingLayout,
     target_id: u16,
     cellagent_target_id: u16,
+    cellprog_target_id: u16,
     key: &'k mut [u8],
     key_store: K,
     state_store: St,
@@ -84,12 +91,13 @@ pub struct UpdateAgent<'k, S, K, St> {
 impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     /// Creates an agent.
     ///
-    /// `target_id` is this device's identity and `cellagent_target_id` is the
-    /// cellagent's, used to verify cellagent images relayed through the
-    /// cellcore. `key` is the shared HMAC key buffer, updated in place on a
-    /// successful key replacement so the new key takes effect immediately.
-    /// Use [`NoKeyStore`](cellboot::io::NoKeyStore) in production to disable
-    /// key replacement. `state` is the state loaded at boot (see
+    /// `target_id` is this device's identity and `cellagent_target_id` and
+    /// `cellprog_target_id` are the servants', used to verify their images
+    /// relayed through the cellcore. `key` is the shared HMAC key buffer,
+    /// updated in place on a successful key replacement so the new key takes
+    /// effect immediately. Use [`NoKeyStore`](cellboot::io::NoKeyStore) in
+    /// production to disable key replacement. `state` is the state loaded at
+    /// boot (see
     /// [`cellboot::state::load`]).
     #[expect(
         clippy::too_many_arguments,
@@ -100,6 +108,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         layout: StagingLayout,
         target_id: u16,
         cellagent_target_id: u16,
+        cellprog_target_id: u16,
         key: &'k mut [u8; KEY_LEN],
         key_store: K,
         state_store: St,
@@ -110,6 +119,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             layout,
             target_id,
             cellagent_target_id,
+            cellprog_target_id,
             key,
             key_store,
             state_store,
@@ -144,11 +154,12 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         let _ = self.state_store.store(&self.state.serialize());
     }
 
-    /// Records that the programmer failed to flash a handed-off image.
+    /// Records that a programming session failed to flash a handed-off
+    /// image.
     ///
-    /// The handoff already recorded `Success` before the programmer ran, so
-    /// this flips the persisted outcome to `ProgramFailed` and keeps a probe
-    /// honest.
+    /// The session consumes the staged image and records `Success` before
+    /// it starts, so this flips the persisted outcome to `ProgramFailed`
+    /// and keeps a probe honest.
     pub fn record_program_failure(&mut self) {
         if self.state.last_outcome != UpdateOutcome::ProgramFailed {
             self.state.last_outcome = UpdateOutcome::ProgramFailed;
@@ -157,6 +168,9 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     }
 
     /// Returns the region ready to be programmed after a successful commit.
+    ///
+    /// The caller uses this to start a programming session or to leave the
+    /// image staged for the bootloader.
     #[must_use]
     pub const fn pending_program(&self) -> Option<Region> {
         match self.state.staged {
@@ -165,14 +179,14 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         }
     }
 
-    /// Consumes the staged image as it is handed off to the programmer.
+    /// Consumes the staged image as its programming session starts.
     ///
     /// Returns the region to program, or `None` when nothing is staged and
-    /// ready. Programming resets the core (the programmer halts it over
-    /// UPDI), so the core never sees the result and the handoff is final:
-    /// the staged image is cleared, an application image advances the
-    /// recorded `app_version`, and the outcome is recorded as a success.
-    /// A state-store write failure is not surfaced, since the in-RAM state
+    /// ready. The image is consumed before the session's first command, so
+    /// a reset mid-session cannot re-trigger the same flash on reboot: the
+    /// staged image is cleared, an application image advances the recorded
+    /// `app_version`, and the outcome is recorded as a success. A
+    /// state-store write failure is not surfaced, since the in-RAM state
     /// still drives the current boot.
     ///
     /// There is no rollback enforcement: if programming never happens, the
@@ -225,6 +239,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
         };
         let expected_id = match header.region {
             Region::CellagentApp => self.cellagent_target_id,
+            Region::CellprogApp => self.cellprog_target_id,
             _ => self.target_id,
         };
         if header.target_id != expected_id {
@@ -239,7 +254,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
             ImageKind::Bootloader => header.region == Region::Bootloader,
             ImageKind::Application => matches!(
                 header.region,
-                Region::ApplicationCode | Region::CellagentApp
+                Region::ApplicationCode | Region::CellagentApp | Region::CellprogApp
             ),
             _ => false,
         };
@@ -341,6 +356,20 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore> UpdateAgent<'k, S, K, St> {
     }
 }
 
+/// The session driver streams the committed image straight out of the
+/// agent's store: the master owns the staging EEPROMs, and the programmer
+/// servant has no EEPROM access of its own.
+impl<S: ImageStore, K: KeyStore, St: StateStore> StagedImage for UpdateAgent<'_, S, K, St> {
+    fn read_staged(&mut self, region: Region, offset: u32, buf: &mut [u8]) -> bool {
+        let Some(slot) = self.layout.slot(region) else {
+            return false;
+        };
+        self.store
+            .read(slot.offset.saturating_add(offset), buf)
+            .is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::cell::RefCell;
@@ -360,6 +389,7 @@ mod tests {
     const KEY: [u8; 16] = *b"session-test-key";
     const TARGET: u16 = 0x2A2A;
     const CELLAGENT_TARGET: u16 = 0x2B2B;
+    const CELLPROG_TARGET: u16 = 0x2C2C;
     const CAP: usize = 4096;
     /// Concrete test store, pinned to the test capacity.
     type MemStore = MemStoreImpl<CAP>;
@@ -376,7 +406,11 @@ mod tests {
             },
             cellagent: RegionSlot {
                 offset: 3072,
-                capacity: 1024,
+                capacity: 512,
+            },
+            cellprog: RegionSlot {
+                offset: 3584,
+                capacity: 512,
             },
         }
     }
@@ -439,6 +473,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -464,6 +499,85 @@ mod tests {
     }
 
     #[test]
+    fn cellprog_image_stages_in_its_own_slot() {
+        let payload = [7u8; 33];
+        let image = ImageHeader {
+            kind: ImageKind::Application,
+            region: Region::CellprogApp,
+            target_id: CELLPROG_TARGET,
+            fw_version: 5,
+            payload_len: 0,
+            payload_crc32: 0,
+            hmac: [0u8; 32],
+        };
+        let full = crate::update::verify::sign(image, HMAC::new(KEY), &payload).unwrap();
+        let mut only_header = [0u8; HEADER_LEN];
+        only_header.copy_from_slice(&full);
+        let mut key = KEY;
+        let backing = RefCell::new([0u8; CAP]);
+        let mut agent = UpdateAgent::new(
+            SharedImageStore::new(&backing),
+            layout(),
+            TARGET,
+            CELLAGENT_TARGET,
+            CELLPROG_TARGET,
+            &mut key,
+            NoKeyStore,
+            NullStateStore,
+            PersistentState::new(1),
+        );
+
+        assert!(matches!(
+            run_update(&mut agent, &only_header, &payload),
+            Response::Ack { .. }
+        ));
+        assert_eq!(agent.pending_program(), Some(Region::CellprogApp));
+
+        // The image landed at the cellprog slot offset, header first.
+        let mut staged = [0u8; HEADER_LEN];
+        SharedImageStore::new(&backing)
+            .read(3584, &mut staged)
+            .unwrap();
+        assert_eq!(staged, only_header);
+    }
+
+    #[test]
+    fn cellprog_image_with_wrong_target_id_is_rejected() {
+        let payload = [1u8, 2, 3];
+        let image = ImageHeader {
+            kind: ImageKind::Application,
+            region: Region::CellprogApp,
+            target_id: TARGET,
+            fw_version: 5,
+            payload_len: 0,
+            payload_crc32: 0,
+            hmac: [0u8; 32],
+        };
+        let full = crate::update::verify::sign(image, HMAC::new(KEY), &payload).unwrap();
+        let mut only_header = [0u8; HEADER_LEN];
+        only_header.copy_from_slice(&full);
+        let mut key = KEY;
+        let mut agent = UpdateAgent::new(
+            MemStore::new(),
+            layout(),
+            TARGET,
+            CELLAGENT_TARGET,
+            CELLPROG_TARGET,
+            &mut key,
+            NoKeyStore,
+            NullStateStore,
+            PersistentState::new(1),
+        );
+
+        assert_eq!(
+            agent.handle(Command::Begin {
+                header: only_header
+            }),
+            Response::Nack(NackReason::WrongTarget)
+        );
+    }
+
+    #[test]
     fn tampered_payload_is_rejected() {
         let payload = ramp300();
         let header = signed_image(&payload);
@@ -475,6 +589,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -499,6 +614,7 @@ mod tests {
             layout(),
             0x9999,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -531,6 +647,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -552,6 +669,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -580,6 +698,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -603,6 +722,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -627,6 +747,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -675,6 +796,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             store,
             NullStateStore,
@@ -699,6 +821,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             store,
             NullStateStore,
@@ -729,6 +852,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             store,
             NullStateStore,
@@ -751,6 +875,7 @@ mod tests {
             layout(),
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             &mut key,
             NoKeyStore,
             NullStateStore,
@@ -777,6 +902,7 @@ mod tests {
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
+                CELLPROG_TARGET,
                 &mut key,
                 NoKeyStore,
                 SharedStore::new(&backing),
@@ -807,6 +933,7 @@ mod tests {
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
+                CELLPROG_TARGET,
                 &mut key,
                 NoKeyStore,
                 SharedStore::new(&backing),
@@ -841,7 +968,7 @@ mod tests {
 
     /// A `Begin` whose store write fails must clear a previously staged
     /// image: a stale `Ready` must not survive to trigger an unintended
-    /// handoff.
+    /// programming session.
     #[test]
     fn begin_storage_failure_clears_stale_ready() {
         let backing: RefCell<Option<[u8; STATE_LEN]>> = RefCell::new(None);
@@ -855,6 +982,7 @@ mod tests {
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
+                CELLPROG_TARGET,
                 &mut key,
                 NoKeyStore,
                 SharedStore::new(&backing),
@@ -875,6 +1003,7 @@ mod tests {
                 layout(),
                 TARGET,
                 CELLAGENT_TARGET,
+                CELLPROG_TARGET,
                 &mut key,
                 NoKeyStore,
                 SharedStore::new(&backing),

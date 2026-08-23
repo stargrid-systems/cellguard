@@ -68,7 +68,7 @@ impl<'k, S: ImageStore, K: KeyStore, St: StateStore, const RX: usize> Dispatcher
         &mut self.agent
     }
 
-    /// Consumes a staged image as it is handed off to the programmer.
+    /// Consumes a staged image as its programming session starts.
     ///
     /// See [`UpdateAgent::take_pending_program`].
     #[must_use]
@@ -134,6 +134,7 @@ mod tests {
     const KEY: [u8; 16] = *b"dispatch-tst-key";
     const TARGET: u16 = 0x33;
     const CELLAGENT_TARGET: u16 = 0x34;
+    const CELLPROG_TARGET: u16 = 0x35;
     const NODE: u8 = 7;
     const CAP: usize = 4096;
     /// Concrete test store, pinned to the test capacity.
@@ -153,7 +154,11 @@ mod tests {
             },
             cellagent: RegionSlot {
                 offset: 3072,
-                capacity: 1024,
+                capacity: 512,
+            },
+            cellprog: RegionSlot {
+                offset: 3584,
+                capacity: 512,
             },
         };
         let agent = UpdateAgent::new(
@@ -161,6 +166,7 @@ mod tests {
             layout,
             TARGET,
             CELLAGENT_TARGET,
+            CELLPROG_TARGET,
             key,
             NoKeyStore,
             NullStateStore,

@@ -25,9 +25,6 @@ pub use self::cobs::{DecodeError, Decoder, Encoder, encode_frame, max_encoded_le
 pub use self::identity::{BOARD_MODEL_UNPROVISIONED, DeviceId, SERIAL_LEN, SerialNumber};
 pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
-#[cfg(feature = "bootloader")]
-pub use self::prog::{ProgSource, ProgStatus};
-#[cfg(feature = "bootloader")]
 pub use self::session::{
     Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget,
 };
@@ -41,9 +38,6 @@ mod cobs;
 mod identity;
 mod kind;
 mod packet;
-#[cfg(feature = "bootloader")]
-mod prog;
-#[cfg(feature = "bootloader")]
 mod session;
 #[cfg(feature = "telemetry")]
 mod telemetry;

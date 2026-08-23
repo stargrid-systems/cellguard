@@ -124,6 +124,7 @@ dependencies = [
  "cellguard-panic",
  "cellguard-protocol",
  "crc",
+ "embedded-io",
  "hmac-sha256",
 ]
 

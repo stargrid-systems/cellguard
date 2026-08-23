@@ -69,14 +69,10 @@ pub enum Kind {
     /// Development use only, and inert once the key store is locked.
     #[cfg(feature = "bootloader")]
     BootReplaceKey = 17,
-    /// Programmer request (main MCU to `cellprog`): program a staged image into
-    /// a target. The payload selects which staged image.
-    #[cfg(feature = "bootloader")]
-    ProgProgram = 18,
-    /// Programmer result (`cellprog` to main MCU): the outcome of a
-    /// [`Kind::ProgProgram`] request.
-    #[cfg(feature = "bootloader")]
-    ProgResult = 19,
+    // Kinds 18 (`ProgProgram`) and 19 (`ProgResult`) carried the legacy
+    // whole-image programmer handoff, removed in favor of the transactional
+    // programmer session (kinds 23-28). Discriminants are frozen on the
+    // wire: 18 and 19 must never be reused.
     /// Request: set the cellagent balancer gate state.
     /// Payload: 1 byte bitmask (bit 0 = `GATE_A`, bit 1 = `GATE_B`, bit 2 =
     /// `ALL_OFF`).

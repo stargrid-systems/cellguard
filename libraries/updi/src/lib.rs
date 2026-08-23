@@ -33,7 +33,7 @@ pub use self::driver::{REPEAT_MAX, Updi, UpdiError};
 pub use self::flash::FlashProg;
 pub use self::link::UpdiLink;
 pub use self::programmer::{PAGE_SIZE, ProgError, Programmer};
-pub use self::tiny::TinyProgrammer;
+pub use self::tiny::{FLASH_SIZE, PAGE_SIZE as TINY_PAGE_SIZE, TinyProgrammer};
 
 mod driver;
 mod flash;
