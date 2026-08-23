@@ -136,7 +136,11 @@ impl<'a> Packet<'a> {
         let (head, tail) = slot.split_at_mut(HEADER_LEN);
         head.copy_from_slice(Header::new(id, kind.to_u8(), payload_len).as_bytes());
         let (body, crc) = tail.split_at_mut(payload.len());
-        body.copy_from_slice(payload);
+        // A byte loop instead of `copy_from_slice`: the variable-length copy
+        // would link the generic `memcpy`, which costs more flash.
+        for (dst, src) in body.iter_mut().zip(payload) {
+            *dst = *src;
+        }
         crc.copy_from_slice(&crc::checksum16(payload).to_le_bytes());
         Ok(total)
     }
