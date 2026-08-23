@@ -1,0 +1,25 @@
+[package]
+name = "cellprog"
+version = "0.1.0"
+description = "Hardware-independent programmer logic for the CellGuard PROG MCU."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+page-read = ["cellguard-protocol/page-read"]
+
+[dependencies]
+cellboot.workspace = true
+cellguard-protocol = { workspace = true, features = ["bootloader"] }
+crc.workspace = true
+updi.workspace = true
+
+[dev-dependencies]
+updi = { workspace = true, features = ["mock"] }
+
+[lints]
+workspace = true
