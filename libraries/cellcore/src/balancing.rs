@@ -11,8 +11,8 @@
 //! [`Balancing::note_agent_temp`] refreshes.
 
 use cellguard_protocol::{
-    CELLS, Kind, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAILS, RailSnapshot, Snapshot, TEMP_INVALID,
-    TEMPS, TempSnapshot, decode_bleed, decode_pwm, encode_temps,
+    BleedMasks, BleedPwm, CELLS, Kind, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAILS, RailSnapshot,
+    Snapshot, TEMP_INVALID, TEMPS, TempSnapshot,
 };
 
 /// Caller ticks (any free-running unit) after which an unrefreshed bleed
@@ -178,12 +178,14 @@ impl<H: BalancingHw> Balancing<H> {
                 Some((Kind::Rails, payload.len()))
             }
             Kind::ReadTemperatures => {
-                let mut temps = [TEMP_INVALID; TEMPS];
-                self.hw.temps(&mut temps);
+                let mut snap = TempSnapshot {
+                    temps: [TEMP_INVALID; TEMPS],
+                };
+                self.hw.temps(&mut snap);
                 // Slot 2 is the routed cellagent sensor, served from the
                 // poll cache.
-                temps[2] = self.agent_temp;
-                let payload = encode_temps(&temps, out)?;
+                snap.temps[2] = self.agent_temp;
+                let payload = snap.encode(out)?;
                 Some((Kind::Temperatures, payload.len()))
             }
             Kind::ReadBalancerStatus => {
@@ -202,7 +204,7 @@ impl<H: BalancingHw> Balancing<H> {
                 Some((Kind::BalancerStatus, payload.len()))
             }
             Kind::SetBleed => {
-                let masks = decode_bleed(payload)?;
+                let masks = BleedMasks::decode(payload)?;
                 self.hw.set_bleed(masks.en_3r6, masks.en_36r5);
                 self.en_3r6 = masks.en_3r6;
                 self.en_36r5 = masks.en_36r5;
@@ -211,7 +213,7 @@ impl<H: BalancingHw> Balancing<H> {
                 Some((Kind::Ack, 0))
             }
             Kind::SetBleedPwm => {
-                let duty = decode_pwm(payload)?;
+                let duty = BleedPwm::decode(payload)?.duty;
                 self.hw.set_pwm(duty);
                 self.duty = duty;
                 self.last_refresh = now;
@@ -237,7 +239,8 @@ impl<H: BalancingHw> Balancing<H> {
 #[cfg(test)]
 mod tests {
     use cellguard_protocol::{
-        BalancerStatus, BleedMasks, POWER_ACTIVE_BALANCER, POWER_EN_ALL, Snapshot, decode_pwm,
+        BalancerStatus, BleedMasks, BleedPwm, POWER_ACTIVE_BALANCER, POWER_EN_ALL, Snapshot,
+        TempSnapshot,
     };
 
     use super::{Balancing, BalancingHw};
@@ -280,9 +283,9 @@ mod tests {
             out.codes = [1, 2, 3, 4, 5, 6, 7, 8];
         }
         fn temps(&mut self, out: &mut cellguard_protocol::TempSnapshot) {
-            out[0] = 2500;
-            out[1] = 2600;
-            out[2] = cellguard_protocol::TEMP_INVALID;
+            out.temps[0] = 2500;
+            out.temps[1] = 2600;
+            out.temps[2] = cellguard_protocol::TEMP_INVALID;
         }
         fn tiny_all_off(&mut self) -> bool {
             self.tiny_all_off
@@ -358,9 +361,9 @@ mod tests {
             .handle(0, cellguard_protocol::Kind::ReadTemperatures, &[], &mut out)
             .unwrap();
         assert_eq!(kind, cellguard_protocol::Kind::Temperatures);
-        let temps = cellguard_protocol::decode_temps(out.get(..len).unwrap()).unwrap();
-        assert_eq!(temps[0], 2500);
-        assert_eq!(temps[2], cellguard_protocol::TEMP_INVALID);
+        let temps = TempSnapshot::decode(out.get(..len).unwrap()).unwrap();
+        assert_eq!(temps.temps[0], 2500);
+        assert_eq!(temps.temps[2], cellguard_protocol::TEMP_INVALID);
     }
 
     #[test]
@@ -370,8 +373,8 @@ mod tests {
             let (_, len) = bal
                 .handle(0, cellguard_protocol::Kind::ReadTemperatures, &[], &mut out)
                 .unwrap();
-            let temps = cellguard_protocol::decode_temps(out.get(..len).unwrap()).unwrap();
-            temps[2]
+            let snap = cellguard_protocol::TempSnapshot::decode(out.get(..len).unwrap()).unwrap();
+            snap.temps[2]
         }
 
         let mut bal = Balancing::new(MockHw::default());
@@ -496,7 +499,10 @@ mod tests {
 
     #[test]
     fn pwm_decode_is_little_endian() {
-        assert_eq!(decode_pwm(&[0x34, 0x12]), Some(0x1234));
+        assert_eq!(
+            BleedPwm::decode(&[0x34, 0x12]).map(|pwm| pwm.duty),
+            Some(0x1234)
+        );
         let _ = BleedMasks {
             en_3r6: 0,
             en_36r5: 0,

@@ -16,7 +16,7 @@ use avrxt_hal::tcd::{Output as PwmOutput, Prescaler as PwmPrescaler, TcdPwm};
 use avrxt_hal::twi::Twi;
 use avrxt_hal::vref::{Reference, Vref};
 use cellcore::balancing::BalancingHw;
-use cellguard_protocol::{RailSnapshot, Snapshot, TEMP_INVALID, TempSnapshot};
+use cellguard_protocol::{RailSnapshot, Snapshot, TEMP_INVALID, TEMPS, TempSnapshot};
 use embedded_hal::digital::{InputPin, OutputPin, StatefulOutputPin};
 use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::{NoDelay, RefCellDevice};
@@ -414,14 +414,14 @@ impl BalancingHw for Board {
     }
 
     fn temps(&mut self, out: &mut TempSnapshot) {
-        *out = [TEMP_INVALID; 3];
+        out.temps = [TEMP_INVALID; TEMPS];
         if let Some(addr) = self.temp_addr {
             let mut sensor = P3t1755::new(&mut self.twi, addr);
             if let Ok(temp) = sensor.read_temperature() {
-                out[0] = temp.centi_degrees_celsius();
+                out.temps[0] = temp.centi_degrees_celsius();
             }
         }
-        out[1] = self.lm61_centi;
+        out.temps[1] = self.lm61_centi;
         // Slot 2 is served by the balancing layer from its routed-poll
         // cache.
     }
