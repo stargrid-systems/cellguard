@@ -16,6 +16,11 @@
 //! Frames are lean because the link is point-to-point: `[cmd][body][crc16]`,
 //! COBS-encoded, with no address or kind byte.
 
+use core::mem::size_of_val;
+
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 /// Maximum data bytes carried by one page command or reply.
 pub const PAGE_MAX: usize = 64;
 
@@ -27,6 +32,24 @@ pub const MAX_REPLY_WIRE: usize = crate::max_encoded_len(1 + 3 + PAGE_MAX + CRC_
 
 /// Length of the frame CRC in bytes.
 const CRC_LEN: usize = 2;
+
+/// Wire body of a `PageRead` command.
+#[cfg(feature = "page-read")]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct PageReadBody {
+    addr: U16,
+    len: u8,
+}
+
+/// Wire body of a `ProgSessionStatus` reply: status byte, then the address
+/// it refers to.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct StatusBody {
+    status: u8,
+    addr: U16,
+}
 
 /// Which target a session should program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,10 +266,12 @@ impl<'a> Command<'a> {
             #[cfg(feature = "page-read")]
             Self::PageRead { addr, len } => {
                 *out.first_mut()? = SessionCmd::PageRead.to_code();
-                let [a0, a1] = addr.to_le_bytes();
-                let body = [a0, a1, len];
-                write_at(out, 1, &body)?;
-                body.len()
+                let body = PageReadBody {
+                    addr: U16::new(addr),
+                    len,
+                };
+                write_body(out, 1, &body)?;
+                size_of_val(&body)
             }
             Self::End => {
                 *out.first_mut()? = SessionCmd::End.to_code();
@@ -267,21 +292,21 @@ impl<'a> Command<'a> {
         match SessionCmd::from_code(code)? {
             SessionCmd::Begin => Some(Self::Begin(SessionTarget::from_code(*rest.first()?)?)),
             SessionCmd::PageWrite => {
-                let (addr_bytes, data) = rest.split_first_chunk::<2>()?;
+                let (addr, data) = U16::ref_from_prefix(rest).ok()?;
                 if data.is_empty() || data.len() > PAGE_MAX {
                     return None;
                 }
                 Some(Self::PageWrite {
-                    addr: u16::from_le_bytes(*addr_bytes),
+                    addr: addr.get(),
                     data,
                 })
             }
             #[cfg(feature = "page-read")]
             SessionCmd::PageRead => {
-                let (addr_bytes, rest) = rest.split_first_chunk::<2>()?;
+                let (body, _) = PageReadBody::ref_from_prefix(rest).ok()?;
                 Some(Self::PageRead {
-                    addr: u16::from_le_bytes(*addr_bytes),
-                    len: *rest.first()?,
+                    addr: body.addr.get(),
+                    len: body.len,
                 })
             }
             SessionCmd::End if rest.is_empty() => Some(Self::End),
@@ -301,10 +326,17 @@ impl<'a> Reply<'a> {
         let body_len = match *self {
             Self::Status { status, addr } => {
                 *out.first_mut()? = SessionCmd::Status.to_code();
-                let body = encode_page_status(status, addr.unwrap_or(0));
-                let len = addr.map_or(1, |_| body.len());
-                write_at(out, 1, body.get(..len).unwrap_or(&[]))?;
-                len
+                if let Some(addr) = addr {
+                    let body = StatusBody {
+                        status: status.to_code(),
+                        addr: U16::new(addr),
+                    };
+                    write_body(out, 1, &body)?;
+                    size_of_val(&body)
+                } else {
+                    *out.get_mut(1)? = status.to_code();
+                    1
+                }
             }
             #[cfg(feature = "page-read")]
             Self::PageData { status, addr, data } => {
@@ -312,10 +344,14 @@ impl<'a> Reply<'a> {
                     return None;
                 }
                 *out.first_mut()? = SessionCmd::PageData.to_code();
-                let head = encode_page_status(status, addr);
-                write_at(out, 1, &head)?;
-                write_at(out, 1 + head.len(), data)?;
-                head.len() + data.len()
+                let head = StatusBody {
+                    status: status.to_code(),
+                    addr: U16::new(addr),
+                };
+                write_body(out, 1, &head)?;
+                let head_len = size_of_val(&head);
+                write_at(out, 1 + head_len, data)?;
+                head_len + data.len()
             }
             #[cfg(not(feature = "page-read"))]
             Self::Unused(_) => return None,
@@ -338,19 +374,22 @@ impl<'a> Reply<'a> {
                 let addr = if rest.is_empty() {
                     None
                 } else {
-                    let (addr_bytes, _) = rest.split_first_chunk::<2>()?;
-                    Some(u16::from_le_bytes(*addr_bytes))
+                    Some(U16::ref_from_prefix(rest).ok()?.0.get())
                 };
                 Some(Self::Status { status, addr })
             }
             #[cfg(feature = "page-read")]
             SessionCmd::PageData => {
-                let (status, addr) = decode_page_status(rest)?;
-                let data = rest.get(3..)?;
+                let (head, data) = StatusBody::ref_from_prefix(rest).ok()?;
+                let status = SessionStatus::from_code(head.status)?;
                 if data.len() > PAGE_MAX {
                     return None;
                 }
-                Some(Self::PageData { status, addr, data })
+                Some(Self::PageData {
+                    status,
+                    addr: head.addr.get(),
+                    data,
+                })
             }
             _ => None,
         }
@@ -385,27 +424,22 @@ fn write_at(out: &mut [u8], at: usize, bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
+/// Writes a fixed-layout body at `at`. Unlike [`write_at`], the constant
+/// length lets `copy_from_slice` inline instead of linking `memcpy`.
+fn write_body<T>(out: &mut [u8], at: usize, body: &T) -> Option<()>
+where
+    T: IntoBytes + Immutable,
+{
+    let bytes = body.as_bytes();
+    let slot = out.get_mut(at..at + bytes.len())?;
+    slot.copy_from_slice(bytes);
+    Some(())
+}
+
 fn write_addr_body(out: &mut [u8], addr: u16, data: &[u8]) -> Option<()> {
     let head = out.get_mut(1..3)?;
-    head.copy_from_slice(&addr.to_le_bytes());
+    head.copy_from_slice(U16::new(addr).as_bytes());
     write_at(out, 3, data)
-}
-
-/// Encodes a `ProgSessionStatus` reply body: status byte, then the 2 address
-/// bytes it refers to.
-const fn encode_page_status(status: SessionStatus, addr: u16) -> [u8; 3] {
-    let [a0, a1] = addr.to_le_bytes();
-    [status.to_code(), a0, a1]
-}
-
-/// Decodes a `ProgSessionStatus` reply body.
-fn decode_page_status(payload: &[u8]) -> Option<(SessionStatus, u16)> {
-    let (status, rest) = payload.split_first_chunk::<1>()?;
-    let (addr_bytes, _) = rest.split_first_chunk::<2>()?;
-    Some((
-        SessionStatus::from_code(status[0])?,
-        u16::from_le_bytes(*addr_bytes),
-    ))
 }
 
 #[cfg(test)]
