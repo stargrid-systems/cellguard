@@ -4,11 +4,10 @@
 //!
 //! # Features
 //!
-//! Features are additive and off by default.
-//!
 //! - `sign`: host-side image signing (`update::verify::sign`). A device never
-//!   signs, it only verifies.
-//! - `telemetry`: the balancing-test layer (`balancing`).
+//!   signs, it only verifies, so host tools and tests enable this.
+//! - `telemetry`: the balancing-test layer (`balancing`). Pulls in the protocol
+//!   crate's telemetry kinds.
 #![no_std]
 #![warn(missing_docs)]
 
