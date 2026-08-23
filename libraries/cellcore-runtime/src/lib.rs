@@ -383,8 +383,7 @@ mod tests {
     use cellcore::update::dispatch::Dispatcher;
     use cellcore::update::session::{RegionSlot, StagingLayout, UpdateAgent};
     use cellguard_protocol::{
-        Command as WireCommand, Decoder, Encoder, Kind, Packet, Reply, SessionCmd, SessionStatus,
-        decode_command, encode_frame, encode_reply,
+        Command as WireCommand, Decoder, Encoder, Kind, Packet, Reply, SessionStatus, encode_frame,
     };
 
     use super::CoreRuntime;
@@ -454,6 +453,14 @@ mod tests {
         }
     }
 
+    /// Which command the servant observed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Cmd {
+        Begin,
+        PageWrite,
+        End,
+    }
+
     /// A decoded command, copied out of the decode buffer so the mock can
     /// mutate itself while executing it.
     enum Owned {
@@ -472,7 +479,7 @@ mod tests {
         scratch: [u8; 96],
         in_session: bool,
         flash: std::vec::Vec<u8>,
-        commands: std::vec::Vec<SessionCmd>,
+        commands: std::vec::Vec<Cmd>,
         /// Status to reply to page commands instead of writing flash.
         fail_status: Option<SessionStatus>,
         /// Swallow all replies, simulating a dead link.
@@ -502,7 +509,7 @@ mod tests {
             let Some(frame) = self.scratch.get(..n) else {
                 return;
             };
-            let owned = match decode_command(frame) {
+            let owned = match WireCommand::decode(frame) {
                 Some(WireCommand::Begin(_)) => Owned::Begin,
                 Some(WireCommand::PageWrite { addr, data }) => Owned::PageWrite {
                     addr,
@@ -516,7 +523,7 @@ mod tests {
                 return;
             }
             let mut raw = [0u8; 1 + 3 + cellguard_protocol::PAGE_MAX + 2];
-            let n = encode_reply(reply, &mut raw).unwrap();
+            let n = reply.encode(&mut raw).unwrap();
             let mut wire = [0u8; 96];
             let wire_len = encode_frame(&raw[..n], &mut wire).unwrap();
             self.readable.extend_from_slice(&wire[..wire_len]);
@@ -528,14 +535,14 @@ mod tests {
             match cmd {
                 Owned::Begin => {
                     self.in_session = true;
-                    self.commands.push(SessionCmd::Begin);
+                    self.commands.push(Cmd::Begin);
                     Reply::Status {
                         status: SessionStatus::Ok,
                         addr: None,
                     }
                 }
                 Owned::PageWrite { addr, data } => {
-                    self.commands.push(SessionCmd::PageWrite);
+                    self.commands.push(Cmd::PageWrite);
                     let status = if !self.in_session {
                         SessionStatus::BadState
                     } else if let Some(status) = self.fail_status {
@@ -555,7 +562,7 @@ mod tests {
                 }
                 Owned::End => {
                     self.in_session = false;
-                    self.commands.push(SessionCmd::End);
+                    self.commands.push(Cmd::End);
                     Reply::Status {
                         status: SessionStatus::Ok,
                         addr: None,
@@ -758,12 +765,12 @@ mod tests {
         );
         assert_eq!(
             runtime.prog.commands.first(),
-            Some(&SessionCmd::Begin),
+            Some(&Cmd::Begin),
             "the session must open with Begin"
         );
         assert_eq!(
             runtime.prog.commands.last(),
-            Some(&SessionCmd::End),
+            Some(&Cmd::End),
             "the session must close with End"
         );
         assert_eq!(
