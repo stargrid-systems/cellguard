@@ -20,11 +20,7 @@ hmac-sha256 = { workspace = true, features = ["opt_size"] }
 cellguard-panic = { workspace = true }
 
 [features]
-# Host-side image signing (`verify::sign`). A device never signs, it only
-# verifies, so this is enabled by host tools (cellguard-cli) and tests only.
 sign = []
-# The balancing-test telemetry layer (`balancing`). Pulls in the protocol
-# crate's telemetry kinds. Additive.
 telemetry = ["cellguard-protocol/telemetry"]
 
 [dev-dependencies]
