@@ -16,6 +16,11 @@
 //! Frames are lean because the link is point-to-point: `[cmd][body][crc16]`,
 //! COBS-encoded, with no address or kind byte.
 
+use core::mem::size_of_val;
+
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 /// Maximum data bytes carried by one page command or reply.
 pub const PAGE_MAX: usize = 64;
 
@@ -27,6 +32,24 @@ pub const MAX_REPLY_WIRE: usize = crate::max_encoded_len(1 + 3 + PAGE_MAX + CRC_
 
 /// Length of the frame CRC in bytes.
 const CRC_LEN: usize = 2;
+
+/// Wire body of a `PageRead` command.
+#[cfg(feature = "page-read")]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct PageReadBody {
+    addr: U16,
+    len: u8,
+}
+
+/// Wire body of a `ProgSessionStatus` reply: status byte, then the address
+/// it refers to.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct StatusBody {
+    status: u8,
+    addr: U16,
+}
 
 /// Which target a session should program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +152,7 @@ impl SessionStatus {
 
 /// Frame type byte of the session link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionCmd {
+enum SessionCmd {
     /// Chip-erase the target and enter programming mode.
     Begin,
     /// Program the carried data at the carried address.
@@ -146,8 +169,7 @@ pub enum SessionCmd {
 
 impl SessionCmd {
     /// Returns the wire byte for this command.
-    #[must_use]
-    pub const fn to_code(self) -> u8 {
+    const fn to_code(self) -> u8 {
         match self {
             Self::Begin => 1,
             Self::PageWrite => 2,
@@ -159,8 +181,7 @@ impl SessionCmd {
     }
 
     /// Parses a wire byte into a command.
-    #[must_use]
-    pub const fn from_code(code: u8) -> Option<Self> {
+    const fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::Begin),
             2 => Some(Self::PageWrite),
@@ -225,124 +246,159 @@ pub enum Reply<'a> {
     Unused(core::marker::PhantomData<&'a [u8]>),
 }
 
-/// Encodes a session command into `out` as a complete frame (command byte,
-/// body, CRC-16), returning its length. The result is pre-COBS.
-///
-/// Returns `None` if `out` is too small or the page data is empty or
-/// oversized.
-#[must_use]
-pub fn encode_command(cmd: Command<'_>, out: &mut [u8]) -> Option<usize> {
-    let body_len = match cmd {
-        Command::Begin(target) => {
-            *out.first_mut()? = SessionCmd::Begin.to_code();
-            let body = encode_begin(target);
-            write_at(out, 1, &body)?;
-            body.len()
-        }
-        Command::PageWrite { addr, data } => {
-            if data.is_empty() || data.len() > PAGE_MAX {
-                return None;
+impl<'a> Command<'a> {
+    /// Encodes the command into `out` as a complete frame (command byte,
+    /// body, CRC-16), returning its length. The result is pre-COBS.
+    ///
+    /// Returns `None` if `out` is too small or the page data is empty or
+    /// oversized.
+    #[must_use]
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        let body_len = match *self {
+            Self::Begin(target) => {
+                *out.first_mut()? = SessionCmd::Begin.to_code();
+                let body = [target.to_code()];
+                write_at(out, 1, &body)?;
+                body.len()
             }
-            *out.first_mut()? = SessionCmd::PageWrite.to_code();
-            write_addr_body(out, addr, data)?;
-            2 + data.len()
-        }
-        #[cfg(feature = "page-read")]
-        Command::PageRead { addr, len } => {
-            *out.first_mut()? = SessionCmd::PageRead.to_code();
-            let body = encode_read(addr, len);
-            write_at(out, 1, &body)?;
-            body.len()
-        }
-        Command::End => {
-            *out.first_mut()? = SessionCmd::End.to_code();
-            0
-        }
-    };
-    finish_frame(out, body_len + 1)
-}
+            Self::PageWrite { addr, data } => {
+                if data.is_empty() || data.len() > PAGE_MAX {
+                    return None;
+                }
+                *out.first_mut()? = SessionCmd::PageWrite.to_code();
+                write_addr_body(out, addr, data)?;
+                2 + data.len()
+            }
+            #[cfg(feature = "page-read")]
+            Self::PageRead { addr, len } => {
+                *out.first_mut()? = SessionCmd::PageRead.to_code();
+                let body = PageReadBody {
+                    addr: U16::new(addr),
+                    len,
+                };
+                write_body(out, 1, &body)?;
+                size_of_val(&body)
+            }
+            Self::End => {
+                *out.first_mut()? = SessionCmd::End.to_code();
+                0
+            }
+        };
+        finish_frame(out, body_len + 1)
+    }
 
-/// Decodes a complete, COBS-decoded session command frame, checking its CRC.
-///
-/// Returns `None` if the CRC does not match, the command byte is unknown, or
-/// the body is malformed.
-#[must_use]
-pub fn decode_command(frame: &[u8]) -> Option<Command<'_>> {
-    let body = split_frame(frame)?;
-    let (&code, rest) = body.split_first()?;
-    match SessionCmd::from_code(code)? {
-        SessionCmd::Begin => Some(Command::Begin(decode_begin(rest)?)),
-        SessionCmd::PageWrite => {
-            let (addr, data) = decode_write(rest)?;
-            Some(Command::PageWrite { addr, data })
+    /// Decodes a complete, COBS-decoded command frame, checking its CRC.
+    ///
+    /// Returns `None` if the CRC does not match, the command byte is unknown,
+    /// or the body is malformed.
+    #[must_use]
+    pub fn decode(frame: &'a [u8]) -> Option<Self> {
+        let body = split_frame(frame)?;
+        let (&code, rest) = body.split_first()?;
+        match SessionCmd::from_code(code)? {
+            SessionCmd::Begin => Some(Self::Begin(SessionTarget::from_code(*rest.first()?)?)),
+            SessionCmd::PageWrite => {
+                let (addr, data) = U16::ref_from_prefix(rest).ok()?;
+                if data.is_empty() || data.len() > PAGE_MAX {
+                    return None;
+                }
+                Some(Self::PageWrite {
+                    addr: addr.get(),
+                    data,
+                })
+            }
+            #[cfg(feature = "page-read")]
+            SessionCmd::PageRead => {
+                let (body, _) = PageReadBody::ref_from_prefix(rest).ok()?;
+                Some(Self::PageRead {
+                    addr: body.addr.get(),
+                    len: body.len,
+                })
+            }
+            SessionCmd::End if rest.is_empty() => Some(Self::End),
+            _ => None,
         }
-        #[cfg(feature = "page-read")]
-        SessionCmd::PageRead => {
-            let (addr, len) = decode_read(rest)?;
-            Some(Command::PageRead { addr, len })
-        }
-        SessionCmd::End if rest.is_empty() => Some(Command::End),
-        _ => None,
     }
 }
 
-/// Encodes a session reply into `out` as a complete frame, returning its
-/// length. The result is pre-COBS.
-///
-/// Returns `None` if `out` is too small or the reply carries oversized data.
-#[must_use]
-pub fn encode_reply(reply: Reply<'_>, out: &mut [u8]) -> Option<usize> {
-    let body_len = match reply {
-        Reply::Status { status, addr } => {
-            *out.first_mut()? = SessionCmd::Status.to_code();
-            let body = encode_page_status(status, addr.unwrap_or(0));
-            let len = addr.map_or(1, |_| body.len());
-            write_at(out, 1, body.get(..len).unwrap_or(&[]))?;
-            len
-        }
-        #[cfg(feature = "page-read")]
-        Reply::PageData { status, addr, data } => {
-            if data.len() > PAGE_MAX {
-                return None;
+impl<'a> Reply<'a> {
+    /// Encodes the reply into `out` as a complete frame, returning its
+    /// length. The result is pre-COBS.
+    ///
+    /// Returns `None` if `out` is too small or the reply carries oversized
+    /// data.
+    #[must_use]
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        let body_len = match *self {
+            Self::Status { status, addr } => {
+                *out.first_mut()? = SessionCmd::Status.to_code();
+                if let Some(addr) = addr {
+                    let body = StatusBody {
+                        status: status.to_code(),
+                        addr: U16::new(addr),
+                    };
+                    write_body(out, 1, &body)?;
+                    size_of_val(&body)
+                } else {
+                    *out.get_mut(1)? = status.to_code();
+                    1
+                }
             }
-            *out.first_mut()? = SessionCmd::PageData.to_code();
-            let head = encode_page_status(status, addr);
-            write_at(out, 1, &head)?;
-            write_at(out, 1 + head.len(), data)?;
-            head.len() + data.len()
-        }
-        #[cfg(not(feature = "page-read"))]
-        Reply::Unused(_) => return None,
-    };
-    finish_frame(out, body_len + 1)
-}
+            #[cfg(feature = "page-read")]
+            Self::PageData { status, addr, data } => {
+                if data.len() > PAGE_MAX {
+                    return None;
+                }
+                *out.first_mut()? = SessionCmd::PageData.to_code();
+                let head = StatusBody {
+                    status: status.to_code(),
+                    addr: U16::new(addr),
+                };
+                write_body(out, 1, &head)?;
+                let head_len = size_of_val(&head);
+                write_at(out, 1 + head_len, data)?;
+                head_len + data.len()
+            }
+            #[cfg(not(feature = "page-read"))]
+            Self::Unused(_) => return None,
+        };
+        finish_frame(out, body_len + 1)
+    }
 
-/// Decodes a complete, COBS-decoded session reply frame, checking its CRC.
-///
-/// Returns `None` if the CRC does not match, the command byte is unknown, or
-/// the body is malformed.
-#[must_use]
-pub fn decode_reply(frame: &[u8]) -> Option<Reply<'_>> {
-    let body = split_frame(frame)?;
-    let (&code, rest) = body.split_first()?;
-    match SessionCmd::from_code(code)? {
-        SessionCmd::Status => {
-            let (status, rest) = rest.split_first_chunk::<1>()?;
-            let status = SessionStatus::from_code(status[0])?;
-            let addr = if rest.is_empty() {
-                None
-            } else {
-                let (addr_bytes, _) = rest.split_first_chunk::<2>()?;
-                Some(u16::from_le_bytes(*addr_bytes))
-            };
-            Some(Reply::Status { status, addr })
+    /// Decodes a complete, COBS-decoded reply frame, checking its CRC.
+    ///
+    /// Returns `None` if the CRC does not match, the command byte is unknown,
+    /// or the body is malformed.
+    #[must_use]
+    pub fn decode(frame: &'a [u8]) -> Option<Self> {
+        let body = split_frame(frame)?;
+        let (&code, rest) = body.split_first()?;
+        match SessionCmd::from_code(code)? {
+            SessionCmd::Status => {
+                let (&status, rest) = rest.split_first()?;
+                let status = SessionStatus::from_code(status)?;
+                let addr = if rest.is_empty() {
+                    None
+                } else {
+                    Some(U16::ref_from_prefix(rest).ok()?.0.get())
+                };
+                Some(Self::Status { status, addr })
+            }
+            #[cfg(feature = "page-read")]
+            SessionCmd::PageData => {
+                let (head, data) = StatusBody::ref_from_prefix(rest).ok()?;
+                let status = SessionStatus::from_code(head.status)?;
+                if data.len() > PAGE_MAX {
+                    return None;
+                }
+                Some(Self::PageData {
+                    status,
+                    addr: head.addr.get(),
+                    data,
+                })
+            }
+            _ => None,
         }
-        #[cfg(feature = "page-read")]
-        SessionCmd::PageData => {
-            let (status, addr, data) = decode_page_data(rest)?;
-            Some(Reply::PageData { status, addr, data })
-        }
-        _ => None,
     }
 }
 
@@ -374,135 +430,44 @@ fn write_at(out: &mut [u8], at: usize, bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
+/// Writes a fixed-layout body at `at`. Unlike [`write_at`], the constant
+/// length lets `copy_from_slice` inline instead of linking `memcpy`.
+fn write_body<T>(out: &mut [u8], at: usize, body: &T) -> Option<()>
+where
+    T: IntoBytes + Immutable,
+{
+    let bytes = body.as_bytes();
+    let slot = out.get_mut(at..at + bytes.len())?;
+    slot.copy_from_slice(bytes);
+    Some(())
+}
+
 fn write_addr_body(out: &mut [u8], addr: u16, data: &[u8]) -> Option<()> {
     let head = out.get_mut(1..3)?;
-    head.copy_from_slice(&addr.to_le_bytes());
+    head.copy_from_slice(U16::new(addr).as_bytes());
     write_at(out, 3, data)
-}
-
-/// Encodes the payload of a `ProgSessionBegin` command.
-#[must_use]
-pub const fn encode_begin(target: SessionTarget) -> [u8; 1] {
-    [target.to_code()]
-}
-
-/// Decodes the payload of a `ProgSessionBegin` command.
-#[must_use]
-pub fn decode_begin(payload: &[u8]) -> Option<SessionTarget> {
-    SessionTarget::from_code(*payload.first()?)
-}
-
-/// Encodes a `ProgPageWrite` payload. `data` must not be empty nor longer
-/// than [`PAGE_MAX`].
-#[must_use]
-pub fn encode_write<'a>(addr: u16, data: &[u8], out: &'a mut [u8]) -> Option<&'a [u8]> {
-    let len = 2 + data.len();
-    if data.is_empty() || data.len() > PAGE_MAX || out.len() < len {
-        return None;
-    }
-    let (head, rest) = out.split_at_mut(2);
-    head.copy_from_slice(&addr.to_le_bytes());
-    // A byte loop instead of `copy_from_slice`: the variable-length copy
-    // would link the generic `memcpy`, which costs more flash.
-    for (dst, src) in rest.iter_mut().zip(data) {
-        *dst = *src;
-    }
-    out.get(..len)
-}
-
-/// Decodes a `ProgPageWrite` payload. The data slice borrows from `payload`.
-#[must_use]
-pub fn decode_write(payload: &[u8]) -> Option<(u16, &[u8])> {
-    let (addr_bytes, data) = payload.split_first_chunk::<2>()?;
-    let addr = u16::from_le_bytes(*addr_bytes);
-    if data.is_empty() || data.len() > PAGE_MAX {
-        return None;
-    }
-    Some((addr, data))
-}
-
-/// Encodes the payload of a `PageRead` command.
-#[cfg(feature = "page-read")]
-#[must_use]
-pub const fn encode_read(addr: u16, len: u8) -> [u8; 3] {
-    let [a0, a1] = addr.to_le_bytes();
-    [a0, a1, len]
-}
-
-/// Decodes the payload of a `PageRead` command into the address and the
-/// requested length.
-#[cfg(feature = "page-read")]
-#[must_use]
-pub fn decode_read(payload: &[u8]) -> Option<(u16, u8)> {
-    let (addr_bytes, rest) = payload.split_first_chunk::<2>()?;
-    Some((u16::from_le_bytes(*addr_bytes), *rest.first()?))
-}
-
-/// Encodes a `ProgSessionStatus` reply payload: status byte, then the 2
-/// address bytes it refers to.
-#[must_use]
-pub const fn encode_page_status(status: SessionStatus, addr: u16) -> [u8; 3] {
-    let [a0, a1] = addr.to_le_bytes();
-    [status.to_code(), a0, a1]
-}
-
-/// Decodes a `ProgSessionStatus` reply payload.
-#[must_use]
-pub fn decode_page_status(payload: &[u8]) -> Option<(SessionStatus, u16)> {
-    let (status, rest) = payload.split_first_chunk::<1>()?;
-    let (addr_bytes, _) = rest.split_first_chunk::<2>()?;
-    Some((
-        SessionStatus::from_code(status[0])?,
-        u16::from_le_bytes(*addr_bytes),
-    ))
-}
-
-/// Encodes the payload of a `ProgPageData` reply into `out`.
-///
-/// An error reply carries no data, which [`decode_page_data`] reports as an
-/// empty slice. Returns `None` if `data` is longer than [`PAGE_MAX`] or `out`
-/// is too small.
-#[must_use]
-pub fn encode_page_data<'a>(
-    status: SessionStatus,
-    addr: u16,
-    data: &[u8],
-    out: &'a mut [u8],
-) -> Option<&'a [u8]> {
-    let len = 3 + data.len();
-    if data.len() > PAGE_MAX || out.len() < len {
-        return None;
-    }
-    let (head, rest) = out.split_at_mut(3);
-    head.copy_from_slice(&encode_page_status(status, addr));
-    for (dst, src) in rest.iter_mut().zip(data) {
-        *dst = *src;
-    }
-    out.get(..len)
-}
-
-/// Decodes the payload of a `ProgPageData` reply. The data slice borrows from
-/// `payload`.
-#[must_use]
-pub fn decode_page_data(payload: &[u8]) -> Option<(SessionStatus, u16, &[u8])> {
-    let (status, addr) = decode_page_status(payload)?;
-    let data = payload.get(3..)?;
-    if data.len() > PAGE_MAX {
-        return None;
-    }
-    Some((status, addr, data))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Command, PAGE_MAX, Reply, SessionCmd, SessionStatus, SessionTarget, decode_begin,
-        decode_command, decode_page_data, decode_page_status, decode_reply, decode_write,
-        encode_begin, encode_command, encode_page_data, encode_page_status, encode_reply,
-        encode_write,
-    };
-    #[cfg(feature = "page-read")]
-    use super::{decode_read, encode_read};
+    use super::{Command, PAGE_MAX, Reply, SessionCmd, SessionStatus, SessionTarget};
+
+    /// Builds `body` plus its CRC-16 in `out`, returning the frame length.
+    fn frame_with_crc(body: &[u8], out: &mut [u8]) -> usize {
+        let n = body.len();
+        out[..n].copy_from_slice(body);
+        out[n..n + 2].copy_from_slice(&crc::checksum16(body).to_le_bytes());
+        n + 2
+    }
+
+    /// Asserts that `frame` is exactly `body` plus its CRC-16.
+    fn assert_frame(frame: &[u8], body: &[u8]) {
+        assert_eq!(frame.len(), body.len() + 2);
+        let n = body.len();
+        assert_eq!(&frame[..n], body);
+        let crc = crc::checksum16(body);
+        assert_eq!(&frame[n..], &crc.to_le_bytes());
+    }
 
     #[test]
     fn target_roundtrips() {
@@ -545,66 +510,18 @@ mod tests {
     }
 
     #[test]
-    fn begin_payload_roundtrips() {
-        let payload = encode_begin(SessionTarget::Cellagent);
-        assert_eq!(decode_begin(&payload), Some(SessionTarget::Cellagent));
-    }
-
-    #[test]
-    fn write_payload_roundtrips() {
-        let mut out = [0u8; 2 + PAGE_MAX];
-        let data = [0xA5u8; PAGE_MAX];
-        let payload = encode_write(0x1234, &data, &mut out).expect("fits");
-        let (addr, decoded) = decode_write(payload).expect("decodes");
-        assert_eq!(addr, 0x1234);
-        assert_eq!(decoded, &data);
-    }
-
-    #[test]
-    fn write_payload_rejects_empty_and_oversized() {
-        assert!(decode_write(&[0x00, 0x10]).is_none(), "empty data");
-        let oversized = [0u8; 2 + PAGE_MAX + 1];
-        assert!(decode_write(&oversized).is_none(), "oversized data");
-        let mut out = [0u8; 2 + PAGE_MAX];
-        assert!(encode_write(0, &[], &mut out).is_none(), "empty data");
-    }
-
-    #[test]
-    fn write_payload_short_page_uses_prefix_of_buffer() {
-        let mut out = [0xFFu8; 2 + PAGE_MAX];
-        let data = [1, 2, 3];
-        let payload = encode_write(0x0200, &data, &mut out).expect("fits");
-        let (addr, decoded) = decode_write(payload).expect("decodes");
-        assert_eq!(addr, 0x0200);
-        assert_eq!(decoded, &data);
-    }
-
-    #[cfg(feature = "page-read")]
-    #[test]
-    fn read_payload_roundtrips() {
-        let page_max = u8::try_from(PAGE_MAX).expect("PAGE_MAX fits u8");
-        let payload = encode_read(0xBEEF, page_max);
-        assert_eq!(decode_read(&payload), Some((0xBEEF, page_max)));
-    }
-
-    #[test]
-    fn page_status_roundtrips() {
-        let payload = encode_page_status(SessionStatus::Busy, 0x0102);
-        assert_eq!(
-            decode_page_status(&payload),
-            Some((SessionStatus::Busy, 0x0102))
+    fn begin_frame_wire_bytes_are_frozen() {
+        let mut out = [0u8; 8];
+        let n = Command::Begin(SessionTarget::Cellagent)
+            .encode(&mut out)
+            .expect("fits");
+        assert_frame(
+            &out[..n],
+            &[
+                SessionCmd::Begin.to_code(),
+                SessionTarget::Cellagent.to_code(),
+            ],
         );
-    }
-
-    #[test]
-    fn page_data_roundtrips() {
-        let mut out = [0u8; 3 + PAGE_MAX];
-        let data = core::array::from_fn::<u8, PAGE_MAX, _>(|i| u8::try_from(i).unwrap());
-        let payload = encode_page_data(SessionStatus::Ok, 0x0400, &data, &mut out).expect("fits");
-        let (status, addr, decoded) = decode_page_data(payload).expect("decodes");
-        assert_eq!(status, SessionStatus::Ok);
-        assert_eq!(addr, 0x0400);
-        assert_eq!(decoded, &data);
     }
 
     #[test]
@@ -630,9 +547,33 @@ mod tests {
             Command::End,
         ];
         for cmd in commands {
-            let n = encode_command(cmd, &mut out).expect("fits");
-            assert_eq!(decode_command(&out[..n]), Some(cmd), "{cmd:?}");
+            let n = cmd.encode(&mut out).expect("fits");
+            assert_eq!(Command::decode(&out[..n]), Some(cmd), "{cmd:?}");
         }
+    }
+
+    #[test]
+    fn decode_rejects_malformed_page_write_bodies() {
+        let mut buf = [0u8; 6 + PAGE_MAX];
+        let n = frame_with_crc(&[SessionCmd::PageWrite.to_code(), 0x34, 0x12], &mut buf);
+        assert!(Command::decode(&buf[..n]).is_none(), "empty data");
+        let mut body = [0u8; 4 + PAGE_MAX];
+        body[0] = SessionCmd::PageWrite.to_code();
+        let n = frame_with_crc(&body, &mut buf);
+        assert!(Command::decode(&buf[..n]).is_none(), "oversized data");
+    }
+
+    #[cfg(feature = "page-read")]
+    #[test]
+    fn page_read_wire_bytes_are_frozen() {
+        let mut out = [0u8; 8];
+        let n = Command::PageRead {
+            addr: 0xBEEF,
+            len: 7,
+        }
+        .encode(&mut out)
+        .expect("fits");
+        assert_frame(&out[..n], &[SessionCmd::PageRead.to_code(), 0xEF, 0xBE, 7]);
     }
 
     #[test]
@@ -655,71 +596,124 @@ mod tests {
             },
         ];
         for reply in replies {
-            let n = encode_reply(reply, &mut out).expect("fits");
-            assert_eq!(decode_reply(&out[..n]), Some(reply), "{reply:?}");
+            let n = reply.encode(&mut out).expect("fits");
+            assert_eq!(Reply::decode(&out[..n]), Some(reply), "{reply:?}");
         }
+    }
+
+    #[test]
+    fn status_reply_wire_bytes_are_frozen() {
+        let mut out = [0u8; 8];
+        // Without an address the body is a single status byte.
+        let n = Reply::Status {
+            status: SessionStatus::Ok,
+            addr: None,
+        }
+        .encode(&mut out)
+        .expect("fits");
+        assert_frame(
+            &out[..n],
+            &[SessionCmd::Status.to_code(), SessionStatus::Ok.to_code()],
+        );
+        // With an address the body appends it in little-endian order.
+        let n = Reply::Status {
+            status: SessionStatus::Busy,
+            addr: Some(0x0402),
+        }
+        .encode(&mut out)
+        .expect("fits");
+        assert_frame(
+            &out[..n],
+            &[
+                SessionCmd::Status.to_code(),
+                SessionStatus::Busy.to_code(),
+                0x02,
+                0x04,
+            ],
+        );
+    }
+
+    #[cfg(feature = "page-read")]
+    #[test]
+    fn page_data_head_wire_bytes_are_frozen() {
+        let mut out = [0u8; 16];
+        let n = Reply::PageData {
+            status: SessionStatus::Busy,
+            addr: 0x0204,
+            data: &[1, 2, 3],
+        }
+        .encode(&mut out)
+        .expect("fits");
+        assert_frame(
+            &out[..n],
+            &[
+                SessionCmd::PageData.to_code(),
+                SessionStatus::Busy.to_code(),
+                0x04,
+                0x02,
+                1,
+                2,
+                3,
+            ],
+        );
     }
 
     #[test]
     fn corrupt_frame_fails_the_crc() {
         let mut out = [0u8; 32];
-        let n = encode_command(
-            Command::PageWrite {
-                addr: 0x0200,
-                data: &[1, 2, 3, 4],
-            },
-            &mut out,
-        )
+        let n = Command::PageWrite {
+            addr: 0x0200,
+            data: &[1, 2, 3, 4],
+        }
+        .encode(&mut out)
         .expect("fits");
         out[0] ^= 0x01;
-        assert_eq!(decode_command(&out[..n]), None);
+        assert_eq!(Command::decode(&out[..n]), None);
         out[0] ^= 0x01;
-        assert!(decode_command(&out[..n]).is_some());
+        assert!(Command::decode(&out[..n]).is_some());
     }
 
     #[test]
     fn encode_rejects_malformed_commands() {
         let mut out = [0u8; 1 + 2 + PAGE_MAX + 2];
         assert!(
-            encode_command(Command::PageWrite { addr: 0, data: &[] }, &mut out).is_none(),
+            Command::PageWrite { addr: 0, data: &[] }
+                .encode(&mut out)
+                .is_none(),
             "empty page data"
         );
         let oversized = [0u8; PAGE_MAX + 1];
         assert!(
-            encode_command(
-                Command::PageWrite {
-                    addr: 0,
-                    data: &oversized,
-                },
-                &mut out
-            )
+            Command::PageWrite {
+                addr: 0,
+                data: &oversized
+            }
+            .encode(&mut out)
             .is_none(),
             "oversized page data"
         );
         let mut small = [0u8; 2];
-        assert!(
-            encode_command(Command::End, &mut small).is_none(),
-            "no room"
-        );
+        assert!(Command::End.encode(&mut small).is_none(), "no room");
     }
 
     #[test]
     fn end_with_a_body_is_rejected() {
-        let body = [SessionCmd::End.to_code(), 0x00];
-        let crc = crc::checksum16(&body);
-        let mut wire = [0u8; 4];
-        wire[..2].copy_from_slice(&body);
-        wire[2..].copy_from_slice(&crc.to_le_bytes());
-        assert_eq!(decode_command(&wire), None);
+        let mut buf = [0u8; 4];
+        let n = frame_with_crc(&[SessionCmd::End.to_code(), 0x00], &mut buf);
+        assert_eq!(Command::decode(&buf[..n]), None);
     }
 
+    #[cfg(feature = "page-read")]
     #[test]
     fn page_data_error_reply_is_short() {
-        let mut out = [0u8; 3 + PAGE_MAX];
-        let payload = encode_page_data(SessionStatus::Locked, 0x0400, &[], &mut out).expect("fits");
-        let (status, addr, decoded) = decode_page_data(payload).expect("decodes");
-        assert_eq!(status, SessionStatus::Locked);
-        assert_eq!(addr, 0x0400);
-        assert!(decoded.is_empty());
+        let mut out = [0u8; 1 + 3 + PAGE_MAX + 2];
+        let reply = Reply::PageData {
+            status: SessionStatus::Locked,
+            addr: 0x0400,
+            data: &[],
+        };
+        let n = reply.encode(&mut out).expect("fits");
+        assert_eq!(Reply::decode(&out[..n]), Some(reply));
+        assert_eq!(n, 1 + 3 + 2);
     }
 }

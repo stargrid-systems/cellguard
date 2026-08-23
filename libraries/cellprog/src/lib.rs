@@ -7,6 +7,12 @@
 //! cellcore before staging, so there is no crypto here.
 //!
 //! - [`session`]: the servant-side session protocol.
+//!
+//! # Features
+//!
+//! - `page-read`: flash read-back over the session protocol. It does not fit
+//!   the `ATtiny406` servant next to the rest of its firmware, so the feature
+//!   is off there.
 #![no_std]
 #![warn(missing_docs)]
 

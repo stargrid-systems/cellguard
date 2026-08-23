@@ -10,6 +10,14 @@
 //! Every message has a [`Kind`] from one central registry, so a trace tool can
 //! decode any packet. Bootloader kinds are gated behind the `bootloader`
 //! feature but keep fixed discriminants.
+//!
+//! # Features
+//!
+//! - `bootloader`: the bootloader message kinds, the staged-image programmer
+//!   messages, and the programmer session protocol.
+//! - `page-read`: the session flash read-back path (`PageRead`/`PageData`).
+//!   Costs 722 B on the `ATtiny406` servant.
+//! - `telemetry`: the balancing-test telemetry kinds and payload codecs.
 #![no_std]
 #![warn(missing_docs)]
 
@@ -18,18 +26,12 @@ pub use self::kind::Kind;
 pub use self::packet::{Error, HEADER_LEN, Header, PAYLOAD_CRC_LEN, Packet};
 #[cfg(feature = "bootloader")]
 pub use self::session::{
-    Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionCmd, SessionStatus,
-    SessionTarget, decode_begin, decode_command, decode_page_data, decode_page_status,
-    decode_reply, decode_write, encode_begin, encode_command, encode_page_data, encode_page_status,
-    encode_reply, encode_write,
+    Command, MAX_COMMAND_WIRE, MAX_REPLY_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget,
 };
-#[cfg(all(feature = "bootloader", feature = "page-read"))]
-pub use self::session::{decode_read, encode_read};
 #[cfg(feature = "telemetry")]
 pub use self::telemetry::{
-    BalancerStatus, BleedMasks, CELLS, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAIL_ORDER, RAILS,
-    RailSnapshot, Seq, Snapshot, TEMP_INVALID, TEMP_ORDER, TEMPS, TempSnapshot, decode_bleed,
-    decode_pwm, decode_temps, encode_temps,
+    BalancerStatus, BleedMasks, BleedPwm, CELLS, POWER_ACTIVE_BALANCER, POWER_EN_ALL, RAIL_ORDER,
+    RAILS, RailSnapshot, Seq, Snapshot, TEMP_INVALID, TEMP_ORDER, TEMPS, TempSnapshot,
 };
 
 mod cobs;

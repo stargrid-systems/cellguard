@@ -18,10 +18,7 @@
 //! never arms, so a corrupt image can never trigger the walker.
 
 use cellboot::image::{MAGIC, Region};
-use cellguard_protocol::{
-    Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget, decode_command,
-    encode_reply,
-};
+use cellguard_protocol::{Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget};
 use crc::Crc32;
 use updi::{ProgError, TinyProgrammer, UpdiLink};
 
@@ -196,7 +193,7 @@ impl SessionHandler {
             return None;
         };
         let frame = self.rx.get(..frame_len)?;
-        match decode_command(frame)? {
+        match WireCommand::decode(frame)? {
             WireCommand::Begin(target) => Some(Command::Begin(target)),
             WireCommand::PageWrite { addr, data } => {
                 let len = data.len();
@@ -371,7 +368,7 @@ impl SessionHandler {
 /// Builds a raw reply frame in `tx`. The buffer is sized for the worst case,
 /// so the empty-slice fallback is unreachable.
 fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [u8] {
-    let Some(len) = encode_reply(reply, tx) else {
+    let Some(len) = reply.encode(tx) else {
         return &[];
     };
     tx.get(..len).unwrap_or(&[])
@@ -429,8 +426,7 @@ mod tests {
 
     use cellboot::image::{FORMAT_VERSION, HEADER_LEN, ImageHeader, ImageKind, Region};
     use cellguard_protocol::{
-        Command as WireCommand, Reply, SessionStatus, SessionTarget, decode_reply, encode_command,
-        encode_frame,
+        Command as WireCommand, Reply, SessionStatus, SessionTarget, encode_frame,
     };
     use updi::TinyProgrammer;
     use updi::mock::MockTarget;
@@ -471,14 +467,16 @@ mod tests {
 
     fn begin_raw(target: SessionTarget) -> Vec<u8> {
         let mut raw = Vec::from([0u8; 16]);
-        let n = encode_command(WireCommand::Begin(target), &mut raw).expect("fits");
+        let n = WireCommand::Begin(target).encode(&mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
     fn write_raw(addr: u16, data: &[u8]) -> Vec<u8> {
         let mut raw = Vec::from([0u8; 96]);
-        let n = encode_command(WireCommand::PageWrite { addr, data }, &mut raw).expect("fits");
+        let n = WireCommand::PageWrite { addr, data }
+            .encode(&mut raw)
+            .expect("fits");
         raw.truncate(n);
         raw
     }
@@ -486,20 +484,22 @@ mod tests {
     #[cfg(feature = "page-read")]
     fn read_raw(addr: u16, len: u8) -> Vec<u8> {
         let mut raw = Vec::from([0u8; 16]);
-        let n = encode_command(WireCommand::PageRead { addr, len }, &mut raw).expect("fits");
+        let n = WireCommand::PageRead { addr, len }
+            .encode(&mut raw)
+            .expect("fits");
         raw.truncate(n);
         raw
     }
 
     fn end_raw() -> Vec<u8> {
         let mut raw = Vec::from([0u8; 16]);
-        let n = encode_command(WireCommand::End, &mut raw).expect("fits");
+        let n = WireCommand::End.encode(&mut raw).expect("fits");
         raw.truncate(n);
         raw
     }
 
     fn parse_reply(raw: &[u8]) -> Reply<'_> {
-        decode_reply(raw).expect("reply parses")
+        Reply::decode(raw).expect("reply parses")
     }
 
     #[test]
@@ -742,9 +742,8 @@ mod tests {
         corrupt[0] ^= 0x01;
         assert!(send(&mut rig.handler, &corrupt).is_none());
         let mut malformed = Vec::from([
-            cellguard_protocol::SessionCmd::PageWrite.to_code(),
-            0x00,
-            0x10,
+            2, // PageWrite command byte
+            0x00, 0x10,
         ]);
         let body_crc = crc::checksum16(&malformed);
         malformed.extend_from_slice(&body_crc.to_le_bytes());

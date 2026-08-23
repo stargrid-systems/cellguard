@@ -25,8 +25,7 @@
 
 use cellboot::image::{HEADER_LEN, HEADER_LEN_U32, ImageHeader, Region};
 use cellguard_protocol::{
-    Command, Decoder, MAX_COMMAND_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget,
-    decode_reply, encode_command, encode_frame,
+    Command, Decoder, MAX_COMMAND_WIRE, PAGE_MAX, Reply, SessionStatus, SessionTarget, encode_frame,
 };
 use crc::Crc32;
 use embedded_io::{Read, Write};
@@ -272,7 +271,7 @@ impl SessionDriver {
                 break;
             }
             if let Ok(Some(n)) = self.decoder.feed(byte[0], &mut self.rx)
-                && let Some(reply) = self.rx.get(..n).and_then(decode_reply).and_then(status_of)
+                && let Some(reply) = self.rx.get(..n).and_then(Reply::decode).and_then(status_of)
             {
                 return self.on_status(reply, link, image);
             }
@@ -378,7 +377,7 @@ impl SessionDriver {
             },
             Step::End => Command::End,
         };
-        let raw_len = encode_command(cmd, &mut self.raw);
+        let raw_len = cmd.encode(&mut self.raw);
         let wire_len = raw_len
             .and_then(|n| self.raw.get(..n))
             .and_then(|raw| encode_frame(raw, &mut self.wire));
@@ -426,8 +425,8 @@ mod tests {
 
     use cellboot::image::{ImageHeader, ImageKind, Region};
     use cellguard_protocol::{
-        Command as WireCommand, Decoder, PAGE_MAX, Reply, SessionCmd, SessionStatus, SessionTarget,
-        decode_command, encode_frame, encode_reply,
+        Command as WireCommand, Decoder, PAGE_MAX, Reply, SessionStatus, SessionTarget,
+        encode_frame,
     };
 
     use super::{
@@ -479,10 +478,18 @@ mod tests {
         }
     }
 
+    /// Which command the servant observed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Cmd {
+        Begin,
+        PageWrite,
+        End,
+    }
+
     /// One servant-observed command.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct Logged {
-        cmd: SessionCmd,
+        cmd: Cmd,
         addr: Option<u16>,
         len: usize,
     }
@@ -538,7 +545,7 @@ mod tests {
             let Some(frame) = self.scratch.get(..n) else {
                 return;
             };
-            let owned = match decode_command(frame) {
+            let owned = match WireCommand::decode(frame) {
                 Some(WireCommand::Begin(_)) => Owned::Begin,
                 Some(WireCommand::PageWrite { addr, data }) => Owned::PageWrite {
                     addr,
@@ -550,7 +557,7 @@ mod tests {
             let (logged, reply) = self.execute(owned);
             self.log.push(logged);
             let mut raw = [0u8; 1 + 3 + PAGE_MAX + 2];
-            let n = encode_reply(reply, &mut raw).unwrap();
+            let n = reply.encode(&mut raw).unwrap();
             let mut wire = [0u8; 96];
             let wire_len = encode_frame(&raw[..n], &mut wire).unwrap();
             if self.drop_replies > 0 {
@@ -565,7 +572,7 @@ mod tests {
             match cmd {
                 Owned::Begin => {
                     self.in_session = true;
-                    Self::reply_of(SessionCmd::Begin, None, 0, SessionStatus::Ok)
+                    Self::reply_of(Cmd::Begin, None, 0, SessionStatus::Ok)
                 }
                 Owned::PageWrite { addr, data } => {
                     let status = if self.in_session {
@@ -585,17 +592,17 @@ mod tests {
                     } else {
                         Some(addr)
                     };
-                    Self::reply_of(SessionCmd::PageWrite, reply_addr, data.len(), status)
+                    Self::reply_of(Cmd::PageWrite, reply_addr, data.len(), status)
                 }
                 Owned::End => {
                     self.in_session = false;
-                    Self::reply_of(SessionCmd::End, None, 0, SessionStatus::Ok)
+                    Self::reply_of(Cmd::End, None, 0, SessionStatus::Ok)
                 }
             }
         }
 
         const fn reply_of(
-            cmd: SessionCmd,
+            cmd: Cmd,
             addr: Option<u16>,
             len: usize,
             status: SessionStatus,
@@ -645,7 +652,7 @@ mod tests {
     /// The command sequence a happy-path session must produce.
     fn expected_log(payload_len: usize) -> Vec<Logged> {
         let mut log = std::vec![Logged {
-            cmd: SessionCmd::Begin,
+            cmd: Cmd::Begin,
             addr: None,
             len: 0,
         }];
@@ -653,14 +660,14 @@ mod tests {
         while addr < payload_len {
             let n = PAGE_MAX.min(payload_len - addr);
             log.push(Logged {
-                cmd: SessionCmd::PageWrite,
+                cmd: Cmd::PageWrite,
                 addr: Some(u16::try_from(addr).unwrap()),
                 len: n,
             });
             addr += n;
         }
         log.push(Logged {
-            cmd: SessionCmd::End,
+            cmd: Cmd::End,
             addr: None,
             len: 0,
         });
@@ -814,10 +821,7 @@ mod tests {
             usize::from(MAX_ATTEMPTS) * usize::from(REPLY_WAIT_PUMPS) + 1
         );
         assert_eq!(
-            link.log
-                .iter()
-                .filter(|l| l.cmd == SessionCmd::Begin)
-                .count(),
+            link.log.iter().filter(|l| l.cmd == Cmd::Begin).count(),
             usize::from(MAX_ATTEMPTS)
         );
         assert!(driver.idle());
@@ -925,7 +929,7 @@ mod tests {
         }
         let n = frame.expect("at least one frame was written");
         assert_eq!(
-            decode_command(&scratch[..n]).unwrap(),
+            WireCommand::decode(&scratch[..n]).unwrap(),
             WireCommand::Begin(SessionTarget::Cellagent)
         );
     }
