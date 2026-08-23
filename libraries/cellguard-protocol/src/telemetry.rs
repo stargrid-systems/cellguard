@@ -17,6 +17,11 @@
 //!
 //! Payloads are little-endian throughout.
 
+use core::mem::size_of;
+
+use zerocopy::byteorder::little_endian::{I16, I32, U16};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+
 /// Number of cell channels reported in a snapshot.
 pub const CELLS: usize = 4;
 
@@ -43,6 +48,14 @@ pub const TEMP_INVALID: i16 = i16::MIN;
 /// Snapshot sequence counter type shared by the snapshot replies.
 pub type Seq = u8;
 
+/// Wire form of a [`Snapshot`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct SnapshotWire {
+    seq: u8,
+    codes: [I32; CELLS],
+}
+
 /// Decoded cell-voltage or balance-current snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Snapshot {
@@ -55,37 +68,36 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = 1 + CELLS * 4;
+    pub const PAYLOAD_LEN: usize = size_of::<SnapshotWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
-        let buf = out.get_mut(..Self::PAYLOAD_LEN)?;
-        let (head, codes) = buf.split_first_mut()?;
-        *head = self.seq;
-        for (slot, code) in codes.chunks_exact_mut(4).zip(self.codes) {
-            slot.copy_from_slice(&code.to_le_bytes());
-        }
+        let wire = SnapshotWire {
+            seq: self.seq,
+            codes: self.codes.map(I32::new),
+        };
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a snapshot.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        let (seq, codes) = payload.split_first_chunk::<1>()?;
-        if codes.len() != CELLS * 4 {
-            return None;
-        }
-        let mut out = [0i32; CELLS];
-        for (slot, code) in out.iter_mut().zip(codes.chunks_exact(4)) {
-            let bytes: [u8; 4] = code.try_into().ok()?;
-            *slot = i32::from_le_bytes(bytes);
-        }
+        let wire = SnapshotWire::ref_from_bytes(payload).ok()?;
         Some(Self {
-            seq: seq[0],
-            codes: out,
+            seq: wire.seq,
+            codes: wire.codes.map(I32::get),
         })
     }
+}
+
+/// Wire form of a [`RailSnapshot`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct RailSnapshotWire {
+    codes: [U16; RAILS],
 }
 
 /// Decoded rail snapshot: raw 10-bit MCU-ADC codes in [`RAIL_ORDER`].
@@ -97,31 +109,34 @@ pub struct RailSnapshot {
 
 impl RailSnapshot {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = RAILS * 2;
+    pub const PAYLOAD_LEN: usize = size_of::<RailSnapshotWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
-        let buf = out.get_mut(..Self::PAYLOAD_LEN)?.chunks_exact_mut(2);
-        for (slot, code) in buf.zip(self.codes) {
-            slot.copy_from_slice(&code.to_le_bytes());
-        }
+        let wire = RailSnapshotWire {
+            codes: self.codes.map(U16::new),
+        };
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a rail snapshot.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() != Self::PAYLOAD_LEN {
-            return None;
-        }
-        let mut codes = [0u16; RAILS];
-        for (slot, code) in codes.iter_mut().zip(payload.chunks_exact(2)) {
-            let bytes: [u8; 2] = code.try_into().ok()?;
-            *slot = u16::from_le_bytes(bytes);
-        }
-        Some(Self { codes })
+        let wire = RailSnapshotWire::ref_from_bytes(payload).ok()?;
+        Some(Self {
+            codes: wire.codes.map(U16::get),
+        })
     }
+}
+
+/// Wire form of a [`TempSnapshot`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct TempSnapshotWire {
+    temps: [I16; TEMPS],
 }
 
 /// Decoded temperature frame: centi-degrees Celsius in [`TEMP_ORDER`].
@@ -133,31 +148,40 @@ pub struct TempSnapshot {
 
 impl TempSnapshot {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = TEMPS * 2;
+    pub const PAYLOAD_LEN: usize = size_of::<TempSnapshotWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
-        let buf = out.get_mut(..Self::PAYLOAD_LEN)?.chunks_exact_mut(2);
-        for (slot, temp) in buf.zip(self.temps) {
-            slot.copy_from_slice(&temp.to_le_bytes());
-        }
+        let wire = TempSnapshotWire {
+            temps: self.temps.map(I16::new),
+        };
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a temperature snapshot.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() != Self::PAYLOAD_LEN {
-            return None;
-        }
-        let mut temps = [0i16; TEMPS];
-        for (slot, temp) in temps.iter_mut().zip(payload.chunks_exact(2)) {
-            let bytes: [u8; 2] = temp.try_into().ok()?;
-            *slot = i16::from_le_bytes(bytes);
-        }
-        Some(Self { temps })
+        let wire = TempSnapshotWire::ref_from_bytes(payload).ok()?;
+        Some(Self {
+            temps: wire.temps.map(I16::get),
+        })
     }
+}
+
+/// Wire form of a [`BalancerStatus`] payload. The five status bools are
+/// bit-packed into `flags`; the payload ends in two reserved zero bytes.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct BalancerStatusWire {
+    en_3r6: u8,
+    en_36r5: u8,
+    pwm_duty: U16,
+    gate_mask: u8,
+    flags: u8,
+    reserved: [u8; 2],
 }
 
 /// Decoded [`Kind::BalancerStatus`](crate::Kind::BalancerStatus) payload.
@@ -191,52 +215,52 @@ pub struct BalancerStatus {
 
 impl BalancerStatus {
     /// Payload length of the encoded form.
-    pub const PAYLOAD_LEN: usize = 8;
+    pub const PAYLOAD_LEN: usize = size_of::<BalancerStatusWire>();
 
     /// Encodes into `out`, returning the payload slice.
     #[must_use]
     pub fn encode<'a>(&self, out: &'a mut [u8]) -> Option<&'a [u8]> {
-        let buf = out.get_mut(..Self::PAYLOAD_LEN)?;
-        let (head, tail) = buf.split_at_mut(5);
-        head.copy_from_slice(&[
-            self.en_3r6,
-            self.en_36r5,
-            self.pwm_duty.to_le_bytes()[0],
-            self.pwm_duty.to_le_bytes()[1],
-            self.gate_mask,
-        ]);
-        tail.copy_from_slice(&[
-            u8::from(self.tiny_all_off)
+        let wire = BalancerStatusWire {
+            en_3r6: self.en_3r6,
+            en_36r5: self.en_36r5,
+            pwm_duty: U16::new(self.pwm_duty),
+            gate_mask: self.gate_mask,
+            flags: u8::from(self.tiny_all_off)
                 | u8::from(self.emergency_gate_off) << 1
                 | u8::from(self.active_balancer_on) << 2
                 | u8::from(self.en_all) << 3
                 | u8::from(self.cellagent_alive) << 4,
-            0,
-            0,
-        ]);
+            reserved: [0; 2],
+        };
+        out.get_mut(..Self::PAYLOAD_LEN)?
+            .copy_from_slice(wire.as_bytes());
         out.get(..Self::PAYLOAD_LEN)
     }
 
     /// Decodes a payload into a status frame.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        if payload.len() != Self::PAYLOAD_LEN {
-            return None;
-        }
-        let (head, tail) = payload.split_first_chunk::<5>()?;
-        let (flags, _) = tail.split_first_chunk::<3>()?;
+        let wire = BalancerStatusWire::ref_from_bytes(payload).ok()?;
         Some(Self {
-            en_3r6: head[0],
-            en_36r5: head[1],
-            pwm_duty: u16::from_le_bytes([head[2], head[3]]),
-            gate_mask: head[4],
-            tiny_all_off: flags[0] & 1 != 0,
-            emergency_gate_off: flags[0] & 2 != 0,
-            active_balancer_on: flags[0] & 4 != 0,
-            en_all: flags[0] & 8 != 0,
-            cellagent_alive: flags[0] & 16 != 0,
+            en_3r6: wire.en_3r6,
+            en_36r5: wire.en_36r5,
+            pwm_duty: wire.pwm_duty.get(),
+            gate_mask: wire.gate_mask,
+            tiny_all_off: wire.flags & 1 != 0,
+            emergency_gate_off: wire.flags & 2 != 0,
+            active_balancer_on: wire.flags & 4 != 0,
+            en_all: wire.flags & 8 != 0,
+            cellagent_alive: wire.flags & 16 != 0,
         })
     }
+}
+
+/// Wire form of a [`BleedMasks`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct BleedMasksWire {
+    en_3r6: u8,
+    en_36r5: u8,
 }
 
 /// Decoded [`Kind::SetBleed`](crate::Kind::SetBleed) payload.
@@ -252,12 +276,19 @@ impl BleedMasks {
     /// Decodes a [`Kind::SetBleed`](crate::Kind::SetBleed) payload.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        let (masks, _) = payload.split_first_chunk::<2>()?;
+        let wire = BleedMasksWire::ref_from_bytes(payload).ok()?;
         Some(Self {
-            en_3r6: masks[0],
-            en_36r5: masks[1],
+            en_3r6: wire.en_3r6,
+            en_36r5: wire.en_36r5,
         })
     }
+}
+
+/// Wire form of a [`BleedPwm`] payload.
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
+#[repr(C)]
+struct BleedPwmWire {
+    duty: U16,
 }
 
 /// Decoded [`Kind::SetBleedPwm`](crate::Kind::SetBleedPwm) payload.
@@ -271,9 +302,9 @@ impl BleedPwm {
     /// Decodes a [`Kind::SetBleedPwm`](crate::Kind::SetBleedPwm) payload.
     #[must_use]
     pub fn decode(payload: &[u8]) -> Option<Self> {
-        let (bytes, _) = payload.split_first_chunk::<2>()?;
+        let wire = BleedPwmWire::ref_from_bytes(payload).ok()?;
         Some(Self {
-            duty: u16::from_le_bytes(*bytes),
+            duty: wire.duty.get(),
         })
     }
 }
@@ -403,11 +434,13 @@ mod tests {
             })
         );
         assert!(BleedMasks::decode(&[0x01]).is_none());
+        assert!(BleedMasks::decode(&[0x0F, 0x01, 0x99]).is_none());
         assert_eq!(
             BleedPwm::decode(&[0xEF, 0xBE]),
             Some(BleedPwm { duty: 0xBEEF })
         );
         assert!(BleedPwm::decode(&[0xEF]).is_none());
+        assert!(BleedPwm::decode(&[0xEF, 0xBE, 0x99]).is_none());
     }
 
     #[test]
