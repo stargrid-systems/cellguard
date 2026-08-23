@@ -11,7 +11,7 @@
 use embedded_hal::delay::DelayNs;
 use embedded_hal::spi::{Operation, SpiDevice};
 
-use self::command::{HEADER_MAX, PageChunks, encode_header, range_in_bounds};
+use self::command::{HEADER_MAX, PageChunks, range_in_bounds};
 pub use self::error::Error;
 pub use self::model::{CAT25M01, CAT25128, Model};
 pub use self::register::{BlockProtection, Status};
@@ -243,7 +243,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
         }
         self.write_enable().map_err(Error::Spi)?;
         let mut buf = [0u8; HEADER_MAX];
-        let header = encode_header(self.model, &mut buf, command::WRITE, address);
+        let header = self.model.encode_header(&mut buf, command::WRITE, address);
         self.spi
             .transaction(&mut [Operation::Write(header), Operation::Write(data)])
             .map_err(Error::Spi)?;
@@ -259,7 +259,7 @@ impl<S: SpiDevice, D: DelayNs> Cat25<S, D> {
             return Ok(());
         }
         let mut buf = [0u8; HEADER_MAX];
-        let header = encode_header(self.model, &mut buf, command::READ, address);
+        let header = self.model.encode_header(&mut buf, command::READ, address);
         self.spi
             .transaction(&mut [Operation::Write(header), Operation::Read(data)])
     }

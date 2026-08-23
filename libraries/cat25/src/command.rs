@@ -1,5 +1,3 @@
-use crate::Model;
-
 /// Enable Write Operations
 pub const WREN: u8 = 0b0000_0110;
 /// Disable Write Operations
@@ -20,24 +18,6 @@ pub const HEADER_MAX: usize = 4;
 /// `limit` bytes.
 pub fn range_in_bounds(address: u32, len: usize, limit: u32) -> bool {
     u32::try_from(len).is_ok_and(|len| address.checked_add(len).is_some_and(|end| end <= limit))
-}
-
-/// Encodes `opcode` followed by the model's address bytes into `buf`.
-///
-/// Returns the populated prefix of `buf`.
-pub fn encode_header(
-    model: Model,
-    buf: &mut [u8; HEADER_MAX],
-    opcode: u8,
-    address: u32,
-) -> &mut [u8] {
-    buf[0] = opcode;
-    let n = model.encode_address(&mut buf[1..], address);
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "n is guaranteed to be in bounds of buf[1..]"
-    )]
-    &mut buf[..=n]
 }
 
 /// Splits a write into chunks that each stay within a single page.
@@ -109,7 +89,7 @@ mod tests {
     #[test]
     fn encode_header_writes_opcode_and_address() {
         let mut buf = [0u8; HEADER_MAX];
-        let header = encode_header(CAT25128, &mut buf, 0x03, 0x1234);
+        let header = CAT25128.encode_header(&mut buf, 0x03, 0x1234);
         assert_eq!(header, &[0x03, 0x12, 0x34]);
     }
 

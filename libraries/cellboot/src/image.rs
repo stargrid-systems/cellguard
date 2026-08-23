@@ -72,6 +72,9 @@ pub enum Region {
     Factory,
     /// The cellagent application region.
     CellagentApp,
+    /// The cellprog programmer application region. Flashed by the programmer
+    /// onto itself through its self-update walker.
+    CellprogApp,
 }
 
 impl Region {
@@ -83,6 +86,7 @@ impl Region {
             Self::Bootloader => 1,
             Self::Factory => 2,
             Self::CellagentApp => 3,
+            Self::CellprogApp => 4,
         }
     }
 
@@ -94,6 +98,7 @@ impl Region {
             1 => Some(Self::Bootloader),
             2 => Some(Self::Factory),
             3 => Some(Self::CellagentApp),
+            4 => Some(Self::CellprogApp),
             _ => None,
         }
     }
@@ -221,6 +226,21 @@ mod tests {
         };
         let parsed = ImageHeader::parse(&header.serialize()).unwrap();
         assert_eq!(parsed, header);
+    }
+
+    #[test]
+    fn region_codes_roundtrip() {
+        let regions = [
+            Region::ApplicationCode,
+            Region::Bootloader,
+            Region::Factory,
+            Region::CellagentApp,
+            Region::CellprogApp,
+        ];
+        for region in regions {
+            assert_eq!(Region::from_code(region.to_code()), Some(region));
+        }
+        assert_eq!(Region::from_code(5), None);
     }
 
     #[test]

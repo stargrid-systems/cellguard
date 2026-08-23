@@ -59,6 +59,10 @@ pub enum SessionTarget {
     /// The `cellcore` MCU over mux channel 1. Reserved: this programmer
     /// answers [`SessionStatus::NotSupported`].
     Cellcore,
+    /// The programmer itself. `Begin` does not erase anything: the servant
+    /// stages the payload, verifies it, and rewrites its own flash after
+    /// reset (see the `cellprog` firmware's walker).
+    CellprogSelf,
 }
 
 impl SessionTarget {
@@ -68,6 +72,7 @@ impl SessionTarget {
         match self {
             Self::Cellagent => 0,
             Self::Cellcore => 1,
+            Self::CellprogSelf => 2,
         }
     }
 
@@ -77,6 +82,7 @@ impl SessionTarget {
         match code {
             0 => Some(Self::Cellagent),
             1 => Some(Self::Cellcore),
+            2 => Some(Self::CellprogSelf),
             _ => None,
         }
     }
@@ -465,14 +471,18 @@ mod tests {
 
     #[test]
     fn target_roundtrips() {
-        for target in [SessionTarget::Cellagent, SessionTarget::Cellcore] {
+        for target in [
+            SessionTarget::Cellagent,
+            SessionTarget::Cellcore,
+            SessionTarget::CellprogSelf,
+        ] {
             assert_eq!(
                 SessionTarget::from_code(target.to_code()),
                 Some(target),
                 "target must roundtrip"
             );
         }
-        assert_eq!(SessionTarget::from_code(2), None);
+        assert_eq!(SessionTarget::from_code(3), None);
     }
 
     #[test]
@@ -520,6 +530,7 @@ mod tests {
         let commands = [
             Command::Begin(SessionTarget::Cellagent),
             Command::Begin(SessionTarget::Cellcore),
+            Command::Begin(SessionTarget::CellprogSelf),
             Command::PageWrite {
                 addr: 0x1234,
                 data: &[0xA5; PAGE_MAX],

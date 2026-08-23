@@ -397,20 +397,18 @@ fn push_image(
     expect_ack(&reply, payload.len() as u32)?;
 
     eprintln!("image staged successfully");
-    match target {
-        Target::App => eprintln!(
-            "the cellcore bootloader will self-program on the next reset, or the cellprog will \
-             reflash via UPDI on the next heartbeat-loss recovery"
-        ),
-        Target::Bootloader => eprintln!(
-            "the cellcore will send ProgProgram to the cellprog, which reflashes the boot section \
-             over UPDI"
-        ),
-        Target::Cellagent => eprintln!(
-            "the cellcore has sent ProgProgram to the cellprog, which reflashes U403 over UPDI \
-             via mux channel 3"
-        ),
-    }
+    let epilogue = match target {
+        Target::App => "the cellcore bootloader self-programs the image on the next reset",
+        Target::Bootloader => {
+            "the image stays staged in the boot EEPROM: flashing the boot section is a bench-only \
+             step"
+        }
+        Target::Cellagent => {
+            "the cellcore streams the image to the cellprog over the session link, which reflashes \
+             U403 over UPDI via mux channel 3"
+        }
+    };
+    eprintln!("{epilogue}");
     Ok(())
 }
 
