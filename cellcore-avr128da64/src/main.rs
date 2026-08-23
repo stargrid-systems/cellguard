@@ -28,7 +28,7 @@ use avrxt_hal::usart::{Builder, Frame, Unset, Usart, UsartInstance};
 use cat25::{CAT25M01, CAT25128, Cat25};
 use cellboot::drivers::{Cat25Store, EepromState};
 use cellboot::factory::{self, FactoryRecord};
-use cellboot::io::{BandedStore, NoKeyStore};
+use cellboot::io::{BandedStore, ImageStore, NoKeyStore};
 use cellboot::{layout, state};
 use cellcore::balancing::Balancing;
 use cellcore::identity::Identity;
