@@ -1,3 +1,5 @@
+use crate::command::HEADER_MAX;
+
 /// CAT25 model information.
 #[derive(Clone, Copy)]
 #[must_use]
@@ -36,6 +38,24 @@ impl Model {
         let bytes = bytes.iter().skip(bytes.len() - n);
         buf.iter_mut().zip(bytes).for_each(|(dst, src)| *dst = *src);
         n
+    }
+
+    /// Encodes `opcode` followed by the model's address bytes into `buf`.
+    ///
+    /// Returns the populated prefix of `buf`.
+    pub(crate) fn encode_header(
+        self,
+        buf: &mut [u8; HEADER_MAX],
+        opcode: u8,
+        address: u32,
+    ) -> &mut [u8] {
+        buf[0] = opcode;
+        let n = self.encode_address(&mut buf[1..], address);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "n is guaranteed to be in bounds of buf[1..]"
+        )]
+        &mut buf[..=n]
     }
 }
 
