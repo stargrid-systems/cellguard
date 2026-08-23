@@ -10,10 +10,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-# Adds the bootloader message kinds to the central registry. Additive.
 bootloader = []
-# Adds the session flash read-back path (`PageRead`/`PageData`). Costs 722 B
-# on the ATtiny406 servant. Additive.
 page-read = []
 # Adds the balancing-test telemetry kinds and payload codecs. Additive.
 telemetry = []
