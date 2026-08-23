@@ -10,6 +10,13 @@
 //! Every message has a [`Kind`] from one central registry, so a trace tool can
 //! decode any packet. Bootloader kinds are gated behind the `bootloader`
 //! feature but keep fixed discriminants.
+//!
+//! # Features
+//!
+//! - `bootloader`: the bootloader message kinds, the staged-image programmer
+//!   messages, and the programmer session protocol.
+//! - `page-read`: the session flash read-back path (`PageRead`/`PageData`).
+//!   Costs 722 B on the `ATtiny406` servant.
 #![no_std]
 #![warn(missing_docs)]
 
