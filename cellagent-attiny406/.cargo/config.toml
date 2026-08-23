@@ -1,0 +1,8 @@
+[build]
+target = "avr-none"
+# -mrelax lets the linker shrink call/jump sequences. rustc never passes it
+# itself: it reaches ld through the avr-gcc specs.
+rustflags = ["-C", "target-cpu=attiny406", "-C", "link-arg=-mrelax"]
+
+[unstable]
+build-std = ["core"]
