@@ -1,6 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices"],
+  "commitMessagePrefix": "chore",
   "packageRules": [
     {
       "matchFileNames": ["rust-toolchain.toml"],
