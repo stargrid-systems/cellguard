@@ -5,7 +5,7 @@ on:
   merge_group:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -26,24 +26,24 @@ jobs:
     timeout-minutes: 5
     outputs:
       workspaces: ${{ steps.discover.outputs.workspaces }}
-      avr-workspaces: ${{ steps.avr.outputs.avr-workspaces }}
+      host-workspaces: ${{ steps.host.outputs.host-workspaces }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: discover
         uses: ./.github/actions/discover-workspaces
-      - id: avr
-        name: Detect AVR workspaces
+      - id: host
+        name: Detect host workspaces
         env:
           WORKSPACES: ${{ steps.discover.outputs.workspaces }}
         run: |
-          avr=()
+          host=()
           while IFS= read -r workspace; do
-            if grep -q 'target = "avr-none"' "$workspace/.cargo/config.toml" 2>/dev/null; then
-              avr+=("$workspace")
+            if ! grep -q 'target = "avr-none"' "$workspace/.cargo/config.toml" 2>/dev/null; then
+              host+=("$workspace")
             fi
           done < <(jq -r '.[]' <<<"$WORKSPACES")
-          json=$(printf '%s\n' "${avr[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
-          echo "avr-workspaces=$json" >>"$GITHUB_OUTPUT"
+          json=$(printf '%s\n' "${host[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "host-workspaces=$json" >>"$GITHUB_OUTPUT"
 
   lint:
     name: Lint (${{ matrix.workspace }})
@@ -74,14 +74,14 @@ jobs:
 
   test:
     name: Test (${{ matrix.workspace }})
-    if: github.event_name == 'merge_group' && !contains(fromJSON(needs.discover.outputs.avr-workspaces), matrix.workspace)
+    if: github.event_name == 'merge_group'
     needs: discover
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
+        workspace: ${{ fromJSON(needs.discover.outputs.host-workspaces) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/install-toolchain
