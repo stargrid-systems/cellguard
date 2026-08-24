@@ -14,14 +14,15 @@ name = "cellagent-attiny406"
 test = false
 bench = false
 
+[lints]
+workspace = true
+
 [dependencies]
 avr-device = { version = "0.8", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellagent = { path = "../libraries/cellagent" }
 cellguard-protocol = { path = "../libraries/cellguard-protocol" }
 embedded-hal = { version = "1", default-features = false }
-embedded-io = { version = "0.7", default-features = false }
-cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
@@ -37,3 +38,27 @@ codegen-units = 1
 debug = true
 lto = true
 opt-level = "z"
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = "warn"
+unescaped_backticks = "warn"
+
+# See: <https://rust-lang.github.io/rust-clippy/master/index.html>
+[workspace.lints.clippy]
+# Groups
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Individual lints
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+expect_used = "warn"
+float_arithmetic = "warn"
+indexing_slicing = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unwrap_used = "warn"
+# Transitive deps of avr-device pull duplicate versions of syn and friends.
+# Not actionable from this crate.
+multiple_crate_versions = "allow"

@@ -184,13 +184,21 @@ impl<P: PortInstance> Port<P> {
 
 /// The eight pins of a port. Each field is produced exactly once.
 pub struct Pins<P: PortInstance> {
+    /// Port pin 0.
     pub p0: Pin<P, 0>,
+    /// Port pin 1.
     pub p1: Pin<P, 1>,
+    /// Port pin 2.
     pub p2: Pin<P, 2>,
+    /// Port pin 3.
     pub p3: Pin<P, 3>,
+    /// Port pin 4.
     pub p4: Pin<P, 4>,
+    /// Port pin 5.
     pub p5: Pin<P, 5>,
+    /// Port pin 6.
     pub p6: Pin<P, 6>,
+    /// Port pin 7.
     pub p7: Pin<P, 7>,
 }
 

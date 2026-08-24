@@ -13,13 +13,21 @@ mod tiny;
 /// ADC clock prescaler (`CTRLC.PRESC`).
 #[derive(Clone, Copy)]
 pub enum Prescaler {
+    /// Divide by 2.
     Div2,
+    /// Divide by 4.
     Div4,
+    /// Divide by 8.
     Div8,
+    /// Divide by 16.
     Div16,
+    /// Divide by 32.
     Div32,
+    /// Divide by 64.
     Div64,
+    /// Divide by 128.
     Div128,
+    /// Divide by 256.
     Div256,
 }
 
@@ -27,7 +35,9 @@ pub enum Prescaler {
 #[cfg(feature = "_avr128")]
 #[derive(Clone, Copy)]
 pub enum Avr128Resolution {
+    /// 12-bit results.
     Bits12,
+    /// 10-bit results.
     Bits10,
 }
 
@@ -35,7 +45,9 @@ pub enum Avr128Resolution {
 #[cfg(feature = "_tinyavr")]
 #[derive(Clone, Copy)]
 pub enum TinyResolution {
+    /// 10-bit results.
     Bits10,
+    /// 8-bit results.
     Bits8,
 }
 

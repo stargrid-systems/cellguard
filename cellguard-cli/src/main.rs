@@ -3,6 +3,10 @@
 //! It speaks the cellcore's COBS-framed protocol over a serial link, so a
 //! host can push signed firmware images, probe device state, and read panic
 //! records.
+#![expect(
+    clippy::float_arithmetic,
+    reason = "host-only display scaling for telemetry values"
+)]
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -234,7 +238,7 @@ enum Target {
 }
 
 impl Target {
-    fn region(self) -> Region {
+    const fn region(self) -> Region {
         match self {
             Self::App => Region::ApplicationCode,
             Self::Bootloader => Region::Bootloader,
@@ -242,14 +246,14 @@ impl Target {
         }
     }
 
-    fn kind(self) -> ImageKind {
+    const fn kind(self) -> ImageKind {
         match self {
             Self::App | Self::Cellagent => ImageKind::Application,
             Self::Bootloader => ImageKind::Bootloader,
         }
     }
 
-    fn default_target_id(self) -> u16 {
+    const fn default_target_id(self) -> u16 {
         match self {
             Self::Cellagent => DEFAULT_CELLAGENT_TARGET_ID,
             Self::App | Self::Bootloader => DEFAULT_TARGET_ID,
@@ -338,7 +342,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per wire-protocol field"
+)]
 #[expect(clippy::cast_possible_truncation, reason = "checked at function entry")]
 fn push_image(
     port: &str,
@@ -393,9 +400,18 @@ fn push_image(
     let mut offset = 0usize;
     let mut data_buf = vec![0u8; 4 + chunk_size];
     for chunk in payload.chunks(chunk_size) {
-        data_buf[..4].copy_from_slice(&(offset as u32).to_le_bytes());
-        data_buf[4..4 + chunk.len()].copy_from_slice(chunk);
-        let reply = transport.exchange(node, Kind::BootData, &data_buf[..4 + chunk.len()])?;
+        let head = data_buf
+            .get_mut(..4)
+            .ok_or("internal: data buffer shorter than its header")?;
+        head.copy_from_slice(&(offset as u32).to_le_bytes());
+        let body = data_buf
+            .get_mut(4..4 + chunk.len())
+            .ok_or("internal: chunk overruns the data buffer")?;
+        body.copy_from_slice(chunk);
+        let frame = data_buf
+            .get(..4 + chunk.len())
+            .ok_or("internal: chunk overruns the data buffer")?;
+        let reply = transport.exchange(node, Kind::BootData, frame)?;
         let expected = offset + chunk.len();
         expect_ack(&reply, expected as u32)?;
         offset = expected;
@@ -546,8 +562,13 @@ fn print_state(state: &PersistentState) {
 }
 
 fn print_panic(record: &PanicRecord) {
-    let file = core::str::from_utf8(&record.file[..usize::from(record.file_len)])
-        .unwrap_or("<invalid utf8>");
+    let file = core::str::from_utf8(
+        record
+            .file
+            .get(..usize::from(record.file_len))
+            .unwrap_or(&[]),
+    )
+    .unwrap_or("<invalid utf8>");
     eprintln!("panic at {file}:{}:{}", record.line, record.col);
     eprintln!("  reset_flags     : 0x{:02X}", record.reset_flags);
     eprintln!("  consecutive     : {}", record.consecutive_panics);
@@ -557,10 +578,11 @@ fn parse_key(hex: &str) -> Result<[u8; 16], Box<dyn Error>> {
     if hex.len() != 32 {
         return Err(format!("key must be 32 hex chars (16 bytes), got {}", hex.len()).into());
     }
+    let mut nibbles = hex.as_bytes().iter().map(|&c| hex_val(c));
     let mut key = [0u8; 16];
-    for (i, byte) in key.iter_mut().enumerate() {
-        let hi = hex_val(hex.as_bytes()[2 * i])?;
-        let lo = hex_val(hex.as_bytes()[2 * i + 1])?;
+    for byte in &mut key {
+        let hi = nibbles.next().ok_or("key too short")??;
+        let lo = nibbles.next().ok_or("key too short")??;
         *byte = (hi << 4) | lo;
     }
     Ok(key)
@@ -618,9 +640,9 @@ fn read_snapshot(
     ina_ref: InaRef,
 ) -> Result<(), Box<dyn Error>> {
     let mut transport = Transport::open(port, baud)?;
-    let (kind, label) = match what {
-        SnapshotKind::Cells => (Kind::ReadCellVoltages, "cell"),
-        SnapshotKind::Currents => (Kind::ReadBalanceCurrents, "current"),
+    let kind = match what {
+        SnapshotKind::Cells => Kind::ReadCellVoltages,
+        SnapshotKind::Currents => Kind::ReadBalanceCurrents,
     };
     let reply = transport.exchange(node, kind, &[])?;
     let expected = match what {
@@ -646,7 +668,6 @@ fn read_snapshot(
             }
         }
     }
-    let _ = label;
     Ok(())
 }
 

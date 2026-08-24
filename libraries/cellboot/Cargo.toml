@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [features]
 drivers = ["dep:cat25", "dep:embedded-hal"]
-avr128 = ["dep:avrxt-hal", "avrxt-hal/avr128db64"]
+avr128 = ["dep:avrxt-hal"]
 testutil = []
 
 [dependencies]

@@ -13,9 +13,10 @@
 //! the staging band, so they are already stored), and `End` CRC-checks the
 //! whole staged image through [`SelfStaging`] before reporting `Ok`. On `Ok`
 //! the handler latches [`SessionHandler::self_update_armed`]: the firmware
-//! then sets the on-chip EEPROM update flag and resets, and the walker
-//! applies the image on the next boot. A staged image that fails its check
-//! never arms, so a corrupt image can never trigger the walker.
+//! then sets the on-chip EEPROM update flag and resets. The apply path that
+//! rewrites flash after reset is not implemented yet (issue #60). A staged
+//! image that fails its check never arms, so a corrupt image can never
+//! trigger the apply.
 
 use cellboot::image::{MAGIC, Region};
 use cellguard_protocol::{Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget};
@@ -30,16 +31,16 @@ pub const MAX_REPLY_FRAME: usize = 1 + 3 + cellguard_protocol::PAGE_MAX + CRC_LE
 
 const CRC_LEN: usize = 2;
 
-/// Size of the position-fixed walker region at the top of the cellprog
-/// flash.
+/// Size reserved at the top of the cellprog flash for the future self-update
+/// apply code (issue #60).
 ///
-/// The walker is never rewritten by an update, so every update image ends
-/// below it. See the firmware's `walker` module for the frozen ABI.
+/// The apply path is not implemented yet, but the region stays reserved so
+/// the flash layout does not change once it lands.
 pub const WALKER_SIZE: u16 = 256;
 
 /// Flash budget of the updatable application region: the 4 KiB flash minus
-/// the walker region. Page commands beyond it are invalid, and the walker
-/// walks exactly this many bytes.
+/// the reserved apply region. Page commands beyond it are invalid, and the
+/// apply must program exactly this many bytes.
 pub const APP_FLASH_SIZE: u16 = updi::FLASH_SIZE - WALKER_SIZE;
 
 /// Payload size the `End` verifier reads per store call. Matches the command
@@ -162,7 +163,8 @@ impl SessionHandler {
 
     /// Whether a verified self-update is waiting to be applied. The firmware
     /// acts on this after sending the `End` reply: set the on-chip EEPROM
-    /// update flag, then reset.
+    /// update flag, then reset. The apply path after reset is not
+    /// implemented yet (issue #60).
     #[must_use]
     pub const fn self_update_armed(&self) -> bool {
         self.self_armed
@@ -395,10 +397,11 @@ fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {
     {
         return false;
     }
-    // The low bytes carry the length: arming caps it at the app budget,
-    // which fits 12 bits.
+    // The length field spans bytes 12-15. The high bytes must be zero:
+    // otherwise the u16 read below truncates the claimed length and the
+    // CRC would cover only a prefix of the staged image.
     let payload_len = u16::from_le_bytes([head[12], head[13]]);
-    if payload_len == 0 || payload_len > APP_FLASH_SIZE {
+    if payload_len == 0 || payload_len > APP_FLASH_SIZE || head[14] != 0 || head[15] != 0 {
         return false;
     }
     let expected = u32::from_le_bytes([head[16], head[17], head[18], head[19]]);
@@ -914,6 +917,35 @@ mod tests {
             SessionStatus::NvmError
         );
         assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn high_length_bytes_never_arms() {
+        // Claim 0x1_0100 bytes. The low 16 bits stay in budget and the
+        // CRC covers all 256 payload bytes, so only the high length
+        // bytes reject this.
+        let payload = [0x33u8; 0x0100];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        rig.band.image[12..16].copy_from_slice(&0x0001_0100u32.to_le_bytes());
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn full_budget_length_still_arms() {
+        // An honest header at the full app budget has zero high length
+        // bytes and must still verify.
+        let payload = std::vec![0x55u8; usize::from(super::APP_FLASH_SIZE)];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+
+        assert_eq!(run_self_session(&mut rig, &payload), SessionStatus::Ok);
+        assert!(rig.handler.self_update_armed());
     }
 
     #[test]

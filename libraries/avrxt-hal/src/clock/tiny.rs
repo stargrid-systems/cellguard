@@ -12,7 +12,9 @@ use super::{CcpUnlock, impl_ccp_unlock};
 /// Not runtime-changeable. Used only to compute `CLK_PER`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TinyBaseFreq {
+    /// 16 MHz base frequency.
     Mhz16,
+    /// 20 MHz base frequency.
     Mhz20,
 }
 
@@ -40,16 +42,27 @@ impl TinyBaseFreq {
 /// tinyAVR main-clock prescaler division (`MCLKCTRLB.PDIV`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ClkPrescaler {
+    /// Divide by 2.
     Div2,
+    /// Divide by 4.
     Div4,
+    /// Divide by 6.
     Div6,
+    /// Divide by 8.
     Div8,
+    /// Divide by 10.
     Div10,
+    /// Divide by 12.
     Div12,
+    /// Divide by 16.
     Div16,
+    /// Divide by 24.
     Div24,
+    /// Divide by 32.
     Div32,
+    /// Divide by 48.
     Div48,
+    /// Divide by 64.
     Div64,
 }
 

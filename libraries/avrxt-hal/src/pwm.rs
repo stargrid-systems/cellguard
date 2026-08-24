@@ -8,21 +8,32 @@
 /// TCA0 clock prescaler (`CLKSEL`).
 #[derive(Clone, Copy)]
 pub enum Prescaler {
+    /// Divide by 1.
     Div1,
+    /// Divide by 2.
     Div2,
+    /// Divide by 4.
     Div4,
+    /// Divide by 8.
     Div8,
+    /// Divide by 16.
     Div16,
+    /// Divide by 64.
     Div64,
+    /// Divide by 256.
     Div256,
+    /// Divide by 1024.
     Div1024,
 }
 
 /// One of the three single-mode compare channels.
 #[derive(Clone, Copy)]
 pub enum Channel {
+    /// Compare channel WO0.
     Wo0,
+    /// Compare channel WO1.
     Wo1,
+    /// Compare channel WO2.
     Wo2,
 }
 
