@@ -51,10 +51,16 @@ impl Transport {
         let mut raw = vec![0u8; TX_RAW];
         let raw_len = Packet::write(id, kind, payload, &mut raw)
             .map_err(|e| io::Error::other(format!("packet write failed: {e}")))?;
+        let raw_frame = raw
+            .get(..raw_len)
+            .ok_or_else(|| io::Error::other("internal: packet longer than TX buffer"))?;
         let mut wire = vec![0u8; TX_WIRE];
-        let wire_len = encode_frame(&raw[..raw_len], &mut wire)
+        let wire_len = encode_frame(raw_frame, &mut wire)
             .ok_or_else(|| io::Error::other("COBS encode failed: output too small"))?;
-        self.port.write_all(&wire[..wire_len])?;
+        let wire_frame = wire
+            .get(..wire_len)
+            .ok_or_else(|| io::Error::other("internal: encoded frame longer than wire buffer"))?;
+        self.port.write_all(wire_frame)?;
         self.port.flush()
     }
 

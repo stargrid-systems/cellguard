@@ -32,21 +32,37 @@ impl ClockSource {
 /// RTC prescaler (`CTRLA.PRESCALER`): divides the clock source.
 #[derive(Clone, Copy)]
 pub enum Prescaler {
+    /// Divide by 1.
     Div1,
+    /// Divide by 2.
     Div2,
+    /// Divide by 4.
     Div4,
+    /// Divide by 8.
     Div8,
+    /// Divide by 16.
     Div16,
+    /// Divide by 32.
     Div32,
+    /// Divide by 64.
     Div64,
+    /// Divide by 128.
     Div128,
+    /// Divide by 256.
     Div256,
+    /// Divide by 512.
     Div512,
+    /// Divide by 1024.
     Div1024,
+    /// Divide by 2048.
     Div2048,
+    /// Divide by 4096.
     Div4096,
+    /// Divide by 8192.
     Div8192,
+    /// Divide by 16384.
     Div16384,
+    /// Divide by 32768.
     Div32768,
 }
 

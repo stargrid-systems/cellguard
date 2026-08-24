@@ -1,8 +1,12 @@
 #![no_std]
 #![no_main]
 #![feature(abi_avr_interrupt)]
+#![expect(
+    clippy::similar_names,
+    reason = "port names mirror the silicon port letters"
+)]
 
-//! Bootloader firmware for the CellGuard cellcore (AVR128DA64).
+//! Bootloader firmware for the `CellGuard` cellcore (AVR128DA64).
 //!
 //! On every reset it checks for a staged application image in EEPROM,
 //! self-programs it into flash, then jumps to the installed application.
@@ -54,7 +58,7 @@ const AGENT_VERSION: u32 = 1;
 
 #[avr_device::entry]
 fn main() -> ! {
-    let dp = pac::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap_or_else(|| halt());
     let cpu = dp.CPU;
 
     // BRING-UP: internal RC until Y100 is verified, set explicitly whatever
@@ -134,6 +138,8 @@ fn main() -> ! {
     // The app does not expect an armed watchdog, so hand over with it stopped.
     wdt.stop(&cpu);
 
+    // SAFETY: valid application code with a reset vector is present at
+    // `APP_TARGET_BASE`, per `jump_to_app`'s contract.
     unsafe { jump_to_app() }
 }
 
@@ -151,8 +157,11 @@ fn main() -> ! {
 /// guarantee that valid application code with a reset vector is present at
 /// that address.
 unsafe fn jump_to_app() -> ! {
-    avr_device::interrupt::disable();
     type Entry = fn() -> !;
+    avr_device::interrupt::disable();
+    // SAFETY: the app's CRT at `APP_TARGET_BASE` re-initializes the stack
+    // pointer before any code there runs, so the dangling AVR hardware stack
+    // is never observed.
     let entry: Entry = unsafe { core::mem::transmute(APP_TARGET_BASE as usize) };
     entry();
 }
@@ -160,6 +169,9 @@ unsafe fn jump_to_app() -> ! {
 /// Halts with interrupts disabled.
 fn halt() -> ! {
     avr_device::interrupt::disable();
-    #[expect(clippy::empty_loop)]
+    #[expect(
+        clippy::empty_loop,
+        reason = "nothing left to do after a fatal init error"
+    )]
     loop {}
 }

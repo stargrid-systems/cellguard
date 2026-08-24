@@ -1,8 +1,12 @@
 #![no_std]
 #![no_main]
 #![feature(abi_avr_interrupt)]
+#![expect(
+    clippy::similar_names,
+    reason = "port names mirror the silicon port letters"
+)]
 
-//! CellGuard programmer firmware for the ATtiny406 (U1003). The cellcore
+//! `CellGuard` programmer firmware for the `ATtiny406` (U1003). The cellcore
 //! orchestrates: the programmer executes one session command at a time and
 //! reflashes the cellagent over UPDI (mux channel 3). Self-update sessions
 //! are rejected until the verification path fits the flash (issue #60).
@@ -20,8 +24,8 @@
 //! watchdog turns a hang into a reset, and no panic records are written.
 //!
 //! Pin map (`scratch/hardware/cellprog-mcu.md`): USART0 PB2/PB3 -> U1004 mux,
-//! PA3/PA4 = U1004 select A1/A0, PB4 = AVR64_TO_PROG (U103 P12),
-//! PB0 = RESET_AVR64 (active-low, via U107 NAND + Q100 to cellcore reset).
+//! PA3/PA4 = U1004 select A1/A0, PB4 = `AVR64_TO_PROG` (U103 P12),
+//! PB0 = `RESET_AVR64` (active-low, via U107 NAND + Q100 to cellcore reset).
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::clock::{self, ClkPrescaler, TinyBaseFreq};
@@ -31,8 +35,7 @@ use avrxt_hal::rtc::{ClockSource, Prescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use avrxt_hal::wdt::{Period, Watchdog};
 use cellguard_protocol::Encoder;
-use cellprog::SessionHandler;
-use cellprog::session::SelfStaging;
+use cellprog::{SelfStaging, SessionHandler};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{InputPin, OutputPin};
 use updi::TinyProgrammer;
@@ -66,7 +69,7 @@ const WDT_PERIOD: Period = Period::Clk8k;
 
 #[avr_device::entry]
 fn main() -> ! {
-    let dp = pac::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap_or_else(|| halt());
     let cpu = dp.CPU;
 
     clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);
@@ -103,14 +106,20 @@ fn main() -> ! {
 
     // .bss storage keeps the handler out of .data (no flash image) and lets
     // the startup runtime zero it.
+    #[expect(
+        clippy::items_after_statements,
+        reason = "declared next to its only use, after the bring-up it serves"
+    )]
     static mut HANDLER: SessionHandler = SessionHandler::new();
+    // SAFETY: the firmware is single-threaded and never enables interrupts,
+    // and `HANDLER` is never aliased again after this one reference is taken.
     let handler = unsafe { &mut *core::ptr::addr_of_mut!(HANDLER) };
 
     let mut last_level = heartbeat.is_high().unwrap_or(true);
     let mut last_edge = rtc.count();
-    // BRING-UP gate: the cellcore heartbeat is disabled by an I2C bug, so
-    // silence must not read as core death. Recovery arms only after a real
-    // heartbeat edge. Drop this gate once the TWI timeout fix lands.
+    // BRING-UP gate: silence must not read as core death until the
+    // heartbeat has been validated on the bench. Recovery arms only after
+    // a real heartbeat edge.
     let mut heartbeat_seen = false;
     let mut resets = 0u8;
     let mut recovery_given_up = false;
@@ -237,6 +246,6 @@ impl SelfStaging for NoStaging {
 }
 
 const _: () = assert!(
-    cellguard_protocol::MAX_COMMAND_WIRE >= cellprog::session::MAX_COMMAND_FRAME,
+    cellguard_protocol::MAX_COMMAND_WIRE >= cellprog::MAX_COMMAND_FRAME,
     "decoder buffer must cover the worst-case command frame"
 );
