@@ -221,12 +221,19 @@ where
         self.route(byte);
         if let Some(response) = self.dispatcher.feed(byte) {
             let delivered = self.bus.write_all(response).is_ok();
-            if delivered && !self.app_confirmed {
-                self.dispatcher.agent_mut().confirm_app_healthy();
-                self.app_confirmed = true;
+            if delivered {
+                self.confirm_app_healthy_once();
             }
         }
         self.pump_session();
+    }
+
+    /// Confirms the running app after its first delivered reply of a boot.
+    fn confirm_app_healthy_once(&mut self) {
+        if !self.app_confirmed {
+            self.dispatcher.agent_mut().confirm_app_healthy();
+            self.app_confirmed = true;
+        }
     }
 
     /// Starts a committed cellagent flash and advances an in-flight session
@@ -342,8 +349,9 @@ where
             )];
             if let Some(wire_len) = cellguard_protocol::encode_frame(raw_slice, &mut wire)
                 && let Some(bytes) = wire.get(..wire_len)
+                && self.bus.write_all(bytes).is_ok()
             {
-                let _ = self.bus.write_all(bytes);
+                self.confirm_app_healthy_once();
             }
         }
     }
@@ -1080,6 +1088,61 @@ mod tests {
         let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
         feed_command(runtime, Kind::ReadRails, &[]);
         assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+    }
+
+    #[test]
+    fn telemetry_exchange_marks_app_healthy() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut state = PersistentState::new(1);
+        state.boot_count = 3;
+        state.app_health = AppHealth::Unknown;
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, state, &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+
+        feed_command(runtime, Kind::ReadRails, &[]);
+
+        assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Good
+        );
+        assert_eq!(runtime.dispatcher.agent().status().boot_count, 0);
+    }
+
+    #[test]
+    fn garbage_frame_does_not_mark_app_healthy() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut state = PersistentState::new(1);
+        state.boot_count = 3;
+        state.app_health = AppHealth::Unknown;
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, state, &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+
+        // A rails poll with a corrupted payload byte fails the payload CRC.
+        let mut raw = [0u8; 64];
+        let raw_len = Packet::write(NODE, Kind::ReadRails, &[0xAA], &mut raw).unwrap();
+        raw[cellguard_protocol::HEADER_LEN] ^= 0xFF;
+        let mut encoder = Encoder::new(&raw[..raw_len]);
+        while let Some(byte) = encoder.pull() {
+            runtime.service(byte);
+        }
+
+        assert!(runtime.bus.written.is_empty());
+        assert_eq!(
+            runtime.dispatcher.agent().status().app_health,
+            AppHealth::Unknown
+        );
+        assert_eq!(runtime.dispatcher.agent().status().boot_count, 3);
     }
 
     #[test]
