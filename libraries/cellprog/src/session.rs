@@ -13,9 +13,10 @@
 //! the staging band, so they are already stored), and `End` CRC-checks the
 //! whole staged image through [`SelfStaging`] before reporting `Ok`. On `Ok`
 //! the handler latches [`SessionHandler::self_update_armed`]: the firmware
-//! then sets the on-chip EEPROM update flag and resets, and the walker
-//! applies the image on the next boot. A staged image that fails its check
-//! never arms, so a corrupt image can never trigger the walker.
+//! then sets the on-chip EEPROM update flag and resets. The apply path that
+//! rewrites flash after reset is not implemented yet (issue #60). A staged
+//! image that fails its check never arms, so a corrupt image can never
+//! trigger the apply.
 
 use cellboot::image::{MAGIC, Region};
 use cellguard_protocol::{Command as WireCommand, Decoder, Reply, SessionStatus, SessionTarget};
@@ -30,16 +31,16 @@ pub const MAX_REPLY_FRAME: usize = 1 + 3 + cellguard_protocol::PAGE_MAX + CRC_LE
 
 const CRC_LEN: usize = 2;
 
-/// Size of the position-fixed walker region at the top of the cellprog
-/// flash.
+/// Size reserved at the top of the cellprog flash for the future self-update
+/// apply code (issue #60).
 ///
-/// The walker is never rewritten by an update, so every update image ends
-/// below it. See the firmware's `walker` module for the frozen ABI.
+/// The apply path is not implemented yet, but the region stays reserved so
+/// the flash layout does not change once it lands.
 pub const WALKER_SIZE: u16 = 256;
 
 /// Flash budget of the updatable application region: the 4 KiB flash minus
-/// the walker region. Page commands beyond it are invalid, and the walker
-/// walks exactly this many bytes.
+/// the reserved apply region. Page commands beyond it are invalid, and the
+/// apply must program exactly this many bytes.
 pub const APP_FLASH_SIZE: u16 = updi::FLASH_SIZE - WALKER_SIZE;
 
 /// Payload size the `End` verifier reads per store call. Matches the command
@@ -162,7 +163,8 @@ impl SessionHandler {
 
     /// Whether a verified self-update is waiting to be applied. The firmware
     /// acts on this after sending the `End` reply: set the on-chip EEPROM
-    /// update flag, then reset.
+    /// update flag, then reset. The apply path after reset is not
+    /// implemented yet (issue #60).
     #[must_use]
     pub const fn self_update_armed(&self) -> bool {
         self.self_armed

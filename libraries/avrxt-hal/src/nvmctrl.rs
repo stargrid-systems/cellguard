@@ -4,7 +4,8 @@
 //! [`Nvm`] reads and writes the on-chip EEPROM. On AVR128 it also writes the
 //! USERROW and self-programs flash. On tinyAVR 0/1-series it additionally
 //! exposes the flash self-write primitives (`load_flash_byte`,
-//! `erase_write_flash_page`) used by self-update walkers.
+//! `erase_write_flash_page`) for the self-update apply path, which is not
+//! implemented yet (issue #60).
 //!
 //! EEPROM write models differ by family. AVR128 arms `EEERWR` first, then each
 //! store triggers a byte-level erase-write. tinyAVR stores first, then `ERWP`

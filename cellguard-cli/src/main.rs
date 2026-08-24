@@ -640,9 +640,9 @@ fn read_snapshot(
     ina_ref: InaRef,
 ) -> Result<(), Box<dyn Error>> {
     let mut transport = Transport::open(port, baud)?;
-    let (kind, label) = match what {
-        SnapshotKind::Cells => (Kind::ReadCellVoltages, "cell"),
-        SnapshotKind::Currents => (Kind::ReadBalanceCurrents, "current"),
+    let kind = match what {
+        SnapshotKind::Cells => Kind::ReadCellVoltages,
+        SnapshotKind::Currents => Kind::ReadBalanceCurrents,
     };
     let reply = transport.exchange(node, kind, &[])?;
     let expected = match what {
@@ -668,7 +668,6 @@ fn read_snapshot(
             }
         }
     }
-    let _ = label;
     Ok(())
 }
 
