@@ -6,11 +6,15 @@ version = "0.1.0"
 authors = ["Simon Berger <simon@siku2.io>"]
 edition = "2024"
 license = "AGPL-3.0-or-later"
+publish = false
 
 [[bin]]
 name = "cellcore-avr128da64"
 test = false
 bench = false
+
+[lints]
+workspace = true
 
 [dependencies]
 ads131m08 = { path = "../libraries/ads131m08" }
@@ -44,3 +48,27 @@ codegen-units = 1
 debug = true
 lto = true
 opt-level = "s"
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = "warn"
+unescaped_backticks = "warn"
+
+# See: <https://rust-lang.github.io/rust-clippy/master/index.html>
+[workspace.lints.clippy]
+# Groups
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Individual lints
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+expect_used = "warn"
+float_arithmetic = "warn"
+indexing_slicing = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unwrap_used = "warn"
+# Transitive deps of avr-device pull duplicate versions of syn and friends.
+# Not actionable from this crate.
+multiple_crate_versions = "allow"

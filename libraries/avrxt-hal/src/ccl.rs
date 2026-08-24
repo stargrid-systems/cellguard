@@ -11,11 +11,17 @@
 /// Which look-up table to configure.
 #[derive(Clone, Copy)]
 pub enum Lut {
+    /// Look-up table 0.
     Lut0,
+    /// Look-up table 1.
     Lut1,
+    /// Look-up table 2.
     Lut2,
+    /// Look-up table 3.
     Lut3,
+    /// Look-up table 4.
     Lut4,
+    /// Look-up table 5.
     Lut5,
 }
 

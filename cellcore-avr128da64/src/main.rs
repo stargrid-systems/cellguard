@@ -1,8 +1,16 @@
 #![no_std]
 #![no_main]
 #![feature(abi_avr_interrupt)]
+#![expect(
+    clippy::similar_names,
+    reason = "port names mirror the silicon port letters"
+)]
+#![expect(
+    clippy::too_many_lines,
+    reason = "main is a linear hardware bring-up sequence"
+)]
 
-//! CellGuard core firmware for the AVR128DA64.
+//! `CellGuard` core firmware for the AVR128DA64.
 //!
 //! Thin hardware wrapper for the core MCU. It brings up the DA64, runs the
 //! crypto self-test, stages received images into the external SPI EEPROMs,
@@ -59,9 +67,9 @@ const NODE_ID: u8 = 1;
 const CELLAGENT_ID: u8 = 3;
 /// The image `target_id` this device accepts. Placeholder until provisioned.
 const TARGET_ID: u16 = 1;
-/// The cellagent's image target_id. Placeholder until provisioned.
+/// The cellagent's image `target_id`. Placeholder until provisioned.
 const CELLAGENT_TARGET_ID: u16 = 2;
-/// The cellprog programmer's image target_id. Placeholder until provisioned.
+/// The cellprog programmer's image `target_id`. Placeholder until provisioned.
 const CELLPROG_TARGET_ID: u16 = 3;
 /// This firmware's agent version, reported in the probe status.
 const AGENT_VERSION: u32 = 1;
@@ -85,6 +93,8 @@ const SCL_HZ: u32 = 100_000;
 const TWI_TIMEOUT_MS: u32 = 20;
 
 cellguard_panic::panic_handler!(
+    // SAFETY: no peripheral driver exists yet when the handler runs, so
+    // stealing the singleton cannot alias live borrows.
     unsafe { pac::Peripherals::steal() },
     layout::PANIC_OFFSET,
     PANIC_THRESHOLD
@@ -92,7 +102,7 @@ cellguard_panic::panic_handler!(
 
 #[avr_device::entry]
 fn main() -> ! {
-    let dp = pac::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap_or_else(|| halt());
     let cpu = dp.CPU;
 
     // Y100: external 24 MHz oscillator. Set explicitly so the app never
@@ -278,10 +288,10 @@ fn main() -> ! {
 /// Finishes a USART builder as 8N1, halting the core if the baud is
 /// unattainable.
 fn build_usart<T: UsartInstance>(builder: Builder<T, u32, Unset>) -> Usart<T> {
-    match builder.frame(Frame::EIGHT_N_1).build() {
-        Ok(usart) => usart,
-        Err(_) => halt(),
-    }
+    builder
+        .frame(Frame::EIGHT_N_1)
+        .build()
+        .unwrap_or_else(|_| halt())
 }
 
 /// Halts with interrupts disabled.
@@ -301,7 +311,7 @@ struct NodeTelemetry {
 }
 
 impl NodeTelemetry {
-    fn new(identity: Identity, board: Board) -> Self {
+    const fn new(identity: Identity, board: Board) -> Self {
         Self {
             identity,
             balancing: Balancing::new(board),
