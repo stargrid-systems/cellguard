@@ -26,6 +26,7 @@ use avrxt_hal::rtc::{ClockSource, Prescaler as RtcPrescaler, Rtc};
 use avrxt_hal::usart::{Frame, Usart};
 use avrxt_hal::wdt::{Period, Watchdog};
 use cellagent::{CellagentRuntime, GateControl, TempSensor};
+use cellguard_protocol::TEMP_INVALID;
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 
 const BASE_FREQ: TinyBaseFreq = TinyBaseFreq::Mhz20;
@@ -44,12 +45,12 @@ const HEARTBEAT_TICKS: u16 = 256;
 const TEMP_ADC_CHANNEL: u8 = 7;
 
 /// LM61 transfer function: `V_out` (mV) = 300 + 10 * `T_C`.
-const LM61_BIAS_MV: u32 = 300;
-const LM61_CENTI_PER_MV: u32 = 10;
+const LM61_BIAS_MV: i32 = 300;
+const LM61_CENTI_PER_MV: i32 = 10;
 
 /// ADC reference: VDD ~= 3.3 V.
-const VDD_MV: u32 = 3300;
-const ADC_FULLSCALE: u32 = 1024;
+const VDD_MV: i32 = 3300;
+const ADC_FULLSCALE: i32 = 1024;
 
 /// Gate mask bits (match the `GateControl` contract).
 const GATE_A_BIT: u8 = 0x01;
@@ -160,8 +161,8 @@ struct Lm61Temp {
 impl TempSensor for Lm61Temp {
     fn read_centi_celsius(&mut self) -> i16 {
         let raw = self.adc.read_channel(TEMP_ADC_CHANNEL);
-        let v_mv = u32::from(raw) * VDD_MV / ADC_FULLSCALE;
-        i16::try_from(v_mv.saturating_sub(LM61_BIAS_MV) * LM61_CENTI_PER_MV).unwrap_or(0)
+        let v_mv = i32::from(raw) * VDD_MV / ADC_FULLSCALE;
+        i16::try_from((v_mv - LM61_BIAS_MV) * LM61_CENTI_PER_MV).unwrap_or(TEMP_INVALID)
     }
 }
 
