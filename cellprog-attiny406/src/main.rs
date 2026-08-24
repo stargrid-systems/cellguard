@@ -108,9 +108,9 @@ fn main() -> ! {
 
     let mut last_level = heartbeat.is_high().unwrap_or(true);
     let mut last_edge = rtc.count();
-    // BRING-UP gate: the cellcore heartbeat is disabled by an I2C bug, so
-    // silence must not read as core death. Recovery arms only after a real
-    // heartbeat edge. Drop this gate once the TWI timeout fix lands.
+    // BRING-UP gate: silence must not read as core death until the
+    // heartbeat has been validated on the bench. Recovery arms only after
+    // a real heartbeat edge.
     let mut heartbeat_seen = false;
     let mut resets = 0u8;
     let mut recovery_given_up = false;

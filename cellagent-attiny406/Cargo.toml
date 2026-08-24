@@ -20,8 +20,6 @@ avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellagent = { path = "../libraries/cellagent" }
 cellguard-protocol = { path = "../libraries/cellguard-protocol" }
 embedded-hal = { version = "1", default-features = false }
-embedded-io = { version = "0.7", default-features = false }
-cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
 
 [patch.crates-io]
 avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }

@@ -106,18 +106,8 @@ dependencies = [
  "avr-device",
  "avrxt-hal",
  "cellagent",
- "cellguard-panic",
  "cellguard-protocol",
  "embedded-hal",
- "embedded-io",
-]
-
-[[package]]
-name = "cellguard-panic"
-version = "0.1.0"
-dependencies = [
- "avrxt-hal",
- "crc",
 ]
 
 [[package]]

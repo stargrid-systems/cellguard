@@ -60,7 +60,8 @@ pub enum ParseError {
     /// The stored CRC did not match the contents.
     BadCrc,
     /// The record format version is not [`RECORD_FORMAT_VERSION`]. A blank
-    /// `0xFF` EEPROM slot lands here.
+    /// `0xFF` EEPROM slot never gets this far: it fails the CRC check first
+    /// ([`ParseError::BadCrc`]).
     UnsupportedVersion(u8),
     /// A field held an out-of-range value.
     BadField,
