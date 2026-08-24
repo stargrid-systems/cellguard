@@ -314,7 +314,7 @@ fn enter_and_exit_current_detect() {
         length: CdLength::Samples256,
         threshold: 0x0000_1234,
     };
-    // cfg_bits 0x23 merged with CFG 0x0600; threshold split across THRSHLD.
+    // cfg_bits 0x23 merged with CFG 0x0600. Threshold split across THRSHLD.
     let block = [0x0623, 0x0012, 0x3400];
 
     let mut txns = configure_default();

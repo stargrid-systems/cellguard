@@ -2,21 +2,23 @@ use core::mem;
 
 /// Temperature register.
 ///
-/// Contains two 8-bit data bytes; to store the measured Temp data.
+/// Contains two 8-bit data bytes that store the measured temperature.
 pub const TEMP_REG: u8 = 0x00;
 /// Configuration register.
 ///
-/// Contains a single 8-bit data byte; to set the device operating condition.
+/// Contains a single 8-bit data byte that sets the device operating
+/// condition.
 pub const CONF_REG: u8 = 0x01;
 /// TLOW register.
 ///
-/// Hysteresis register, it contains two 8-bit data bytes to store the
-/// hysteresis TLOW limit; default = 75 °C.
+/// Hysteresis register. It contains two 8-bit data bytes that store the
+/// hysteresis TLOW limit. The default is 75 degrees Celsius.
 pub const T_LOW_REG: u8 = 0x02;
 /// THIGH register.
 ///
-/// Overtemperature shut down threshold register, it contains two 8-bit data
-/// bytes to store the overtemperature shutdown THIGH limit; default = 80 °C.
+/// Overtemperature shutdown threshold register. It contains two 8-bit data
+/// bytes that store the overtemperature shutdown THIGH limit. The default is
+/// 80 degrees Celsius.
 pub const T_HIGH_REG: u8 = 0x03;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

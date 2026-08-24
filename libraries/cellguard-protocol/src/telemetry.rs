@@ -173,7 +173,7 @@ impl TempSnapshot {
 }
 
 /// Wire form of a [`BalancerStatus`] payload. The five status bools are
-/// bit-packed into `flags`; the payload ends in two reserved zero bytes.
+/// bit-packed into `flags`. The payload ends in two reserved zero bytes.
 #[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Unaligned)]
 #[repr(C)]
 struct BalancerStatusWire {
