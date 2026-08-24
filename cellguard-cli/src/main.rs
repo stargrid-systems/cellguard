@@ -9,12 +9,13 @@
 )]
 
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{fs, io};
 
 use cellboot::image::{ImageHeader, ImageKind, Region};
 use cellboot::state::{PersistentState, STATE_LEN};
+use cellcore::update::command::NackReason;
 use cellcore::update::verify;
 use cellguard_panic::{PanicRecord, RECORD_LEN};
 use cellguard_protocol::{
@@ -220,6 +221,7 @@ enum Command {
     GateState {
         #[arg(long)]
         port: String,
+        /// Cellagent node address (the cellcore routes it downstream).
         #[arg(long)]
         node: u8,
         #[arg(long, default_value_t = DEFAULT_BAUD)]
@@ -344,13 +346,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "one argument per wire-protocol field"
+    reason = "mirrors the push-image CLI options"
 )]
 #[expect(clippy::cast_possible_truncation, reason = "checked at function entry")]
 fn push_image(
     port: &str,
     node: u8,
-    payload_path: &PathBuf,
+    payload_path: &Path,
     target: Target,
     key_hex: Option<String>,
     target_id: Option<u16>,
@@ -491,7 +493,7 @@ fn panic_probe(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
     match reply.kind {
         Kind::PanicStatus => {
             if reply.payload.is_empty() {
-                eprintln!("no panic record");
+                println!("no panic record");
             } else if reply.payload.len() == RECORD_LEN {
                 let bytes: &[u8; RECORD_LEN] = reply
                     .payload
@@ -530,14 +532,31 @@ fn expect_ack(reply: &Reply, expected_offset: u32) -> Result<(), Box<dyn Error>>
             }
             Ok(())
         }
-        Kind::BootNack => {
-            let reason = reply
-                .payload
-                .first()
-                .and_then(|&c| cellcore::update::command::NackReason::from_code(c));
-            Err(format!("device rejected: {reason:?}").into())
-        }
+        Kind::BootNack => Err(format!("device rejected: {}", nack_reason(&reply.payload)).into()),
         other => Err(format!("expected BootAck/BootNack, got {other:?}").into()),
+    }
+}
+
+/// Decodes a Nack payload byte into a human-readable reason.
+const fn nack_reason(payload: &[u8]) -> &str {
+    let Some(&code) = payload.first() else {
+        return "no reason code";
+    };
+    let Some(reason) = NackReason::from_code(code) else {
+        return "unknown reason code";
+    };
+    match reason {
+        NackReason::Malformed => "malformed command",
+        NackReason::WrongTarget => "wrong target",
+        NackReason::BadState => "bad session state",
+        NackReason::OutOfOrder => "chunk out of order",
+        NackReason::TooLarge => "image too large",
+        NackReason::StorageError => "storage error",
+        NackReason::VerifyFailed => "verify failed",
+        NackReason::Unauthorized => "unauthorized",
+        NackReason::RouteTimeout => "route timeout",
+        // The enum is non_exhaustive, so a wildcard arm is required.
+        _ => "unknown reason code",
     }
 }
 
@@ -550,15 +569,15 @@ fn parse_state(payload: &[u8]) -> Result<PersistentState, Box<dyn Error>> {
 }
 
 fn print_state(state: &PersistentState) {
-    eprintln!("agent_version : {}", state.agent_version);
-    eprintln!("app_version   : {}", state.app_version);
-    eprintln!("app_health    : {:?}", state.app_health);
-    eprintln!("staged        : {:?}", state.staged);
-    eprintln!("staged_region : {:?}", state.staged_region);
-    eprintln!("staged_version: {}", state.staged_version);
-    eprintln!("last_outcome  : {:?}", state.last_outcome);
-    eprintln!("boot_count    : {}", state.boot_count);
-    eprintln!("program_attempts: {}", state.program_attempts);
+    println!("{:<16}: {}", "agent_version", state.agent_version);
+    println!("{:<16}: {}", "app_version", state.app_version);
+    println!("{:<16}: {:?}", "app_health", state.app_health);
+    println!("{:<16}: {:?}", "staged", state.staged);
+    println!("{:<16}: {:?}", "staged_region", state.staged_region);
+    println!("{:<16}: {}", "staged_version", state.staged_version);
+    println!("{:<16}: {:?}", "last_outcome", state.last_outcome);
+    println!("{:<16}: {}", "boot_count", state.boot_count);
+    println!("{:<16}: {}", "program_attempts", state.program_attempts);
 }
 
 fn print_panic(record: &PanicRecord) {
@@ -569,9 +588,9 @@ fn print_panic(record: &PanicRecord) {
             .unwrap_or(&[]),
     )
     .unwrap_or("<invalid utf8>");
-    eprintln!("panic at {file}:{}:{}", record.line, record.col);
-    eprintln!("  reset_flags     : 0x{:02X}", record.reset_flags);
-    eprintln!("  consecutive     : {}", record.consecutive_panics);
+    println!("panic at {file}:{}:{}", record.line, record.col);
+    println!("  reset_flags     : 0x{:02X}", record.reset_flags);
+    println!("  consecutive     : {}", record.consecutive_panics);
 }
 
 fn parse_key(hex: &str) -> Result<[u8; 16], Box<dyn Error>> {
@@ -737,7 +756,7 @@ fn ack(port: &str, node: u8, baud: u32, kind: Kind, payload: &[u8]) -> Result<()
     let reply = transport.exchange(node, kind, payload)?;
     match reply.kind {
         Kind::Ack => Ok(()),
-        Kind::Nack => Err(format!("nacked: {:?}", reply.payload).into()),
+        Kind::Nack => Err(format!("nacked: {}", nack_reason(&reply.payload)).into()),
         other => Err(format!("expected Ack, got {other:?}").into()),
     }
 }
