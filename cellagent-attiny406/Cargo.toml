@@ -18,7 +18,7 @@ bench = false
 avr-device = { version = "0.8", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellagent = { path = "../libraries/cellagent" }
-cellguard-protocol = { path = "../libraries/cellguard-protocol" }
+cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["telemetry"] }
 embedded-hal = { version = "1", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
 cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }

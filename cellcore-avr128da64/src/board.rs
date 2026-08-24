@@ -40,7 +40,7 @@ const ADS_VREF_MV: i32 = 1200;
 /// 24-bit two's-complement full scale.
 const ADS_FULL_SCALE: i32 = 1 << 23;
 /// LM61 transfer bias in millivolts (10 mV/degC above this).
-const LM61_BIAS_MV: i32 = 600;
+const LM61_BIAS_MV: i32 = 300;
 
 /// Shared SPI1 ADC bus, written once at boot. The firmware is single-threaded
 /// and never enables interrupts, so access cannot race.
@@ -333,15 +333,14 @@ impl Board {
     /// Reads one rail-mux position into `out` (AIN0-3). Position 00 reads
     /// [`5V0`, `3V3`, `1V8AN`, `3V3B`]. Position 10 reads
     /// [`VBAT_A`, `VBAT_B`, `12V_CON`, `20V_MOS`] (MCU sheet).
-    fn read_mux_position(&mut self, a1: bool, out: &mut [u8; 4]) {
+    fn read_mux_position(&mut self, a1: bool, out: &mut [u16; 4]) {
         if a1 {
             let _ = self.mux_a1.set_high();
         } else {
             let _ = self.mux_a1.set_low();
         }
         for (channel, slot) in out.iter_mut().enumerate() {
-            let code = self.adc.read_channel(channel as u8);
-            *slot = u8::try_from(code).unwrap_or(0);
+            *slot = self.adc.read_channel(channel as u8);
         }
     }
 }
@@ -393,20 +392,13 @@ impl BalancingHw for Board {
     }
 
     fn rails(&mut self, out: &mut RailSnapshot) {
-        let mut common = [0u8; 4];
-        let mut vbat = [0u8; 4];
+        let mut common = [0u16; 4];
+        let mut vbat = [0u16; 4];
         self.read_mux_position(false, &mut common);
         self.read_mux_position(true, &mut vbat);
         // RAIL_ORDER: VBAT_A, VBAT_B, 5V0, 3V3, 3V3B, 1V8AN, 12V_CON, 20V_MOS.
         let codes = [
-            u16::from(vbat[0]),
-            u16::from(vbat[1]),
-            u16::from(common[0]),
-            u16::from(common[1]),
-            u16::from(common[3]),
-            u16::from(common[2]),
-            u16::from(vbat[2]),
-            u16::from(vbat[3]),
+            vbat[0], vbat[1], common[0], common[1], common[3], common[2], vbat[2], vbat[3],
         ];
         for (slot, code) in out.codes.iter_mut().zip(codes) {
             *slot = code;
@@ -447,7 +439,7 @@ fn pwm_ticks(duty: u16) -> u16 {
         .expect("duty fits the 12-bit ramp")
 }
 
-/// Converts an ADS131M08 word from the LM61 (10 mV/degC, 600 mV bias) to
+/// Converts an ADS131M08 word from the LM61 (10 mV/degC, 300 mV bias) to
 /// centi-degrees Celsius. Gain is 1, reference 1.2 V.
 fn lm61_centi(code: i32) -> i16 {
     let mv = code.saturating_mul(ADS_VREF_MV) / ADS_FULL_SCALE;
