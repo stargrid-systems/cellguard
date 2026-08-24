@@ -73,7 +73,8 @@ pub enum Region {
     /// The cellagent application region.
     CellagentApp,
     /// The cellprog programmer application region. Flashed by the programmer
-    /// onto itself through its self-update walker.
+    /// onto itself through a self-update apply path that is not implemented
+    /// yet (issue #60).
     CellprogApp,
 }
 

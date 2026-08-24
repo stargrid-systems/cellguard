@@ -14,9 +14,13 @@ use embedded_hal::spi::{Phase, Polarity};
 /// SPI clock prescaler (divides `CLK_PER`).
 #[derive(Clone, Copy)]
 pub enum Prescaler {
+    /// Divide by 4.
     Div4,
+    /// Divide by 16.
     Div16,
+    /// Divide by 64.
     Div64,
+    /// Divide by 128.
     Div128,
 }
 

@@ -82,10 +82,10 @@ impl PanicRecord {
     ///
     /// # Errors
     ///
-    /// [`ParseError::BadCrc`] on a CRC mismatch,
-    /// [`ParseError::UnsupportedVersion`] on a wrong format version (a blank
-    /// `0xFF` cell lands here), or [`ParseError::BadField`] if the stored
-    /// file length is out of range.
+    /// [`ParseError::BadCrc`] on a CRC mismatch (a blank `0xFF` cell fails
+    /// here first), [`ParseError::UnsupportedVersion`] on a wrong format
+    /// version, or [`ParseError::BadField`] if the stored file length is out
+    /// of range.
     pub fn parse(bytes: &[u8; RECORD_LEN]) -> Result<Self, ParseError> {
         let stored = u32::from_le_bytes([
             bytes[CRC_OFF],

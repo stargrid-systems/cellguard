@@ -61,7 +61,7 @@ pub enum SessionTarget {
     Cellcore,
     /// The programmer itself. `Begin` does not erase anything: the servant
     /// stages the payload, verifies it, and rewrites its own flash after
-    /// reset (see the `cellprog` firmware's walker).
+    /// reset (that apply path is not implemented yet, see issue #60).
     CellprogSelf,
 }
 

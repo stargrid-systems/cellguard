@@ -96,15 +96,22 @@ impl CrcType {
 /// automatically in global-chop mode. There is no separate filter selection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Osr {
+    /// Oversampling ratio of 128.
     Ratio128,
+    /// Oversampling ratio of 256.
     Ratio256,
+    /// Oversampling ratio of 512.
     Ratio512,
     /// Oversampling ratio of 1024 (default).
     #[default]
     Ratio1024,
+    /// Oversampling ratio of 2048.
     Ratio2048,
+    /// Oversampling ratio of 4096.
     Ratio4096,
+    /// Oversampling ratio of 8192.
     Ratio8192,
+    /// Oversampling ratio of 16256.
     Ratio16256,
 }
 
@@ -129,7 +136,9 @@ impl Osr {
 /// for bandwidth: high-resolution runs `fMOD` fastest, very-low-power slowest.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PowerMode {
+    /// Very-low-power mode.
     VeryLowPower,
+    /// Low-power mode.
     LowPower,
     /// High-resolution mode (default).
     #[default]
@@ -152,12 +161,19 @@ pub enum Gain {
     /// Gain of 1 (default).
     #[default]
     X1,
+    /// Gain of 2.
     X2,
+    /// Gain of 4.
     X4,
+    /// Gain of 8.
     X8,
+    /// Gain of 16.
     X16,
+    /// Gain of 32.
     X32,
+    /// Gain of 64.
     X64,
+    /// Gain of 128.
     X128,
 }
 
@@ -306,23 +322,38 @@ impl DcBlock {
 /// The delay is the settling time before each chopped measurement begins.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum GcDelay {
+    /// 2 cycles.
     Cycles2,
+    /// 4 cycles.
     Cycles4,
+    /// 8 cycles.
     Cycles8,
     /// 16 cycles (the reset value).
     #[default]
     Cycles16,
+    /// 32 cycles.
     Cycles32,
+    /// 64 cycles.
     Cycles64,
+    /// 128 cycles.
     Cycles128,
+    /// 256 cycles.
     Cycles256,
+    /// 512 cycles.
     Cycles512,
+    /// 1024 cycles.
     Cycles1024,
+    /// 2048 cycles.
     Cycles2048,
+    /// 4096 cycles.
     Cycles4096,
+    /// 8192 cycles.
     Cycles8192,
+    /// 16384 cycles.
     Cycles16384,
+    /// 32768 cycles.
     Cycles32768,
+    /// 65536 cycles.
     Cycles65536,
 }
 
@@ -355,12 +386,19 @@ pub enum CdCount {
     /// One sample over threshold (default).
     #[default]
     Count1,
+    /// Two samples over threshold.
     Count2,
+    /// Four samples over threshold.
     Count4,
+    /// Eight samples over threshold.
     Count8,
+    /// Sixteen samples over threshold.
     Count16,
+    /// Thirty-two samples over threshold.
     Count32,
+    /// Sixty-four samples over threshold.
     Count64,
+    /// One hundred twenty-eight samples over threshold.
     Count128,
 }
 
@@ -385,12 +423,19 @@ pub enum CdLength {
     /// 128 samples (default).
     #[default]
     Samples128,
+    /// 256 samples.
     Samples256,
+    /// 512 samples.
     Samples512,
+    /// 768 samples.
     Samples768,
+    /// 1280 samples.
     Samples1280,
+    /// 1792 samples.
     Samples1792,
+    /// 2560 samples.
     Samples2560,
+    /// 3584 samples.
     Samples3584,
 }
 

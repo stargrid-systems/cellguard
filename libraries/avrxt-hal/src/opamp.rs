@@ -9,8 +9,11 @@
 /// Which op-amp to configure.
 #[derive(Clone, Copy)]
 pub enum OpAmp {
+    /// Op-amp 0.
     Op0,
+    /// Op-amp 1.
     Op1,
+    /// Op-amp 2.
     Op2,
 }
 

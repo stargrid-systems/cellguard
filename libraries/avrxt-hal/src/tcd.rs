@@ -31,14 +31,23 @@ const ZERO_DUTY_CMP: u16 = 0x0FFF;
 /// `CNTPRES` combined.
 #[derive(Clone, Copy)]
 pub enum Prescaler {
+    /// Divide by 1.
     Div1,
+    /// Divide by 2.
     Div2,
+    /// Divide by 4.
     Div4,
+    /// Divide by 8.
     Div8,
+    /// Divide by 16.
     Div16,
+    /// Divide by 32.
     Div32,
+    /// Divide by 64.
     Div64,
+    /// Divide by 128.
     Div128,
+    /// Divide by 256.
     Div256,
 }
 

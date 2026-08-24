@@ -1,5 +1,6 @@
 use embedded_hal::spi::Error as SpiError;
 
+/// A frame-level SPI exchange with the device failed.
 pub struct CommunicationError<E: SpiError>(CommunicationErrorInner<E>);
 
 impl<E: SpiError> CommunicationError<E> {
@@ -19,7 +20,9 @@ impl<E: SpiError> From<CommunicationErrorKind> for CommunicationError<E> {
     }
 }
 
+/// Why a frame-level exchange failed beyond the bus error itself.
 pub enum CommunicationErrorKind {
+    /// The response frame CRC did not match its contents.
     CrcMismatch,
 }
 
