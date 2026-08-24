@@ -395,10 +395,11 @@ fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {
     {
         return false;
     }
-    // The low bytes carry the length: arming caps it at the app budget,
-    // which fits 12 bits.
+    // The length field spans bytes 12-15. The high bytes must be zero:
+    // otherwise the u16 read below truncates the claimed length and the
+    // CRC would cover only a prefix of the staged image.
     let payload_len = u16::from_le_bytes([head[12], head[13]]);
-    if payload_len == 0 || payload_len > APP_FLASH_SIZE {
+    if payload_len == 0 || payload_len > APP_FLASH_SIZE || head[14] != 0 || head[15] != 0 {
         return false;
     }
     let expected = u32::from_le_bytes([head[16], head[17], head[18], head[19]]);
@@ -914,6 +915,35 @@ mod tests {
             SessionStatus::NvmError
         );
         assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn high_length_bytes_never_arms() {
+        // Claim 0x1_0100 bytes. The low 16 bits stay in budget and the
+        // CRC covers all 256 payload bytes, so only the high length
+        // bytes reject this.
+        let payload = [0x33u8; 0x0100];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+        rig.band.image[12..16].copy_from_slice(&0x0001_0100u32.to_le_bytes());
+
+        assert_eq!(
+            run_self_session(&mut rig, &payload),
+            SessionStatus::NvmError
+        );
+        assert!(!rig.handler.self_update_armed());
+    }
+
+    #[test]
+    fn full_budget_length_still_arms() {
+        // An honest header at the full app budget has zero high length
+        // bytes and must still verify.
+        let payload = std::vec![0x55u8; usize::from(super::APP_FLASH_SIZE)];
+        let mut rig = Rig::new(MockTarget::tiny());
+        rig.band.stage(&payload);
+
+        assert_eq!(run_self_session(&mut rig, &payload), SessionStatus::Ok);
+        assert!(rig.handler.self_update_armed());
     }
 
     #[test]
