@@ -50,6 +50,7 @@
 //! [`read_data_after_pause`][Ads131m08::<S, Ready>::read_data_after_pause].
 
 #![no_std]
+#![warn(missing_docs)]
 
 use core::marker::PhantomData;
 

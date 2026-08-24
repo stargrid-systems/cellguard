@@ -1,17 +1,22 @@
 #![no_std]
 #![no_main]
 #![feature(abi_avr_interrupt)]
+#![expect(
+    clippy::similar_names,
+    reason = "port names mirror the silicon port letters"
+)]
 
-//! Cellagent firmware for the production CellGuard board (ATtiny406, U403).
+//! `Cellagent` firmware for the production `CellGuard` board (`ATtiny406`,
+//! U403).
 //! Balancer and safety co-processor. Protocol logic lives in the `cellagent`
 //! library.
 //!
 //! Fits the 4 KB flash without panic diagnostics: panics abort in place, the
 //! watchdog turns a hang into a reset, and no panic records are written.
 //!
-//! Pin map (`scratch/hardware/cellagent-mcu.md`): PA3 = GATE_B, PA4 = GATE_A,
-//! PA5 = ALIVE, PA7 = TEMP (LM61, ADC AIN7), PB2/PB3 = USART0 TxD/RxD,
-//! PC1 = OUT_TINY_ALL_OFF.
+//! Pin map (`scratch/hardware/cellagent-mcu.md`): PA3 = `GATE_B`, PA4 =
+//! `GATE_A`, PA5 = ALIVE, PA7 = TEMP (LM61, ADC AIN7), PB2/PB3 = USART0
+//! TxD/RxD, PC1 = `OUT_TINY_ALL_OFF`.
 
 use avr_device::attiny406 as pac;
 use avrxt_hal::adc::{Adc, Prescaler as AdcPrescaler, TinyResolution};
@@ -38,7 +43,7 @@ const HEARTBEAT_TICKS: u16 = 256;
 /// LM61 temperature input on PA7 (ADC AIN7).
 const TEMP_ADC_CHANNEL: u8 = 7;
 
-/// LM61 transfer function: V_out (mV) = 300 + 10 * T_C.
+/// LM61 transfer function: `V_out` (mV) = 300 + 10 * `T_C`.
 const LM61_BIAS_MV: u32 = 300;
 const LM61_CENTI_PER_MV: u32 = 10;
 
@@ -57,7 +62,7 @@ const WDT_PERIOD: Period = Period::Clk2k;
 
 #[avr_device::entry]
 fn main() -> ! {
-    let dp = pac::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap_or_else(|| halt());
     let cpu = dp.CPU;
 
     clock::set_main_clock_prescaler(&cpu, &dp.CLKCTRL, PRESCALER);

@@ -50,6 +50,7 @@
     unused_macros,
     reason = "device impl macros are unused when their device feature is off"
 )]
+#![warn(missing_docs)]
 
 // Re-exported so applications can name the PAC types they pass in.
 pub use avr_device;

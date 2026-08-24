@@ -1,9 +1,10 @@
-//! A [`UpdiLink`] over the ATtiny406 one-wire USART.
+//! A [`UpdiLink`] over the `ATtiny406` one-wire USART.
 //!
 //! The PROG tiny has a single USART, shared with the cellcore UART link
 //! through the U1004 mux and lent here only for the duration of a flash. In
-//! UPDI mode its TxD and RxD are coupled onto the target's UPDI line, so every
-//! byte sent echoes back. [`UsartUpdiLink::send_byte`] consumes that echo.
+//! UPDI mode its `TxD` and `RxD` are coupled onto the target's UPDI line, so
+//! every byte sent echoes back. [`UsartUpdiLink::send_byte`] consumes that
+//! echo.
 
 use avrxt_hal::usart::{Usart, UsartInstance};
 use updi::UpdiLink;

@@ -12,6 +12,7 @@
 //!   Requires `avrxt-hal`.
 
 #![no_std]
+#![warn(missing_docs)]
 
 pub use self::record::{FILE_CAP, PanicRecord, RECORD_FORMAT_VERSION, RECORD_LEN};
 #[cfg(feature = "hal")]

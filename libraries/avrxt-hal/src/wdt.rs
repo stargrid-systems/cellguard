@@ -14,12 +14,19 @@ use crate::clock::CcpUnlock;
 pub enum Period {
     /// Watchdog disabled.
     Off,
+    /// About 8 ms.
     Clk8,
+    /// About 16 ms.
     Clk16,
+    /// About 31 ms.
     Clk32,
+    /// About 63 ms.
     Clk64,
+    /// About 125 ms.
     Clk128,
+    /// About 250 ms.
     Clk256,
+    /// About 500 ms.
     Clk512,
     /// About 1 second.
     Clk1k,

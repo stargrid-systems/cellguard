@@ -9,14 +9,23 @@ use super::{CcpUnlock, impl_ccp_unlock};
 /// Internal high-frequency oscillator (OSCHF) frequency options.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HfFreq {
+    /// 1 MHz.
     Mhz1,
+    /// 2 MHz.
     Mhz2,
+    /// 3 MHz.
     Mhz3,
+    /// 4 MHz (the boot default).
     Mhz4,
+    /// 8 MHz.
     Mhz8,
+    /// 12 MHz.
     Mhz12,
+    /// 16 MHz.
     Mhz16,
+    /// 20 MHz.
     Mhz20,
+    /// 24 MHz.
     Mhz24,
 }
 

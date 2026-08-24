@@ -43,10 +43,15 @@ impl i2c::Error for Error {
     reason = "one field per TWI host status bit"
 )]
 pub struct HostStatus {
+    /// Arbitration was lost to another host.
     pub arbitration_lost: bool,
+    /// An illegal bus condition occurred.
     pub bus_error: bool,
+    /// The last write completed.
     pub write_done: bool,
+    /// The last read completed.
     pub read_done: bool,
+    /// The last byte was not acknowledged.
     pub nacked: bool,
 }
 

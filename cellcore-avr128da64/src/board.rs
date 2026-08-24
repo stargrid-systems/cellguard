@@ -48,10 +48,10 @@ static mut ADC_SPI: Option<RefCell<Spi<pac::SPI1>>> = None;
 
 fn adc_bus() -> &'static RefCell<Spi<pac::SPI1>> {
     // SAFETY: `ADC_SPI` is written exactly once (in `Board::new`) before
-    // any call, and no interrupt or second thread exists to race the read.
-    let ptr = core::ptr::addr_of!(ADC_SPI);
-    // SAFETY: the pointer is valid per the note above.
-    unsafe { (*ptr).as_ref().expect("ADC bus initialized") }
+    // any call, and no interrupt or second thread exists to race the read,
+    // so the reference is always valid here.
+    let slot = unsafe { &*core::ptr::addr_of!(ADC_SPI) };
+    slot.as_ref().unwrap_or_else(|| halt())
 }
 
 /// Configures one ADS131M08. Returns None when the chip does not answer, so
@@ -132,7 +132,11 @@ pub struct Board {
 impl Board {
     /// Brings up the board: expanders at safe defaults, ADC on the external
     /// 1.8 V reference, rail mux parked, `INA_EN` asserted.
-    #[allow(clippy::too_many_arguments, reason = "hardware wiring")]
+    #[expect(clippy::too_many_arguments, reason = "hardware wiring")]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "underscore marks pins parked after bring-up and held only for ownership"
+    )]
     pub fn new(
         mut twi: Twi<pac::TWI1>,
         cpu: &pac::CPU,
@@ -339,8 +343,8 @@ impl Board {
         } else {
             let _ = self.mux_a1.set_low();
         }
-        for (channel, slot) in out.iter_mut().enumerate() {
-            let code = self.adc.read_channel(channel as u8);
+        for (slot, channel) in out.iter_mut().zip([0u8, 1, 2, 3]) {
+            let code = self.adc.read_channel(channel);
             *slot = u8::try_from(code).unwrap_or(0);
         }
     }
@@ -358,7 +362,7 @@ impl BalancingHw for Board {
 
     /// Duty 0 statically enables the legs through the U1100 P05 `PWM_SIGNAL`
     /// source while PB7 parks low, per the protocol. Any other duty
-    /// modulates PB7 and drops P05. The sources are ORed in hardware.
+    /// modulates PB7 and drops P05. The sources are `ORed` in hardware.
     fn set_pwm(&mut self, duty: u16) {
         if duty == 0 {
             self.bleed_pwm.set_on_ticks(0);
@@ -443,8 +447,7 @@ impl BalancingHw for Board {
 /// Scales a 1/65536-unit duty onto the TCD0 ramp, rounded to the nearest
 /// tick.
 fn pwm_ticks(duty: u16) -> u16 {
-    u16::try_from((u32::from(duty) * u32::from(PWM_TOP) + 32_767) / 65_535)
-        .expect("duty fits the 12-bit ramp")
+    u16::try_from((u32::from(duty) * u32::from(PWM_TOP) + 32_767) / 65_535).unwrap_or(PWM_TOP)
 }
 
 /// Converts an ADS131M08 word from the LM61 (10 mV/degC, 600 mV bias) to
