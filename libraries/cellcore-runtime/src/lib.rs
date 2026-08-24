@@ -10,7 +10,10 @@
 //!
 //! [`CoreRuntime::try_poll_agent_temp`] polls the downstream node's
 //! temperature on a slow cadence and reports it through the telemetry
-//! handler. Like a forward it is bounded, but it stays off the bus.
+//! handler. The poll and a forward both wait for the downstream reply as
+//! a background exchange: each service call spends at most one
+//! agent-link receive timeout on the wait, so the bus keeps being
+//! serviced while the agent is slow or silent.
 //!
 //! The session advances one step per service call, so a multi-second flash
 //! never stalls the event loop. The staged image is consumed before the
@@ -43,9 +46,10 @@ use embedded_io::{Read, Write};
 /// small, so this only bounds noise.
 const AGENT_RX: usize = 64;
 
-/// Bounded reads spent waiting for an agent reply before `RouteTimeout`.
-/// One read is one agent-link receive timeout, so 40 reads of 2 ms bound
-/// how long a dead node can stall the bus.
+/// Read attempts spent waiting for one agent reply before the exchange
+/// gives up. Attempts are spread across successive service calls and each
+/// call stops at its first agent-link receive timeout, so the budget no
+/// longer parks the bus behind a dead node.
 const AGENT_REPLY_BUDGET: usize = 40;
 
 /// Routed temperature poll cadence in ticks (about 1 s at 1.024 kHz).
@@ -64,6 +68,23 @@ const TELEMETRY_PAYLOAD_MAX: usize = 17;
 enum RouteAction {
     Forward(usize),
     Telemetry(Kind, usize),
+}
+
+/// What happens when an awaited agent reply lands.
+#[derive(Clone, Copy)]
+enum Purpose {
+    /// Relay the reply on the field bus, nack on silence.
+    Forward,
+    /// Report the temperature through the telemetry handler.
+    TempPoll,
+}
+
+/// One in-flight request/reply exchange with the downstream node.
+enum AgentExchange {
+    /// No exchange running.
+    Idle,
+    /// Waiting for a reply, with this many read attempts left.
+    AwaitReply { budget: usize, purpose: Purpose },
 }
 
 /// A side handler for node-local request kinds the update agent does not
@@ -109,6 +130,7 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     route_decoder: Decoder,
     route_scratch: [u8; AGENT_RX],
     reply_decoder: Decoder,
+    exchange: AgentExchange,
     last_agent_poll: u32,
     telemetry: Option<&'k mut dyn TelemetryHandler>,
     now: u32,
@@ -146,6 +168,7 @@ where
             route_decoder: Decoder::new(),
             route_scratch: [0; AGENT_RX],
             reply_decoder: Decoder::new(),
+            exchange: AgentExchange::Idle,
             last_agent_poll: 0,
             telemetry: None,
             now: 0,
@@ -170,20 +193,23 @@ where
         }
     }
 
-    /// Runs one routed [`Kind::ReadTemperature`] poll when the cadence
-    /// elapsed and reports the outcome through
-    /// [`TelemetryHandler::note_agent_temp`]. No-ops without a telemetry
-    /// handler or before one cadence period passed.
+    /// Starts one routed [`Kind::ReadTemperature`] poll when the cadence
+    /// elapsed and no exchange is in flight. The outcome reaches
+    /// [`TelemetryHandler::note_agent_temp`] once the reply wait concludes
+    /// over successive service calls. No-ops without a telemetry handler
+    /// or before one cadence period passed.
     pub fn try_poll_agent_temp(&mut self) {
         if self.telemetry.is_none()
+            || !matches!(self.exchange, AgentExchange::Idle)
             || self.now.wrapping_sub(self.last_agent_poll) < AGENT_TEMP_POLL_TICKS
         {
             return;
         }
         self.last_agent_poll = self.now;
-        let temp = self.poll_agent_temp();
-        if let Some(handler) = self.telemetry.as_deref_mut() {
-            handler.note_agent_temp(temp);
+        if self.send_agent_temp_request() {
+            self.begin_exchange(Purpose::TempPoll);
+        } else if let Some(handler) = self.telemetry.as_deref_mut() {
+            handler.note_agent_temp(None);
         }
     }
 
@@ -200,7 +226,8 @@ where
     /// Attempts to read and service one bus byte.
     ///
     /// Returns immediately when no byte arrives within the bus receive
-    /// timeout, after advancing an in-flight programming session.
+    /// timeout, after advancing an in-flight programming session and
+    /// agent exchange.
     pub fn try_service(&mut self) {
         let mut buf = [0u8; 1];
         if self.bus.read_exact(&mut buf).is_ok()
@@ -209,10 +236,12 @@ where
             self.service(byte);
         } else {
             self.pump_session();
+            self.pump_agent_exchange();
         }
     }
 
-    /// Services one received bus byte.
+    /// Services one received bus byte, then advances an in-flight
+    /// programming session and agent exchange by one step.
     ///
     /// The first successful exchange in a boot also marks the running
     /// application healthy. Link errors are swallowed: a dropped bus
@@ -227,6 +256,7 @@ where
             }
         }
         self.pump_session();
+        self.pump_agent_exchange();
     }
 
     /// Starts a committed cellagent flash and advances an in-flight session
@@ -348,34 +378,21 @@ where
         }
     }
 
-    /// Exchanges one `ReadTemperature` request with the downstream node.
-    fn poll_agent_temp(&mut self) -> Option<i16> {
+    /// Writes the `ReadTemperature` request to the agent link.
+    fn send_agent_temp_request(&mut self) -> bool {
         let mut raw = [0u8; AGENT_TEMP_REQ_RAW];
-        let len = Packet::write(self.agent_id, Kind::ReadTemperature, &[], &mut raw).ok()?;
+        let Ok(len) = Packet::write(self.agent_id, Kind::ReadTemperature, &[], &mut raw) else {
+            return false;
+        };
         let mut wire = [0u8; cellguard_protocol::max_encoded_len(AGENT_TEMP_REQ_RAW)];
-        let wire_len = cellguard_protocol::encode_frame(raw.get(..len)?, &mut wire)?;
-        self.agent
-            .write_all(wire.get(..wire_len).unwrap_or(&[]))
-            .ok()?;
-
-        let mut scratch = [0u8; AGENT_RX];
-        self.reply_decoder = Decoder::new();
-        for _ in 0..AGENT_REPLY_BUDGET {
-            let mut byte = [0u8; 1];
-            if self.agent.read_exact(&mut byte).is_err() {
-                continue;
-            }
-            if let Ok(Some(n)) = self.reply_decoder.feed(byte[0], &mut scratch)
-                && let Some(reply) = scratch.get(..n)
-            {
-                return Packet::parse(reply)
-                    .ok()
-                    .filter(|packet| packet.kind == Kind::Temperature)
-                    .and_then(|packet| <[u8; 2]>::try_from(packet.payload).ok())
-                    .map(i16::from_le_bytes);
-            }
-        }
-        None
+        let Some(wire_len) = raw
+            .get(..len)
+            .and_then(|raw_slice| cellguard_protocol::encode_frame(raw_slice, &mut wire))
+        else {
+            return false;
+        };
+        wire.get(..wire_len)
+            .is_some_and(|bytes| self.agent.write_all(bytes).is_ok())
     }
 
     fn forward(&mut self, frame: &[u8]) {
@@ -391,27 +408,100 @@ where
             self.send_route_timeout();
             return;
         }
+        self.begin_exchange(Purpose::Forward);
+    }
 
-        let mut scratch = [0u8; AGENT_RX];
+    /// Arms the reply wait for a fresh request. A superseded poll never
+    /// saw its reply, so it counts as a miss.
+    fn begin_exchange(&mut self, purpose: Purpose) {
+        if matches!(
+            self.exchange,
+            AgentExchange::AwaitReply {
+                purpose: Purpose::TempPoll,
+                ..
+            }
+        ) && let Some(handler) = self.telemetry.as_deref_mut()
+        {
+            handler.note_agent_temp(None);
+        }
         self.reply_decoder = Decoder::new();
-        for _ in 0..AGENT_REPLY_BUDGET {
+        self.exchange = AgentExchange::AwaitReply {
+            budget: AGENT_REPLY_BUDGET,
+            purpose,
+        };
+    }
+
+    /// Advances the in-flight agent exchange. Drains a replying agent
+    /// within the call, but stops at the first receive timeout so the
+    /// bus gets its turn between attempts.
+    fn pump_agent_exchange(&mut self) {
+        let mut scratch = [0u8; AGENT_RX];
+        while let AgentExchange::AwaitReply { budget, purpose } = self.exchange {
             let mut byte = [0u8; 1];
             if self.agent.read_exact(&mut byte).is_err() {
-                continue;
+                self.spend_exchange_budget(budget, purpose);
+                return;
             }
             if let Ok(Some(n)) = self.reply_decoder.feed(byte[0], &mut scratch)
                 && let Some(reply) = scratch.get(..n)
             {
-                let mut reply_wire = [0u8; cellguard_protocol::max_encoded_len(AGENT_RX)];
-                if let Some(reply_len) = cellguard_protocol::encode_frame(reply, &mut reply_wire)
-                    && let Some(bytes) = reply_wire.get(..reply_len)
-                {
-                    let _ = self.bus.write_all(bytes);
-                }
+                self.finish_exchange(purpose, reply);
                 return;
             }
+            self.spend_exchange_budget(budget, purpose);
         }
-        self.send_route_timeout();
+    }
+
+    /// Records one spent read attempt, expiring the exchange when the
+    /// budget runs out.
+    fn spend_exchange_budget(&mut self, budget: usize, purpose: Purpose) {
+        if budget > 1 {
+            self.exchange = AgentExchange::AwaitReply {
+                budget: budget - 1,
+                purpose,
+            };
+        } else {
+            self.expire_exchange(purpose);
+        }
+    }
+
+    fn finish_exchange(&mut self, purpose: Purpose, reply: &[u8]) {
+        self.exchange = AgentExchange::Idle;
+        match purpose {
+            Purpose::Forward => self.relay_reply(reply),
+            Purpose::TempPoll => {
+                let temp = Packet::parse(reply)
+                    .ok()
+                    .filter(|packet| packet.kind == Kind::Temperature)
+                    .and_then(|packet| <[u8; 2]>::try_from(packet.payload).ok())
+                    .map(i16::from_le_bytes);
+                self.note_temp(temp);
+            }
+        }
+    }
+
+    fn expire_exchange(&mut self, purpose: Purpose) {
+        self.exchange = AgentExchange::Idle;
+        match purpose {
+            Purpose::Forward => self.send_route_timeout(),
+            Purpose::TempPoll => self.note_temp(None),
+        }
+    }
+
+    fn note_temp(&mut self, temp: Option<i16>) {
+        if let Some(handler) = self.telemetry.as_deref_mut() {
+            handler.note_agent_temp(temp);
+        }
+    }
+
+    /// Relays one agent reply frame onto the bus.
+    fn relay_reply(&mut self, reply: &[u8]) {
+        let mut reply_wire = [0u8; cellguard_protocol::max_encoded_len(AGENT_RX)];
+        if let Some(reply_len) = cellguard_protocol::encode_frame(reply, &mut reply_wire)
+            && let Some(bytes) = reply_wire.get(..reply_len)
+        {
+            let _ = self.bus.write_all(bytes);
+        }
     }
 
     fn send_route_timeout(&mut self) {
@@ -782,6 +872,13 @@ mod tests {
         }
     }
 
+    /// Drives the runtime until an in-flight agent exchange concludes.
+    fn run_exchange(runtime: &mut Runtime<'_, '_>) {
+        for _ in 0..=super::AGENT_REPLY_BUDGET {
+            runtime.try_service();
+        }
+    }
+
     fn ready_state(region: Region) -> PersistentState {
         PersistentState {
             agent_version: 1,
@@ -1001,6 +1098,7 @@ mod tests {
             .queue_packet(AGENT_ID, Kind::BalancerGateState, &[0x03]);
 
         feed_from(&mut runtime, AGENT_ID, Kind::ReadBalancerGateState, &[]);
+        run_exchange(&mut runtime);
 
         assert_eq!(
             decode_kind(&runtime.agent.written),
@@ -1016,6 +1114,7 @@ mod tests {
         let mut runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
 
         feed_from(&mut runtime, AGENT_ID, Kind::SetBalancer, &[0x01]);
+        run_exchange(&mut runtime);
 
         assert_eq!(decode_kind(&runtime.bus.written), Kind::Nack);
     }
@@ -1138,6 +1237,9 @@ mod tests {
             assert_eq!(kind, Kind::ReadTemperature);
             assert_eq!(id, AGENT_ID);
             assert!(runtime.bus.written.is_empty());
+
+            run_exchange(runtime);
+            assert!(runtime.bus.written.is_empty());
         }
         assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
     }
@@ -1157,8 +1259,14 @@ mod tests {
             runtime.try_poll_agent_temp();
             let sent = runtime.agent.written.len();
 
+            // The in-flight wait holds a new poll back even past the
+            // cadence.
+            runtime.tick(2 * super::AGENT_TEMP_POLL_TICKS);
             runtime.try_poll_agent_temp();
             assert_eq!(runtime.agent.written.len(), sent);
+            assert!(runtime.bus.written.is_empty());
+
+            run_exchange(runtime);
             assert!(runtime.bus.written.is_empty());
         }
         assert_eq!(handler.agent_temps, std::vec![None]);
@@ -1181,6 +1289,62 @@ mod tests {
 
             runtime.tick(super::AGENT_TEMP_POLL_TICKS);
             runtime.try_poll_agent_temp();
+            run_exchange(runtime);
+        }
+        assert_eq!(handler.agent_temps, std::vec![None]);
+    }
+
+    #[test]
+    fn host_frame_during_agent_temp_poll_is_answered() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+            assert_eq!(
+                decode_packet(&runtime.agent.written).1,
+                Kind::ReadTemperature
+            );
+
+            // A host frame lands on the bus while the poll is still
+            // waiting for the agent.
+            feed_command(runtime, Kind::ReadRails, &[]);
+            assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+
+            runtime
+                .agent
+                .queue_packet(AGENT_ID, Kind::Temperature, &2500i16.to_le_bytes());
+            run_exchange(runtime);
+        }
+        assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
+    }
+
+    #[test]
+    fn agent_frame_during_agent_temp_poll_supersedes_the_poll() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+
+            feed_from(runtime, AGENT_ID, Kind::SetBalancer, &[0x01]);
+            runtime
+                .agent
+                .queue_packet(AGENT_ID, Kind::BalancerGateState, &[0x03]);
+            run_exchange(runtime);
+            assert_eq!(decode_kind(&runtime.bus.written), Kind::BalancerGateState);
         }
         assert_eq!(handler.agent_temps, std::vec![None]);
     }
