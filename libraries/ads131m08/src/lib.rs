@@ -17,7 +17,7 @@
 //!
 //! fn sample<S: SpiDevice>(spi: S) -> Result<[i32; 8], ConfigError<S::Error>> {
 //!     // Configure with defaults, then start converting. On failure the driver
-//!     // comes back in `err.device` so the caller can recover; here we just
+//!     // comes back in `err.device` so the caller can recover. Here we just
 //!     // forward the error.
 //!     let mut device = Ads131m08::new(spi)
 //!         .configure(Config::default())
@@ -366,7 +366,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
     /// This writes the current-detect parameters with `CD_EN` set (preserving
     /// the global-chop and DC-block settings) and issues a standby command. The
     /// device only enters current-detect mode once the host pulses the
-    /// SYNC/RESET pin; a detection then drives `DRDY` low and returns the
+    /// SYNC/RESET pin. A detection then drives `DRDY` low and returns the
     /// device to standby. Conversion results are not host-readable in this
     /// mode. Call [`exit`][Ads131m08::<S, CurrentDetect>::exit] to return
     /// to [`Ready`].
@@ -400,9 +400,9 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         let cfg = self.read_single_register(self::register::CFG)?;
         let thr_lsb = self.read_single_register(self::register::THRESHOLD_LSB)?;
 
-        // Keep the global-chop bits (12:8); replace the current-detect byte.
+        // Keep the global-chop bits (12:8). Replace the current-detect byte.
         let new_cfg = (cfg & 0x1F00) | config.cfg_bits();
-        // Keep the DC-block nibble (3:0); set the threshold low byte.
+        // Keep the DC-block nibble (3:0). Set the threshold low byte.
         let new_thr_lsb = config.threshold_lsb_high() | (thr_lsb & 0x000F);
         let block = [new_cfg, config.threshold_msb(), new_thr_lsb];
 
@@ -441,7 +441,7 @@ impl<S: SpiDevice> Ads131m08<S, Ready> {
         let word_bytes = self.word_length.word_bytes();
         let status = Status(self::frame::read_word(payload, word_bytes, 0));
         // The frame always carries one data word per channel regardless of
-        // CHx_EN; disabled channels simply report stale data.
+        // CHx_EN. Disabled channels simply report stale data.
         let (_response, channel_words) = payload.split_at(word_bytes);
         for (channel, word) in channels
             .iter_mut()

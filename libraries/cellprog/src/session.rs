@@ -380,7 +380,7 @@ fn write_reply<'t>(reply: Reply<'_>, tx: &'t mut [u8; MAX_REPLY_FRAME]) -> &'t [
 /// enough header to route it, then CRC-32 checks the whole payload against
 /// the header's own checksum.
 ///
-/// `scratch` is the handler's receive buffer; the command frame it held is
+/// `scratch` is the handler's receive buffer. The command frame it held is
 /// consumed by the time `End` runs. Offsets stay `u16`: they are internal
 /// to the image, whose payload `End` caps at the app budget.
 fn verify_staged(stage: &mut impl SelfStaging, scratch: &mut [u8]) -> bool {

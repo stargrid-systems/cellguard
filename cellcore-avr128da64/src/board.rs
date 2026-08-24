@@ -91,6 +91,11 @@ mod u1100 {
     pub const PWM_STATIC: PinIndex = PinIndex::P5;
 }
 
+/// Hardware for the balancing-test board.
+///
+/// Owns the I2C expanders, both ADS131M08s, the rail mux, and the bleed PWM,
+/// plus the cached snapshots and supervision state built on them. Build one
+/// with [`Board::new`].
 pub struct Board {
     twi: Twi<pac::TWI1>,
     /// Cached U103 output register, so pin updates are one I2C write.
@@ -271,6 +276,8 @@ impl Board {
         }
     }
 
+    /// Returns the current U103 P12 heartbeat level, from the cached output
+    /// register rather than the chip.
     pub const fn heartbeat_state(&self) -> bool {
         self.power_out.0 & u103::HEARTBEAT.mask() != 0
     }
@@ -304,6 +311,8 @@ impl Board {
         }
     }
 
+    /// Samples the PG0 `TINY_ALIVE` line and latches edge timing for the
+    /// freshness check. `now` is the RTC tick.
     pub fn poll_alive(&mut self, now: u16) {
         self.now = now;
         let level = self.alive.is_high().unwrap_or(self.last_alive);

@@ -189,7 +189,7 @@ impl<L: UpdiLink> TinyProgrammer<L> {
     /// Each page touched must be erased first. Data that spans a page boundary
     /// is programmed one page at a time.
     ///
-    /// tinyAVR data space is 16-bit, so the offset is `u16`; flash is 4 KiB
+    /// tinyAVR data space is 16-bit, so the offset is `u16`. Flash is 4 KiB
     /// and always fits.
     ///
     /// # Errors

@@ -14,7 +14,7 @@ use crate::{CHANNELS, frame, register};
 
 mod fields;
 
-// The register image is a flat array; this enforces the address layout it
+// The register image is a flat array. This enforces the address layout it
 // assumes, namely a contiguous writable block from MODE through the channels.
 const _: () = {
     assert!(register::CLOCK == register::MODE + 1);
@@ -28,7 +28,7 @@ const _: () = {
 ///
 /// Programmed into the CFG and THRSHLD registers. The mode itself is entered
 /// by pulsing the SYNC/RESET pin while the device is in standby, which is the
-/// caller's responsibility; see [`Ads131m08::enter_current_detect`].
+/// caller's responsibility. See [`Ads131m08::enter_current_detect`].
 ///
 /// [`Ads131m08::enter_current_detect`]: crate::Ads131m08::enter_current_detect
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -142,7 +142,7 @@ pub struct Config {
     pub power_mode: PowerMode,
     /// Reference and clock source.
     pub reference: Reference,
-    /// Global-chop mode. `None` disables it; `Some` enables it with a delay.
+    /// Global-chop mode. `None` disables it. `Some` enables it with a delay.
     pub global_chop: Option<GcDelay>,
     /// Global DC-block filter corner.
     pub dc_block: DcBlock,
@@ -223,8 +223,9 @@ impl Config {
         let (delay, gc_en) = self
             .global_chop
             .map_or((DEFAULT_DELAY, 0), |delay| (delay.code(), 1 << 8));
-        // CD_EN and the current-detect fields stay clear here; they are set at
-        // runtime by enter_current_detect, not as part of the static config.
+        // CD_EN and the current-detect fields stay clear here. They are set
+        // at runtime by enter_current_detect, not as part of the static
+        // config.
         (delay << 9) | gc_en
     }
 

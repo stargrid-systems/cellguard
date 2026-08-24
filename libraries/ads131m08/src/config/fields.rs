@@ -92,7 +92,7 @@ impl CrcType {
 /// The output data rate is `fDATA = fMOD / OSR`, where `fMOD` is the modulator
 /// clock set by [`PowerMode`]. A higher ratio lowers the data rate and the
 /// noise. The digital filter is a SINC3 path (with an added SINC1 averager for
-/// ratios above 1024); the device switches to a fast-settling path
+/// ratios above 1024). The device switches to a fast-settling path
 /// automatically in global-chop mode. There is no separate filter selection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Osr {

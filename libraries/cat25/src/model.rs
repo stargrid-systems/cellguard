@@ -1,6 +1,10 @@
 use crate::command::HEADER_MAX;
 
-/// CAT25 model information.
+/// Geometry of a CAT25 EEPROM model.
+///
+/// Carries the page size and the address width that the read, write, and
+/// erase commands are built from. Select a model constant such as
+/// [`CAT25128`] or [`CAT25M01`].
 #[derive(Clone, Copy)]
 #[must_use]
 pub struct Model {
