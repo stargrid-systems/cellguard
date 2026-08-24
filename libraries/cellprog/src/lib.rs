@@ -6,7 +6,7 @@
 //! over the local link, page by page. Images are authenticated by the
 //! cellcore before staging, so there is no crypto here.
 //!
-//! - [`session`]: the servant-side session protocol.
+//! - [`SessionHandler`]: the servant-side session protocol.
 //!
 //! # Features
 //!
@@ -19,6 +19,9 @@
 #[cfg(test)]
 extern crate std;
 
-pub mod session;
+pub use self::session::{
+    APP_FLASH_SIZE, Command, MAX_COMMAND_FRAME, MAX_REPLY_FRAME, SelfStaging, SessionHandler,
+    WALKER_SIZE,
+};
 
-pub use self::session::{Command, SessionHandler};
+mod session;
