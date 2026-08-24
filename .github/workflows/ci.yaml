@@ -4,6 +4,10 @@ on:
   pull_request:
   merge_group:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -22,10 +26,24 @@ jobs:
     timeout-minutes: 5
     outputs:
       workspaces: ${{ steps.discover.outputs.workspaces }}
+      host-workspaces: ${{ steps.host.outputs.host-workspaces }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: discover
         uses: ./.github/actions/discover-workspaces
+      - id: host
+        name: Detect host workspaces
+        env:
+          WORKSPACES: ${{ steps.discover.outputs.workspaces }}
+        run: |
+          host=()
+          while IFS= read -r workspace; do
+            if ! grep -q 'target = "avr-none"' "$workspace/.cargo/config.toml" 2>/dev/null; then
+              host+=("$workspace")
+            fi
+          done < <(jq -r '.[]' <<<"$WORKSPACES")
+          json=$(printf '%s\n' "${host[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "host-workspaces=$json" >>"$GITHUB_OUTPUT"
 
   lint:
     name: Lint (${{ matrix.workspace }})
@@ -63,24 +81,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workspace: ${{ fromJSON(needs.discover.outputs.workspaces) }}
+        workspace: ${{ fromJSON(needs.discover.outputs.host-workspaces) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: target
-        name: Detect AVR workspace
-        working-directory: ${{ matrix.workspace }}
-        run: |
-          if grep -q 'target = "avr-none"' .cargo/config.toml 2>/dev/null; then
-            echo "avr=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "avr=false" >>"$GITHUB_OUTPUT"
-          fi
       - uses: ./.github/actions/install-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ matrix.workspace }}
       - name: Test
-        if: steps.target.outputs.avr == 'false'
         working-directory: ${{ matrix.workspace }}
         run: cargo test --workspace --all-features --locked
 
@@ -115,8 +123,8 @@ jobs:
       - name: Build
         working-directory: ${{ matrix.workspace }}
         run: cargo build --release --locked
-      # Library-only AVR workspaces such as avrxt-hal link no ELF, so there
-      # is nothing to measure.
+      # Guard for a future library-only AVR workspace root, which would
+      # link no ELF and have nothing to measure.
       - name: Flash size gate
         if: steps.target.outputs.avr == 'true'
         working-directory: ${{ matrix.workspace }}
