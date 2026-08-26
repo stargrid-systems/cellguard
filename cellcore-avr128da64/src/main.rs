@@ -55,8 +55,10 @@ mod board;
 /// Y100 external oscillator on PA0, per the verified netlist.
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
-/// Debug UART baud (USART5, bring-up).
-const BUS_BAUD: u32 = 1_000_000;
+/// Debug UART baud (USART5, bring-up). The isolated console chain
+/// (U602 buffer, U603/U604 optocouplers) distorts back-to-back bytes at
+/// 1 Mbaud; 115200 measured clean for full frames in both directions.
+const BUS_BAUD: u32 = 115_200;
 /// Baud on the local links to the PROG programmer (USART3) and the
 /// cellagent (USART4).
 const PROG_BAUD: u32 = 115_200;
@@ -90,7 +92,10 @@ const SCL_HZ: u32 = 100_000;
 
 /// TWI transaction timeout in ms. Bounds a wedged expander: the heartbeat
 /// toggle may miss its cadence but the loop never blocks forever.
-const TWI_TIMEOUT_MS: u32 = 20;
+/// `budget_ms` undercounts the real cost of a register-poll spin, so the
+/// effective wait is several times this value; a healthy expander write
+/// completes in well under a millisecond.
+const TWI_TIMEOUT_MS: u32 = 2;
 
 cellguard_panic::panic_handler!(
     // SAFETY: no peripheral driver exists yet when the handler runs, so
@@ -114,6 +119,10 @@ fn main() -> ! {
     // sits.
     dp.PORTMUX.usartrouteb().modify(|_, w| w.usart5().alt1());
     let portg = Port::new(dp.PORTG).split();
+    // \RESET_PROG gates the U1005/Q1000 clamp on the cellprog UPDI net
+    // (`RESET_UPDI_PROG`). The net has no pull resistor, so it must be
+    // driven high to keep U1003 programmable and out of reset.
+    let _prog_reset = portg.p3.into_output_high();
     let _bus_tx = portg.p4.into_output_high();
     let _bus_rx = portg.p5.into_input();
     let bus = build_usart(
