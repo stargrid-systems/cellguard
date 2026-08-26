@@ -7,11 +7,8 @@ target = "avr-none"
 # span the whole app section.
 rustflags = [
   "-C", "target-cpu=avr128da64",
-  "-C", "link-arg=-mrelax",
   "-C", "link-arg=-Wl,--defsym=__TEXT_REGION_ORIGIN__=0x2000",
   "-C", "link-arg=-Wl,--defsym=__TEXT_REGION_LENGTH__=0x1E000",
-  "-C", "link-arg=-Wl,--defsym=__RODATA_FLASH_START__=0x0",
-  "-C", "link-arg=-Wl,--defsym=__RODATA_REGION_LENGTH__=0x20000",
 ]
 
 [target.'cfg(target_arch = "avr")']
