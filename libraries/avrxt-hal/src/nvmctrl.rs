@@ -7,9 +7,11 @@
 //! `erase_write_flash_page`) for the self-update apply path, which is not
 //! implemented yet (issue #60).
 //!
-//! EEPROM write models differ by family. AVR128 arms `EEERWR` first, then each
-//! store triggers a byte-level erase-write. tinyAVR stores first, then `ERWP`
-//! commits. Both map onto [`NvmInstance::command_eeprom_erase_write`].
+//! EEPROM write models differ by family. AVR128DA/DB silicon commits only
+//! one erase-write per `EEERWR` arm despite the datasheet allowing several,
+//! so [`Nvm`] arms and disarms around every byte. tinyAVR stores first,
+//! then `ERWP` commits. Both map onto
+//! [`NvmInstance::command_eeprom_erase_write`].
 //!
 //! AVR128 USERROW is flash technology (erase-then-write). tinyAVR USERROW is
 //! plain EEPROM. AVR128 flash self-programming remaps a 32 KiB data-space
