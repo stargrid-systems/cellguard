@@ -108,13 +108,22 @@ impl_osc_control!(avr_device::avr128da64::CLKCTRL);
 /// DA parts take the clock directly from the EXTCLK pin. DB parts route it
 /// through `XOSCHF`, which must be configured and enabled first.
 pub trait ExtClockControl {
+    /// Whether [`enable_extclk`](Self::enable_extclk) writes a protected
+    /// register. When false, `set_extclk` skips both the call and the CCP
+    /// unlock before it: two back-to-back CCP writes drop the second write
+    /// (it lands inside the first write's window and is ignored), so the
+    /// protected store that follows would be silently discarded.
+    const NEEDS_ENABLE: bool;
+
     /// Configures and enables the external clock source. No-op on DA. Caller
     /// must have just called [`CcpUnlock::unlock_ioreg`].
     fn enable_extclk(&self, freq: HfFreq);
     /// Selects the external clock as the main clock. Caller must have just
     /// called [`CcpUnlock::unlock_ioreg`].
     fn select_extclk(&self);
-    /// Whether the clock switch is still in progress.
+    /// Whether the clock switch is still in progress, judged by the
+    /// `MCLKSTATUS.EXTS` bit: the source only reports ready once the switch
+    /// completed and the external clock is stable.
     fn switch_in_progress(&self) -> bool;
 }
 
@@ -130,8 +139,10 @@ pub trait ExtClockControl {
 #[inline]
 pub fn set_extclk<C: CcpUnlock, K: ExtClockControl>(cpu: &C, clkctrl: &K, freq: HfFreq) {
     avr_device::interrupt::free(|_| {
-        cpu.unlock_ioreg();
-        clkctrl.enable_extclk(freq);
+        if K::NEEDS_ENABLE {
+            cpu.unlock_ioreg();
+            clkctrl.enable_extclk(freq);
+        }
         cpu.unlock_ioreg();
         clkctrl.select_extclk();
     });
@@ -142,6 +153,7 @@ pub fn set_extclk<C: CcpUnlock, K: ExtClockControl>(cpu: &C, clkctrl: &K, freq: 
 macro_rules! impl_extclk_xoschf {
     ($CLKCTRL:ty) => {
         impl ExtClockControl for $CLKCTRL {
+            const NEEDS_ENABLE: bool = true;
             #[inline(always)]
             fn enable_extclk(&self, freq: HfFreq) {
                 self.xoschfctrla().write(|w| {
@@ -163,7 +175,7 @@ macro_rules! impl_extclk_xoschf {
                 self.mclkctrla().write(|w| w.clksel().extclk());
             }
             fn switch_in_progress(&self) -> bool {
-                self.mclkstatus().read().sosc().bit_is_set()
+                !self.mclkstatus().read().exts().bit_is_set()
             }
         }
     };
@@ -175,12 +187,13 @@ impl_extclk_xoschf!(avr_device::avr128db48::CLKCTRL);
 impl_extclk_xoschf!(avr_device::avr128db64::CLKCTRL);
 #[cfg(feature = "avr128da64")]
 impl ExtClockControl for avr_device::avr128da64::CLKCTRL {
+    const NEEDS_ENABLE: bool = false;
     fn enable_extclk(&self, _freq: HfFreq) {}
     fn select_extclk(&self) {
         self.mclkctrla().write(|w| w.clksel().extclk());
     }
     fn switch_in_progress(&self) -> bool {
-        self.mclkstatus().read().sosc().bit_is_set()
+        !self.mclkstatus().read().exts().bit_is_set()
     }
 }
 
