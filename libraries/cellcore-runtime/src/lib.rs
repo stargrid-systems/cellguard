@@ -18,7 +18,9 @@
 //! Bus bytes are serviced back-to-back within one call, and the session
 //! and agent exchange advance between frames, while the bus is quiet: a
 //! UART's two-byte receive FIFO cannot bridge a per-byte wait, so frames
-//! must be drained without interleaved agent-link work.
+//! must be drained without interleaved agent-link work. A quiet bus link
+//! reports zero bytes or an error, so the bus `read` must be bounded by a
+//! receive timeout or never block.
 //!
 //! The session advances one step per service call, so a multi-second flash
 //! never stalls the event loop. The staged image is consumed before the
@@ -241,15 +243,16 @@ where
     /// timeout and then returns whatever else has buffered, so a whole
     /// frame is serviced back-to-back. Servicing bytes one wait at a time
     /// would overrun a UART's two-byte receive FIFO at field-bus baud
-    /// rates. Interleaving the agent wait between frames keeps the bus
-    /// draining while a slow or silent agent is being polled.
+    /// rates. A quiet link reports zero bytes or an error; either way no
+    /// agent-link work is interleaved between bus bytes, and the session
+    /// and agent exchange advance only between frames.
     pub fn try_service(&mut self) {
         let mut buf = [0u8; SERVICE_RX];
-        if let Ok(n) = self.bus.read(&mut buf) {
-            for &byte in buf.iter().take(n) {
-                self.service(byte);
-            }
-        } else {
+        let n = self.bus.read(&mut buf).unwrap_or(0);
+        for &byte in buf.iter().take(n) {
+            self.service(byte);
+        }
+        if n == 0 {
             self.pump_session();
             self.pump_agent_exchange();
         }
@@ -1396,6 +1399,44 @@ mod tests {
                 .agent
                 .queue_packet(AGENT_ID, Kind::Temperature, &2500i16.to_le_bytes());
             run_exchange(runtime);
+        }
+        assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
+    }
+
+    #[test]
+    fn one_service_call_drains_a_frame_without_agent_work() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+            // The agent reply is already waiting on the link.
+            runtime
+                .agent
+                .queue_packet(AGENT_ID, Kind::Temperature, &2500i16.to_le_bytes());
+            let agent_pending = runtime.agent.readable.len();
+            runtime.bus.queue_packet(NODE, Kind::ReadRails, &[]);
+
+            // The whole bus frame is consumed and answered by one call,
+            // without touching the waiting agent reply: interleaving the
+            // agent-link wait between bus bytes overruns a UART receive
+            // FIFO on hardware.
+            runtime.try_service();
+            assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+            assert_eq!(
+                runtime.agent.readable.len(),
+                agent_pending,
+                "the agent reply must wait for a quiet bus"
+            );
+
+            // On the quiet follow-up call the exchange drains the reply.
+            runtime.try_service();
         }
         assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
     }
