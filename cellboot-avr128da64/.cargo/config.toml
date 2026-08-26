@@ -2,13 +2,14 @@
 target = "avr-none"
 # binutils' avrxmega4_flmap.x sizes the text region for the full 128K flash,
 # so the 8K boot section must be forced with a defsym.
-# __RODATA_FLASH_START__ must be a 32K multiple. 0 parks .rodata after the
-# .text/.data load image instead of the default top-of-flash minus 32K.
+# Do NOT force __RODATA_FLASH_START__=0: that parks .rodata's data-space VMA
+# at 0x0000, so every constant load reads IO/SRAM instead of flash. The
+# default window is correct. cellboot currently has no .rodata; if one
+# appears, keep it inside the boot section with --section-start, not by
+# moving the whole window.
 rustflags = [
   "-C", "target-cpu=avr128da64",
-  "-C", "link-arg=-mrelax",
   "-C", "link-arg=-Wl,--defsym=__TEXT_REGION_LENGTH__=0x2000",
-  "-C", "link-arg=-Wl,--defsym=__RODATA_FLASH_START__=0x0",
 ]
 
 [target.'cfg(target_arch = "avr")']

@@ -1,8 +1,9 @@
 [build]
 target = "avr-none"
-# -mrelax lets the linker shrink call/jump sequences. rustc never passes it
-# itself: it reaches ld through the avr-gcc specs.
-rustflags = ["-C", "target-cpu=attiny406", "-C", "link-arg=-mrelax"]
+# -mrelax is deliberately NOT passed: with this binutils/LLVM combination it
+# miscompiles pointer-sensitive code (observed on the bench as a hung HMAC
+# and corrupted EEPROM write sources on the AVR128DA64).
+rustflags = ["-C", "target-cpu=attiny406"]
 
 [unstable]
 build-std = ["core"]

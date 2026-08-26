@@ -1,8 +1,11 @@
 [build]
 target = "avr-none"
 # The avr-none linker script sizes the text region from the deviceinfo note,
-# so the full 4K flash of the ATtiny406 is already bound. -mrelax lets the
-# linker shrink call/jump sequences. rustc never passes it itself.
+# so the full 4K flash of the ATtiny406 is already bound.
+# -mrelax stays for now: dropping it pushes text+data past the 3600-byte
+# flash-budget gate. Beware: on the bench (2026-08-25) -mrelax miscompiled
+# pointer-sensitive code on the AVR128DA64 builds. If odd behavior shows up
+# here, try removing it and reclaiming the bytes elsewhere.
 rustflags = ["-C", "target-cpu=attiny406", "-C", "link-arg=-mrelax"]
 
 [target.'cfg(target_arch = "avr")']
