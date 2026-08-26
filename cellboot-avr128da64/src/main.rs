@@ -72,8 +72,8 @@ fn main() -> ! {
     // On-chip NVM: agent state in an EEPROM slot, flash writes through the
     // same NVMCTRL.
     let nvm = Nvm::new(dp.NVMCTRL);
-    // The state store below runs long EEPROM transactions. Keep the watchdog
-    // fed across them, or a cold boot resets mid-store and loops.
+    // Defense in depth: a wedged EEPROM transaction must still meet the
+    // watchdog between the load and the store below.
     wdt.feed();
     let mut state_store = EepromState::new(&nvm, &cpu, layout::STATE_OFFSET, layout::STATE_LEN);
     let mut state = state::load(&mut state_store, AGENT_VERSION);
