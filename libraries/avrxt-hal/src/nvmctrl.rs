@@ -148,12 +148,16 @@ impl<T: NvmInstance> Nvm<T> {
     ) -> Result<(), NvmError> {
         check_bounds(offset, data.len(), T::EEPROM_SIZE)?;
         let mut addr = T::EEPROM_START.wrapping_add(offset as usize);
-        self.instance.wait_eeprom_ready();
 
-        if T::EEPROM_ARM_FIRST {
-            self.protected(cpu, T::command_eeprom_erase_write);
-        }
         for &b in data {
+            self.instance.wait_eeprom_ready();
+            // AVR128DA/DB silicon only commits one erase-write per EEERWR
+            // arm despite the datasheet allowing several, and re-arming
+            // while still armed raises WRERROR. So arm and disarm around
+            // every byte. tinyAVR arms after the store instead.
+            if T::EEPROM_ARM_FIRST {
+                self.protected(cpu, T::command_eeprom_erase_write);
+            }
             // SAFETY: `check_bounds` kept `offset + data.len()` inside the
             // EEPROM, so every `addr` stays within the mapped region.
             unsafe { addr.write_volatile(b) };
@@ -164,6 +168,9 @@ impl<T: NvmInstance> Nvm<T> {
             if self.instance.write_error() {
                 self.protected(cpu, T::command_none);
                 return Err(NvmError::WriteFailed);
+            }
+            if T::EEPROM_ARM_FIRST {
+                self.protected(cpu, T::command_none);
             }
             addr = addr.wrapping_add(1);
         }
