@@ -72,11 +72,20 @@ fn main() -> ! {
     // On-chip NVM: agent state in an EEPROM slot, flash writes through the
     // same NVMCTRL.
     let nvm = Nvm::new(dp.NVMCTRL);
+    // Defense in depth: a wedged EEPROM transaction must still meet the
+    // watchdog between the load and the store below.
+    wdt.feed();
     let mut state_store = EepromState::new(&nvm, &cpu, layout::STATE_OFFSET, layout::STATE_LEN);
     let mut state = state::load(&mut state_store, AGENT_VERSION);
+    wdt.feed();
 
     let porta = Port::new(dp.PORTA).split();
     let portg = Port::new(dp.PORTG).split();
+
+    // \RESET_PROG gates the U1005/Q1000 clamp on the cellprog UPDI net
+    // (`RESET_UPDI_PROG`). Drive it high as early as possible: the net has
+    // no pull resistor, so a floating pin can hold U1003 in reset.
+    let _prog_reset = portg.p3.into_output_high();
 
     // SPI0 host bus (PA4 MOSI, PA5 MISO, PA6 SCK), the staging EEPROM bus.
     let _mosi = porta.p4.into_output();
@@ -133,6 +142,7 @@ fn main() -> ! {
     if state.boot_count >= u16::from(BOOT_HEALTH_THRESHOLD) && state.app_health != AppHealth::Bad {
         state.app_health = AppHealth::Bad;
     }
+    wdt.feed();
     let _ = state_store.store(&state.serialize());
 
     // The app does not expect an armed watchdog, so hand over with it stopped.
@@ -159,10 +169,12 @@ fn main() -> ! {
 unsafe fn jump_to_app() -> ! {
     type Entry = fn() -> !;
     avr_device::interrupt::disable();
+    // AVR function pointers and `icall` use word addresses, while
+    // `APP_TARGET_BASE` is a byte address. Halve it before the transmute.
     // SAFETY: the app's CRT at `APP_TARGET_BASE` re-initializes the stack
     // pointer before any code there runs, so the dangling AVR hardware stack
     // is never observed.
-    let entry: Entry = unsafe { core::mem::transmute(APP_TARGET_BASE as usize) };
+    let entry: Entry = unsafe { core::mem::transmute((APP_TARGET_BASE / 2) as usize) };
     entry();
 }
 
