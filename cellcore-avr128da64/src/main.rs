@@ -56,8 +56,8 @@ mod board;
 const F_CPU: HfFreq = HfFreq::Mhz24;
 
 /// Debug UART baud (USART5, bring-up). The isolated console chain
-/// (U602/U603 buffer + optocoupler) distorts back-to-back bytes at 1 Mbaud;
-/// 115200 measured clean for full frames in both directions.
+/// (U602 buffer, U603/U604 optocouplers) distorts back-to-back bytes at
+/// 1 Mbaud; 115200 measured clean for full frames in both directions.
 const BUS_BAUD: u32 = 115_200;
 /// Baud on the local links to the PROG programmer (USART3) and the
 /// cellagent (USART4).

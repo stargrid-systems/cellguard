@@ -29,7 +29,7 @@ use self::transport::{Reply, Transport};
 
 mod transport;
 
-const DEFAULT_BAUD: u32 = 1_000_000;
+const DEFAULT_BAUD: u32 = 115_200;
 const DEFAULT_CHUNK: usize = 128;
 const DEFAULT_TARGET_ID: u16 = 1;
 const DEFAULT_CELLAGENT_TARGET_ID: u16 = 2;
