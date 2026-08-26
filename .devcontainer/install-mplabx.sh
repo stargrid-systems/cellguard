@@ -40,11 +40,11 @@ if [[ ! -f "$INSTALLER" ]]; then
 	exit 0
 fi
 
-# The installer ships without a JVM; mdb is a wrapper around java.
-if ! command -v java >/dev/null 2>&1; then
-	sudo apt-get update -yqq
-	sudo apt-get install -yqq --no-install-recommends default-jre-headless unzip
-fi
+# The installer ships without a JVM; mdb is a wrapper around java. The
+# DFP step needs unzip regardless, and the base image may carry java
+# already.
+sudo apt-get update -yqq
+sudo apt-get install -yqq --no-install-recommends default-jre-headless unzip
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
