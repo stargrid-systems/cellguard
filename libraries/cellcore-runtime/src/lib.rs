@@ -15,6 +15,11 @@
 //! agent-link receive timeout on the wait, so the bus keeps being
 //! serviced while the agent is slow or silent.
 //!
+//! Bus bytes are serviced back-to-back within one call, and the session
+//! and agent exchange advance between frames, while the bus is quiet: a
+//! UART's two-byte receive FIFO cannot bridge a per-byte wait, so frames
+//! must be drained without interleaved agent-link work.
+//!
 //! The session advances one step per service call, so a multi-second flash
 //! never stalls the event loop. The staged image is consumed before the
 //! session's first command (see [`Dispatcher::take_pending_program`]), so a
@@ -51,6 +56,11 @@ const AGENT_RX: usize = 64;
 /// call stops at its first agent-link receive timeout, so the budget no
 /// longer parks the bus behind a dead node.
 const AGENT_REPLY_BUDGET: usize = 40;
+
+/// Bus bytes drained per service call. A bus `read` blocks for the first
+/// byte within the receive timeout and then returns whatever else has
+/// buffered, so this only bounds stack use.
+const SERVICE_RX: usize = 32;
 
 /// Routed temperature poll cadence in ticks (about 1 s at 1.024 kHz).
 const AGENT_TEMP_POLL_TICKS: u32 = 1024;
@@ -223,25 +233,29 @@ where
         }
     }
 
-    /// Attempts to read and service one bus byte.
+    /// Drains and services the bytes that arrived on the bus. When the bus
+    /// is quiet instead, advances an in-flight programming session and
+    /// agent exchange by one step.
     ///
-    /// Returns immediately when no byte arrives within the bus receive
-    /// timeout, after advancing an in-flight programming session and
-    /// agent exchange.
+    /// The bus `read` blocks for the first byte within the bus receive
+    /// timeout and then returns whatever else has buffered, so a whole
+    /// frame is serviced back-to-back. Servicing bytes one wait at a time
+    /// would overrun a UART's two-byte receive FIFO at field-bus baud
+    /// rates. Interleaving the agent wait between frames keeps the bus
+    /// draining while a slow or silent agent is being polled.
     pub fn try_service(&mut self) {
-        let mut buf = [0u8; 1];
-        if self.bus.read_exact(&mut buf).is_ok()
-            && let Some(&byte) = buf.first()
-        {
-            self.service(byte);
+        let mut buf = [0u8; SERVICE_RX];
+        if let Ok(n) = self.bus.read(&mut buf) {
+            for &byte in buf.iter().take(n) {
+                self.service(byte);
+            }
         } else {
             self.pump_session();
             self.pump_agent_exchange();
         }
     }
 
-    /// Services one received bus byte, then advances an in-flight
-    /// programming session and agent exchange by one step.
+    /// Services one received bus byte.
     ///
     /// The first successful exchange in a boot also marks the running
     /// application healthy. Link errors are swallowed: a dropped bus
@@ -254,8 +268,6 @@ where
                 self.confirm_app_healthy_once();
             }
         }
-        self.pump_session();
-        self.pump_agent_exchange();
     }
 
     /// Confirms the running app after its first delivered reply of a boot.
