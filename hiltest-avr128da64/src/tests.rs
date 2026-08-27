@@ -6,4 +6,5 @@
 
 pub mod clock;
 pub mod spi_eeprom;
+pub mod twi;
 pub mod uart;

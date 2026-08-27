@@ -7,8 +7,9 @@ use hiltest_protocol::{Event, Outcome, TestId};
 use ufmt::uwriteln;
 
 use crate::context::Context;
+use crate::detail::DetailBuf;
 use crate::resume;
-use crate::tests::{clock, spi_eeprom, uart};
+use crate::tests::{clock, spi_eeprom, twi, uart};
 
 /// Runs `id`: emits the ack, arms the deadman and the resume record, and
 /// emits exactly one result line.
@@ -21,7 +22,8 @@ pub fn run(ctx: &mut Context, id: TestId) {
     // 8 s deadman: an unexpected hang becomes a watchdog reset, and the next
     // boot reports the armed test as failed.
     let deadman = Watchdog::start(&ctx.cpu, wdt, Period::Clk8k);
-    let (outcome, detail) = dispatch(ctx, id);
+    let mut detail_buf = DetailBuf::new();
+    let (outcome, detail) = dispatch(ctx, id, &mut detail_buf);
     deadman.stop(&ctx.cpu);
     resume::disarm();
     let Ok(()) = uwriteln!(
@@ -35,11 +37,21 @@ pub fn run(ctx: &mut Context, id: TestId) {
     );
 }
 
-fn dispatch(ctx: &mut Context, id: TestId) -> (Outcome, Option<&'static str>) {
+fn dispatch<'a>(
+    ctx: &mut Context,
+    id: TestId,
+    detail: &'a mut DetailBuf,
+) -> (Outcome, Option<&'a str>) {
     match id {
         TestId::UartEchoRc => uart::echo_rc(ctx),
         TestId::ClockExtclk => clock::extclk(ctx),
         TestId::UartEcho24m => uart::echo_24m(ctx),
         TestId::Spi0Cat25ProbeApp => spi_eeprom::probe_app(ctx),
+        TestId::Spi0Cat25ProbeBoot => spi_eeprom::probe_boot(ctx),
+        TestId::Spi0Cat25ProbeIdent => spi_eeprom::probe_ident(ctx),
+        TestId::IdentRead => spi_eeprom::ident_read(ctx, detail),
+        TestId::TwiScan => twi::scan(ctx, detail),
+        TestId::Tca9535Readback => twi::tca9535_readback(ctx, detail),
+        TestId::P3t1755Temp => twi::p3t1755_temp(ctx, detail),
     }
 }

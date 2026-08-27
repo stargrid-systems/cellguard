@@ -1,6 +1,8 @@
 //! Format/parse round-trips for both line directions.
 
-use hiltest_protocol::{Command, CommandError, Event, Outcome, TestId};
+use hiltest_protocol::{
+    AckList, Command, CommandError, Event, Outcome, SCAN_FIRST, SCAN_LAST, TestId,
+};
 
 #[test]
 fn test_ids_round_trip_names_and_codes() {
@@ -125,6 +127,56 @@ fn noise_lines_are_dropped() {
     assert_eq!(Event::parse("\u{fffd}\u{fffd}|HIL ready"), None);
 }
 
+#[test]
+fn ack_lists_parse() {
+    let mut acks = AckList::new();
+    assert!(acks.push(0x20));
+    assert!(acks.push(0x21));
+    assert!(acks.push(0x42));
+    assert_eq!(AckList::parse("acks=20,21,42"), Some(acks));
+    // Lowercase hex is tolerated.
+    let mut single = AckList::new();
+    assert!(single.push(0x4A));
+    assert_eq!(AckList::parse("acks=4a"), Some(single));
+    assert_eq!(AckList::parse("acks="), Some(AckList::new()));
+}
+
+#[test]
+fn bad_ack_lists_are_rejected() {
+    assert_eq!(AckList::parse("20,21"), None);
+    assert_eq!(AckList::parse("acks=zz"), None);
+    assert_eq!(AckList::parse("acks=123"), None);
+    assert_eq!(AckList::parse("acks=20,"), None);
+    assert_eq!(AckList::parse("acks=,20"), None);
+    assert_eq!(AckList::parse("acks=+2"), None);
+}
+
+#[test]
+fn ack_list_capacity_covers_the_scan_range() {
+    let mut acks = AckList::new();
+    for addr in SCAN_FIRST..=SCAN_LAST {
+        assert!(acks.push(addr));
+    }
+    assert_eq!(acks.as_slice().len(), 112);
+    assert!(!acks.push(0x7F));
+}
+
+#[test]
+fn twi_scan_result_detail_stays_one_token() {
+    let event = Event::parse("|HIL result twi-scan FAIL acks=20,21").unwrap();
+    let Event::Result {
+        detail: Some(detail),
+        ..
+    } = event
+    else {
+        panic!("not a result line: {event:?}");
+    };
+    let mut expected = AckList::new();
+    assert!(expected.push(0x20));
+    assert!(expected.push(0x21));
+    assert_eq!(AckList::parse(detail), Some(expected));
+}
+
 #[cfg(feature = "ufmt")]
 mod ufmt_round_trip {
     use super::*;
@@ -191,5 +243,21 @@ mod ufmt_round_trip {
             clk: "rc4m",
         });
         assert_eq!(line, "|HIL v1 boot rstfr=0x08 clk=rc4m");
+    }
+    #[test]
+    fn ack_lists_round_trip_through_udisplay() {
+        let mut acks = AckList::new();
+        for addr in [0x20, 0x21, 0x42, 0x4A] {
+            assert!(acks.push(addr));
+        }
+        let mut sink = Sink(String::new());
+        ufmt::uwrite!(sink, "{}", acks).unwrap();
+        assert_eq!(sink.0, "acks=20,21,42,4A");
+        assert_eq!(AckList::parse(&sink.0), Some(acks));
+
+        let mut sink = Sink(String::new());
+        ufmt::uwrite!(sink, "{}", AckList::new()).unwrap();
+        assert_eq!(sink.0, "acks=");
+        assert_eq!(AckList::parse(&sink.0), Some(AckList::new()));
     }
 }

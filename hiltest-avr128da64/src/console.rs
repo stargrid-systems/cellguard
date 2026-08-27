@@ -110,7 +110,7 @@ fn build(usart5: pac::USART5, f_cpu_hz: u32, baud: u32) -> Usart<pac::USART5> {
         .unwrap_or_else(|BaudUnattainable| panic!("console baud unattainable"))
 }
 
-const fn hex_char(nibble: u8) -> char {
+pub const fn hex_char(nibble: u8) -> char {
     let n = nibble & 0xF;
     let byte = if n < 10 { b'0' + n } else { b'A' + (n - 10) };
     byte as char

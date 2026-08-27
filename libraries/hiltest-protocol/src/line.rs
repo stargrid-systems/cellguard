@@ -198,7 +198,7 @@ fn single_word(s: &str) -> Option<&str> {
 }
 
 #[cfg(feature = "ufmt")]
-const fn hex_char(nibble: u8) -> char {
+pub const fn hex_char(nibble: u8) -> char {
     let n = nibble & 0xF;
     let byte = if n < 10 { b'0' + n } else { b'A' + (n - 10) };
     byte as char

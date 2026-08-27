@@ -18,9 +18,12 @@ workspace = true
 [dependencies]
 avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64", "ufmt"] }
+crc = { path = "../libraries/crc" }
 embedded-hal = { version = "1", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
 hiltest-protocol = { path = "../libraries/hiltest-protocol", features = ["ufmt"] }
+p3t1755 = { path = "../libraries/p3t1755" }
+tca9535 = { path = "../libraries/tca9535" }
 ufmt = { version = "0.2", default-features = false }
 
 [patch.crates-io]

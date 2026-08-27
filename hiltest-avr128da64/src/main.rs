@@ -32,6 +32,7 @@ use self::context::Context;
 
 mod console;
 mod context;
+mod detail;
 mod panic;
 mod registry;
 mod resume;
@@ -56,19 +57,32 @@ fn main() -> ! {
     let _bus_rx = portg.p5.into_input();
     let console = Console::new(dp.USART5, BOOT_CLOCK.hz(), BAUD);
 
-    // SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) with the app EEPROM CS on PG6.
+    // SPI0 (PA4 MOSI, PA5 MISO, PA6 SCK) with the EEPROM chip selects on
+    // PG6 (app), PA7 (boot), and PG7 (factory identity).
     let porta = Port::new(dp.PORTA).split();
     let _mosi = porta.p4.into_output();
     let _miso = porta.p5.into_input();
     let _sck = porta.p6.into_output();
     let cs_app = portg.p6.into_output_high();
+    let cs_boot = porta.p7.into_output_high();
+    let cs_ident = portg.p7.into_output_high();
+
+    // TWI1 (PB2 SDA, PB3 SCL): expanders and the temperature sensor. The
+    // internal pull-ups hold the bus between transactions.
+    let portb = Port::new(dp.PORTB).split();
+    let _sda = portb.p2.into_input_pullup();
+    let _scl = portb.p3.into_input_pullup();
 
     let mut ctx = Context {
         console,
         cpu: dp.CPU,
         clkctrl: dp.CLKCTRL,
+        portmux: dp.PORTMUX,
         spi0: Some(dp.SPI0),
+        twi1: Some(dp.TWI1),
         cs_app,
+        cs_boot,
+        cs_ident,
         f_cpu: BOOT_CLOCK,
         clock_switched: false,
     };

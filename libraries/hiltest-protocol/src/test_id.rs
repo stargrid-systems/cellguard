@@ -16,15 +16,34 @@ pub enum TestId {
     UartEcho24m = 2,
     /// Non-destructive WEL round-trip on the app staging EEPROM (SPI0).
     Spi0Cat25ProbeApp = 3,
+    /// Non-destructive WEL round-trip on the boot EEPROM (SPI0, CS PA7).
+    Spi0Cat25ProbeBoot = 4,
+    /// Non-destructive WEL round-trip on the factory identity EEPROM (SPI0,
+    /// CS PG7).
+    Spi0Cat25ProbeIdent = 5,
+    /// Read the factory identity record from U106 and check magic and CRC.
+    IdentRead = 6,
+    /// Zero-length-write probe of every 7-bit address on TWI1.
+    TwiScan = 7,
+    /// Config-register write/readback on both TCA9535 expanders.
+    Tca9535Readback = 8,
+    /// Temperature read from the P3T1755 sensor.
+    P3t1755Temp = 9,
 }
 
 impl TestId {
     /// Every known test, in the intended run order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 10] = [
         Self::UartEchoRc,
         Self::ClockExtclk,
         Self::UartEcho24m,
         Self::Spi0Cat25ProbeApp,
+        Self::Spi0Cat25ProbeBoot,
+        Self::Spi0Cat25ProbeIdent,
+        Self::IdentRead,
+        Self::TwiScan,
+        Self::Tca9535Readback,
+        Self::P3t1755Temp,
     ];
 
     /// The kebab-case wire name.
@@ -35,6 +54,12 @@ impl TestId {
             Self::ClockExtclk => "clock-extclk",
             Self::UartEcho24m => "uart-echo-24m",
             Self::Spi0Cat25ProbeApp => "spi0-cat25-probe-app",
+            Self::Spi0Cat25ProbeBoot => "spi0-cat25-probe-boot",
+            Self::Spi0Cat25ProbeIdent => "spi0-cat25-probe-ident",
+            Self::IdentRead => "ident-read",
+            Self::TwiScan => "twi-scan",
+            Self::Tca9535Readback => "tca9535-readback",
+            Self::P3t1755Temp => "p3t1755-temp",
         }
     }
 
