@@ -16,15 +16,12 @@ use crate::tests::{clock, spi_eeprom, twi, uart};
 pub fn run(ctx: &mut Context, id: TestId) {
     let Ok(()) = uwriteln!(ctx.console, "{}", Event::RunAck { id: id.name() });
     resume::arm(id);
-    // SAFETY: the deadman is the only WDT user in this image, so the stolen
-    // handle aliases nothing.
-    let wdt = unsafe { pac::Peripherals::steal() }.WDT;
     // 8 s deadman: an unexpected hang becomes a watchdog reset, and the next
     // boot reports the armed test as failed.
-    let deadman = Watchdog::start(&ctx.cpu, wdt, Period::Clk8k);
+    set_deadman(&ctx.cpu, Period::Clk8k);
     let mut detail_buf = DetailBuf::new();
     let (outcome, detail) = dispatch(ctx, id, &mut detail_buf);
-    deadman.stop(&ctx.cpu);
+    set_deadman(&ctx.cpu, Period::Off);
     resume::disarm();
     let Ok(()) = uwriteln!(
         ctx.console,
@@ -35,6 +32,23 @@ pub fn run(ctx: &mut Context, id: TestId) {
             detail,
         }
     );
+}
+
+/// Sets the deadman period, waiting out `WDT.STATUS.SYNCBUSY` first.
+///
+/// A `CTRLA` write needs 2 to 3 cycles of the 1.024 kHz WDT clock to cross
+/// into the WDT clock domain, and the hardware ignores `CTRLA` writes while
+/// that is pending. A test that finished inside that ~3 ms window used to
+/// lose its `Off` write here, leaving the 8 s deadman armed on an idle
+/// board.
+fn set_deadman(cpu: &pac::CPU, period: Period) {
+    // SAFETY: the deadman is the only WDT user in this image, so the stolen
+    // handle aliases nothing.
+    let wdt = unsafe { pac::Peripherals::steal() }.WDT;
+    while wdt.status().read().syncbusy().bit_is_set() {
+        core::hint::spin_loop();
+    }
+    let _armed = Watchdog::start(cpu, wdt, period);
 }
 
 fn dispatch<'a>(
