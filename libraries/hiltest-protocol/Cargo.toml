@@ -1,0 +1,19 @@
+[package]
+name = "hiltest-protocol"
+version = "0.1.0"
+description = "Line protocol shared by the CellGuard HIL test firmware and the host runner."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+ufmt = ["dep:ufmt"]
+
+[dependencies]
+ufmt = { workspace = true, optional = true }
+
+[lints]
+workspace = true

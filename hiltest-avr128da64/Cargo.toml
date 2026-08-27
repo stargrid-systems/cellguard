@@ -1,0 +1,65 @@
+[package]
+name = "hiltest-avr128da64"
+version = "0.1.0"
+description = "HIL test-runner firmware for the CellGuard cellcore (AVR128DA64)."
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[[bin]]
+name = "hiltest-avr128da64"
+test = false
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
+avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64", "ufmt"] }
+embedded-hal = { version = "1", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+hiltest-protocol = { path = "../libraries/hiltest-protocol", features = ["ufmt"] }
+ufmt = { version = "0.2", default-features = false }
+
+[patch.crates-io]
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+
+# Both profiles keep the panic machinery: the harness reports panic locations
+# through the resume record, so panics must reach the panic handler.
+[profile.dev]
+panic = "abort"
+lto = true
+opt-level = "s"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = "warn"
+unescaped_backticks = "warn"
+
+# See: <https://rust-lang.github.io/rust-clippy/master/index.html>
+[workspace.lints.clippy]
+# Groups
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Individual lints
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+expect_used = "warn"
+float_arithmetic = "warn"
+indexing_slicing = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unwrap_used = "warn"
+# Transitive deps of avr-device pull duplicate versions of syn and friends.
+# Not actionable from this crate.
+multiple_crate_versions = "allow"

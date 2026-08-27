@@ -12,6 +12,7 @@ members = [
     "cellguard-protocol",
     "cellprog",
     "crc",
+    "hiltest-protocol",
     "p3t1755",
     "tca9535",
     "updi",
