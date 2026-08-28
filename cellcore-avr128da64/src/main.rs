@@ -234,7 +234,9 @@ fn main() -> ! {
     );
 
     // I2C1 (PB2/PB3): expanders and the temperature sensor. Internal
-    // pull-ups hold the bus between transactions.
+    // pull-ups hold the bus between transactions. PORTMUX ALT2 routes
+    // TWI1 to PB2/PB3, away from the default PF2/PF3.
+    dp.PORTMUX.twiroutea().modify(|_, w| w.twi1().alt2());
     let _sda = portb.p2.into_input_pullup();
     let _scl = portb.p3.into_input_pullup();
     let twi = Twi::with_timeout_ms(dp.TWI1, F_CPU.hz(), SCL_HZ, TWI_TIMEOUT_MS);
