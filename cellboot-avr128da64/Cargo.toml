@@ -18,7 +18,7 @@ bench = false
 workspace = true
 
 [dependencies]
-avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
+avr-device = { version = "0.9", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
 cellboot = { path = "../libraries/cellboot", features = ["avr128", "drivers"] }
 cat25 = { path = "../libraries/cat25" }
@@ -29,7 +29,7 @@ embedded-io = { version = "0.7", default-features = false }
 cellguard-panic = { path = "../libraries/cellguard-panic", features = ["hal"] }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "18b19ea9365b1d6a9ccb437a717bff0cceddb571" }
 
 [profile.dev]
 panic = "immediate-abort"

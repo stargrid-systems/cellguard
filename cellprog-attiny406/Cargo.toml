@@ -17,7 +17,7 @@ bench = false
 workspace = true
 
 [dependencies]
-avr-device = { version = "0.8", features = ["attiny406", "rt"] }
+avr-device = { version = "0.9", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["bootloader"] }
 cellprog = { path = "../libraries/cellprog" }
@@ -25,7 +25,7 @@ embedded-hal = { version = "1", default-features = false }
 updi = { path = "../libraries/updi" }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "18b19ea9365b1d6a9ccb437a717bff0cceddb571" }
 
 [profile.dev]
 panic = "immediate-abort"
