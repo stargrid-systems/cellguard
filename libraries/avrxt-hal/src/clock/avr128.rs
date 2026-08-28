@@ -203,3 +203,26 @@ impl_ccp_unlock!(avr_device::avr128db48::CPU);
 impl_ccp_unlock!(avr_device::avr128db64::CPU);
 #[cfg(feature = "avr128da64")]
 impl_ccp_unlock!(avr_device::avr128da64::CPU);
+
+#[cfg(test)]
+mod tests {
+    use super::HfFreq;
+
+    #[test]
+    fn hz_matches_variant() {
+        let cases = [
+            (HfFreq::Mhz1, 1_000_000),
+            (HfFreq::Mhz2, 2_000_000),
+            (HfFreq::Mhz3, 3_000_000),
+            (HfFreq::Mhz4, 4_000_000),
+            (HfFreq::Mhz8, 8_000_000),
+            (HfFreq::Mhz12, 12_000_000),
+            (HfFreq::Mhz16, 16_000_000),
+            (HfFreq::Mhz20, 20_000_000),
+            (HfFreq::Mhz24, 24_000_000),
+        ];
+        for (freq, hz) in cases {
+            assert_eq!(freq.hz(), hz);
+        }
+    }
+}

@@ -289,3 +289,51 @@ impl_twis!(avr_device::avr128db48::TWI0, avr_device::avr128db48::TWI1);
 impl_twis!(avr_device::avr128db64::TWI0, avr_device::avr128db64::TWI1);
 #[cfg(feature = "avr128da64")]
 impl_twis!(avr_device::avr128da64::TWI0, avr_device::avr128da64::TWI1);
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+
+    use super::{HostStatus, Twi, TwiInstance};
+
+    struct Mock {
+        baud: Cell<u8>,
+    }
+
+    impl TwiInstance for Mock {
+        fn configure(&self, baud: u8) {
+            self.baud.set(baud);
+        }
+        fn host_status(&self) -> HostStatus {
+            unreachable!()
+        }
+        fn start_with_address(&self, _byte: u8) {}
+        fn write_byte(&self, _byte: u8) {}
+        fn read_byte(&self) -> u8 {
+            unreachable!()
+        }
+        fn ack_and_receive(&self) {}
+        fn prepare_nack(&self) {}
+        fn stop(&self) {}
+    }
+
+    fn baud_for(f_cpu_hz: u32, scl_hz: u32) -> u8 {
+        let mock = Mock {
+            baud: Cell::new(0xFF),
+        };
+        Twi::new(mock, f_cpu_hz, scl_hz).free().baud.get()
+    }
+
+    #[test]
+    fn standard_and_fast_mode() {
+        assert_eq!(baud_for(4_000_000, 100_000), 15);
+        assert_eq!(baud_for(24_000_000, 100_000), 115);
+        assert_eq!(baud_for(24_000_000, 400_000), 25);
+    }
+
+    #[test]
+    fn saturates_at_zero() {
+        assert_eq!(baud_for(4_000_000, 400_000), 0);
+        assert_eq!(baud_for(1_000_000, 400_000), 0);
+    }
+}

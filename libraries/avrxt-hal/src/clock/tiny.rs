@@ -161,3 +161,42 @@ impl_main_clk_control!(avr_device::attiny416::CLKCTRL);
 impl_ccp_unlock!(avr_device::attiny406::CPU);
 #[cfg(feature = "attiny416")]
 impl_ccp_unlock!(avr_device::attiny416::CPU);
+
+#[cfg(test)]
+mod tests {
+    use super::{ClkPrescaler, TinyBaseFreq};
+
+    #[test]
+    fn base_freq_hz() {
+        assert_eq!(TinyBaseFreq::Mhz16.hz(), 16_000_000);
+        assert_eq!(TinyBaseFreq::Mhz20.hz(), 20_000_000);
+    }
+
+    #[test]
+    fn divisor_matches_variant() {
+        let cases = [
+            (ClkPrescaler::Div2, 2),
+            (ClkPrescaler::Div4, 4),
+            (ClkPrescaler::Div6, 6),
+            (ClkPrescaler::Div8, 8),
+            (ClkPrescaler::Div10, 10),
+            (ClkPrescaler::Div12, 12),
+            (ClkPrescaler::Div16, 16),
+            (ClkPrescaler::Div24, 24),
+            (ClkPrescaler::Div32, 32),
+            (ClkPrescaler::Div48, 48),
+            (ClkPrescaler::Div64, 64),
+        ];
+        for (div, n) in cases {
+            assert_eq!(div.divisor(), n);
+        }
+    }
+
+    #[test]
+    fn clk_per_applies_prescaler() {
+        // The boot default is the base frequency at /6.
+        let boot = TinyBaseFreq::Mhz20.clk_per_hz(Some(ClkPrescaler::Div6));
+        assert_eq!(boot, 3_333_333);
+        assert_eq!(TinyBaseFreq::Mhz16.clk_per_hz(None), 16_000_000);
+    }
+}

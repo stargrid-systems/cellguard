@@ -245,3 +245,37 @@ unsafe fn read_region(
     // initialized `[u8]` for the borrow of `buf`.
     Ok(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{NvmError, check_bounds};
+
+    #[test]
+    fn accepts_in_range() {
+        assert_eq!(check_bounds(0, 10, 512), Ok(()));
+        assert_eq!(check_bounds(100, 100, 512), Ok(()));
+    }
+
+    #[test]
+    fn accepts_boundary() {
+        assert_eq!(check_bounds(0, 512, 512), Ok(()));
+        assert_eq!(check_bounds(511, 1, 512), Ok(()));
+        assert_eq!(check_bounds(512, 0, 512), Ok(()));
+    }
+
+    #[test]
+    fn rejects_out_of_range() {
+        assert_eq!(check_bounds(0, 513, 512), Err(NvmError::OutOfBounds));
+        assert_eq!(check_bounds(512, 1, 512), Err(NvmError::OutOfBounds));
+        assert_eq!(check_bounds(1, 512, 512), Err(NvmError::OutOfBounds));
+    }
+
+    #[test]
+    fn rejects_length_overflow() {
+        let max = u16::MAX;
+        assert_eq!(
+            check_bounds(max, usize::MAX, max),
+            Err(NvmError::OutOfBounds)
+        );
+    }
+}
