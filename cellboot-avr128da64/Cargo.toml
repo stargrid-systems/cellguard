@@ -18,7 +18,7 @@ bench = false
 workspace = true
 
 [dependencies]
-avr-device = { version = "0.8", features = ["avr128da64", "rt"] }
+avr-device = { version = "0.9", features = ["avr128da64", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["avr128da64"] }
 cellboot = { path = "../libraries/cellboot", features = ["avr128", "drivers"] }
 cat25 = { path = "../libraries/cat25" }

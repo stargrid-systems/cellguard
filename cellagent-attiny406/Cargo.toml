@@ -18,7 +18,7 @@ bench = false
 workspace = true
 
 [dependencies]
-avr-device = { version = "0.8", features = ["attiny406", "rt"] }
+avr-device = { version = "0.9", features = ["attiny406", "rt"] }
 avrxt-hal = { path = "../libraries/avrxt-hal", features = ["attiny406"] }
 cellagent = { path = "../libraries/cellagent" }
 cellguard-protocol = { path = "../libraries/cellguard-protocol", features = ["telemetry"] }
