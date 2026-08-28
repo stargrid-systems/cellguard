@@ -6,7 +6,15 @@ target = "avr-none"
 # flash-budget gate. Beware: on the bench (2026-08-25) -mrelax miscompiled
 # pointer-sensitive code on the AVR128DA64 builds. If odd behavior shows up
 # here, try removing it and reclaiming the bytes elsewhere.
-rustflags = ["-C", "target-cpu=attiny406", "-C", "link-arg=-mrelax"]
+rustflags = [
+  "-C", "target-cpu=attiny406",
+  "-C", "link-arg=-mrelax",
+  # The stable manifest keeps panic = "abort". These flags upgrade it to
+  # immediate-abort (drops the panic machinery) without the nightly-only
+  # cargo-features line that breaks stable `cargo update` (Renovate).
+  "-Z", "unstable-options",
+  "-C", "panic=immediate-abort",
+]
 
 [target.'cfg(target_arch = "avr")']
 runner = "ravedude"

@@ -3,7 +3,14 @@ target = "avr-none"
 # -mrelax is deliberately NOT passed: with this binutils/LLVM combination it
 # miscompiles pointer-sensitive code (observed on the bench as a hung HMAC
 # and corrupted EEPROM write sources on the AVR128DA64).
-rustflags = ["-C", "target-cpu=attiny406"]
+rustflags = [
+  "-C", "target-cpu=attiny406",
+  # The stable manifest keeps panic = "abort". These flags upgrade it to
+  # immediate-abort (drops the panic machinery) without the nightly-only
+  # cargo-features line that breaks stable `cargo update` (Renovate).
+  "-Z", "unstable-options",
+  "-C", "panic=immediate-abort",
+]
 
 [unstable]
 build-std = ["core"]
