@@ -40,7 +40,15 @@ pub struct Summary {
     entries: Vec<(TestId, Verdict)>,
 }
 
+impl Default for Summary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Summary {
+    /// Creates an empty summary.
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -68,11 +76,71 @@ impl Summary {
     }
 
     /// Nonzero exactly when a test failed or timed out.
+    #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         if self.entries.iter().any(|(_, v)| v.is_failure()) {
             ExitCode::FAILURE
         } else {
             ExitCode::SUCCESS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`ExitCode`] has no `PartialEq`, so compare the debug forms.
+    fn assert_code(actual: ExitCode, expected: ExitCode) {
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
+
+    #[test]
+    fn describe_covers_every_verdict() {
+        assert_eq!(Verdict::Pass.describe(), "PASS");
+        assert_eq!(Verdict::Fail(None).describe(), "FAIL");
+        assert_eq!(
+            Verdict::Fail(Some("echo-mismatch".to_owned())).describe(),
+            "FAIL (echo-mismatch)"
+        );
+        assert_eq!(
+            Verdict::Skip(Some("unprovisioned".to_owned())).describe(),
+            "SKIP (unprovisioned)"
+        );
+        assert_eq!(Verdict::Timeout.describe(), "TIMEOUT");
+    }
+
+    #[test]
+    fn with_detail_appends_the_detail_in_parentheses() {
+        assert_eq!(with_detail("FAIL", None), "FAIL");
+        assert_eq!(with_detail("SKIP", Some("later")), "SKIP (later)");
+    }
+
+    #[test]
+    fn exit_code_succeeds_when_every_test_passes_or_skips() {
+        let mut summary = Summary::new();
+        summary.record(TestId::UartEchoRc, Verdict::Pass);
+        summary.record(TestId::IdentRead, Verdict::Skip(Some("x".to_owned())));
+        assert_code(summary.exit_code(), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn exit_code_fails_on_a_failed_verdict() {
+        let mut summary = Summary::new();
+        summary.record(TestId::UartEchoRc, Verdict::Pass);
+        summary.record(TestId::TwiScan, Verdict::Fail(None));
+        assert_code(summary.exit_code(), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn exit_code_fails_on_a_timeout() {
+        let mut summary = Summary::new();
+        summary.record(TestId::ClockExtclk, Verdict::Timeout);
+        assert_code(summary.exit_code(), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn exit_code_succeeds_on_an_empty_run() {
+        assert_code(Summary::new().exit_code(), ExitCode::SUCCESS);
     }
 }

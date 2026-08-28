@@ -233,6 +233,11 @@ impl<T: UsartInstance> Usart<T> {
     pub fn write_byte(&mut self, byte: u8) {
         crate::wait::spin_until(|| self.instance.tx_ready());
         self.instance.push(byte);
+        // A frame that completed while no byte was pending leaves TXCIF set,
+        // which would let `drain_tx` return with this byte still in flight.
+        // Clearing right after the push is safe: this byte cannot complete
+        // for at least one full frame time.
+        self.instance.clear_tx_complete();
         self.tx_pending = true;
     }
 
