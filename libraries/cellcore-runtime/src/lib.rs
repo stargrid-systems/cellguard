@@ -15,20 +15,23 @@
 //! agent-link receive timeout on the wait, so the bus keeps being
 //! serviced while the agent is slow or silent.
 //!
-//! Bus bytes are serviced back-to-back within one call, and the session
-//! and agent exchange advance between frames, while the bus is quiet: a
-//! UART's two-byte receive FIFO cannot bridge a per-byte wait, so frames
-//! must be drained without interleaved agent-link work. A quiet bus link
-//! reports zero bytes or an error, so the bus `read` must be bounded by a
-//! receive timeout or never block.
+//! Each service call does one bounded bus `read` and services every
+//! returned byte back-to-back: a UART's two-byte receive FIFO cannot
+//! bridge a per-byte wait, so no agent-link work runs between the bytes
+//! of one read. A real read returns only what has already buffered, so a
+//! frame usually spans several calls. The session and agent exchange
+//! advance on quiet calls, and at latest after `FORCED_PUMP_CALLS`
+//! consecutive busy calls, so sustained bus traffic cannot starve them.
+//! A quiet bus link reports zero bytes or an error, so the bus `read`
+//! must be bounded by a receive timeout or never block.
 //!
-//! The session advances one step per service call, so a multi-second flash
-//! never stalls the event loop. The staged image is consumed before the
-//! session's first command (see [`Dispatcher::take_pending_program`]), so a
-//! reset mid-session cannot re-trigger the same flash on reboot.
-//! Application and bootloader images stay staged for their owners: the
-//! bootloader self-programs an application image, and a bootloader image is
-//! bench-only. A session failure is recorded through
+//! The session advances at most one step per service call, so a
+//! multi-second flash never stalls the event loop. The staged image is consumed
+//! before the session's first command (see
+//! [`Dispatcher::take_pending_program`]), so a reset mid-session cannot
+//! re-trigger the same flash on reboot. Application and bootloader images stay
+//! staged for their owners: the bootloader self-programs an application image,
+//! and a bootloader image is bench-only. A session failure is recorded through
 //! `UpdateAgent::record_program_failure`. A bus transfer that interleaves
 //! with a running session can overwrite the staged bytes mid-stream, but
 //! the only writer is the host that just committed the image.
@@ -63,6 +66,11 @@ const AGENT_REPLY_BUDGET: usize = 40;
 /// byte within the receive timeout and then returns whatever else has
 /// buffered, so this only bounds stack use.
 const SERVICE_RX: usize = 32;
+
+/// Consecutive busy service calls after which the pumps run anyway.
+/// Bounds pump latency under sustained traffic to this many call
+/// durations, each at most one bus receive timeout plus servicing.
+const FORCED_PUMP_CALLS: u8 = 4;
 
 /// Routed temperature poll cadence in ticks (about 1 s at 1.024 kHz).
 const AGENT_TEMP_POLL_TICKS: u32 = 1024;
@@ -143,6 +151,8 @@ pub struct CoreRuntime<'k, S, K, St, Bus, Prog, Agent, const RX: usize> {
     route_scratch: [u8; AGENT_RX],
     reply_decoder: Decoder,
     exchange: AgentExchange,
+    /// Busy service calls since the pumps last ran.
+    busy_calls: u8,
     last_agent_poll: u32,
     telemetry: Option<&'k mut dyn TelemetryHandler>,
     now: u32,
@@ -181,6 +191,7 @@ where
             route_scratch: [0; AGENT_RX],
             reply_decoder: Decoder::new(),
             exchange: AgentExchange::Idle,
+            busy_calls: 0,
             last_agent_poll: 0,
             telemetry: None,
             now: 0,
@@ -235,27 +246,30 @@ where
         }
     }
 
-    /// Drains and services the bytes that arrived on the bus. When the bus
-    /// is quiet instead, advances an in-flight programming session and
-    /// agent exchange by one step.
+    /// Services the bytes returned by one bounded bus read. On a quiet
+    /// read, advances an in-flight programming session and agent exchange
+    /// by one step.
     ///
     /// The bus `read` blocks for the first byte within the bus receive
-    /// timeout and then returns whatever else has buffered, so a whole
-    /// frame is serviced back-to-back. Servicing bytes one wait at a time
-    /// would overrun a UART's two-byte receive FIFO at field-bus baud
-    /// rates. A quiet link reports zero bytes or an error; either way no
-    /// agent-link work is interleaved between bus bytes, and the session
-    /// and agent exchange advance only between frames.
+    /// timeout and then returns only what has already buffered, so a frame
+    /// usually spans several calls. No agent-link work runs between the
+    /// bytes of one read, which would overrun a UART's two-byte receive
+    /// FIFO at field-bus baud rates. Sustained traffic cannot defer the
+    /// session and exchange forever: they also advance after
+    /// `FORCED_PUMP_CALLS` consecutive busy calls.
     pub fn try_service(&mut self) {
         let mut buf = [0u8; SERVICE_RX];
         let n = self.bus.read(&mut buf).unwrap_or(0);
         for &byte in buf.iter().take(n) {
             self.service(byte);
         }
-        if n == 0 {
-            self.pump_session();
-            self.pump_agent_exchange();
+        if n > 0 && self.busy_calls + 1 < FORCED_PUMP_CALLS {
+            self.busy_calls += 1;
+            return;
         }
+        self.busy_calls = 0;
+        self.pump_session();
+        self.pump_agent_exchange();
     }
 
     /// Services one received bus byte.
@@ -594,6 +608,8 @@ mod tests {
     struct MockLink {
         written: std::vec::Vec<u8>,
         readable: std::vec::Vec<u8>,
+        /// Reads yield endless noise once the scripted bytes run out.
+        noisy: bool,
     }
 
     impl MockLink {
@@ -628,6 +644,10 @@ mod tests {
             let n = buf.len().min(self.readable.len());
             buf[..n].copy_from_slice(&self.readable[..n]);
             self.readable.drain(..n);
+            if n == 0 && self.noisy {
+                buf.fill(b'U');
+                return Ok(buf.len());
+            }
             Ok(n)
         }
     }
@@ -1439,6 +1459,62 @@ mod tests {
             runtime.try_service();
         }
         assert_eq!(handler.agent_temps, std::vec![Some(2500)]);
+    }
+
+    #[test]
+    fn sustained_bus_noise_cannot_starve_the_agent_exchange() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.tick(super::AGENT_TEMP_POLL_TICKS);
+            runtime.try_poll_agent_temp();
+            runtime.bus.noisy = true;
+
+            // The bus never goes quiet, so only the forced pumps can
+            // expire the silent agent's reply budget.
+            let calls = usize::from(super::FORCED_PUMP_CALLS) * (super::AGENT_REPLY_BUDGET + 1);
+            for _ in 0..calls {
+                runtime.try_service();
+            }
+        }
+        assert_eq!(
+            handler.agent_temps,
+            std::vec![None],
+            "the reply wait must expire under sustained bus traffic"
+        );
+    }
+
+    #[test]
+    fn frame_longer_than_one_read_spans_calls_and_is_answered() {
+        let backing = RefCell::new([0u8; CAP]);
+        let mut key = KEY;
+        let runtime = runtime_with(&mut key, PersistentState::new(1), &backing);
+        let mut handler = EchoHandler {
+            noted: std::vec::Vec::new(),
+            agent_temps: std::vec::Vec::new(),
+        };
+        {
+            let runtime = &mut runtime.with_telemetry(&mut handler, NODE);
+            runtime.bus.queue_packet(NODE, Kind::ReadRails, &[0x11; 40]);
+            assert!(
+                runtime.bus.readable.len() > super::SERVICE_RX,
+                "the frame must not fit in one read"
+            );
+
+            runtime.try_service();
+            assert!(
+                runtime.bus.written.is_empty(),
+                "the frame is incomplete after one read"
+            );
+            runtime.try_service();
+            assert_eq!(decode_kind(&runtime.bus.written), Kind::Rails);
+        }
     }
 
     #[test]
