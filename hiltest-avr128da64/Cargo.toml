@@ -27,7 +27,7 @@ tca9535 = { path = "../libraries/tca9535" }
 ufmt = { version = "0.2", default-features = false }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "18b19ea9365b1d6a9ccb437a717bff0cceddb571" }
 
 # Both profiles keep the panic machinery: the harness reports panic locations
 # through the resume record, so panics must reach the panic handler.

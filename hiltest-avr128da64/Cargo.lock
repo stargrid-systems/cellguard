@@ -38,8 +38,8 @@ dependencies = [
 
 [[package]]
 name = "avr-device"
-version = "0.8.1"
-source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb03874bc456b329f4c141f1a08e#73ba68ab5bd7bb03874bc456b329f4c141f1a08e"
+version = "0.9.0"
+source = "git+https://github.com/stargrid-systems/avr-device?rev=18b19ea9365b1d6a9ccb437a717bff0cceddb571#18b19ea9365b1d6a9ccb437a717bff0cceddb571"
 dependencies = [
  "anyhow",
  "atdf2svd",
@@ -51,15 +51,15 @@ dependencies = [
  "svd-rs",
  "svd2rust",
  "svdtools",
- "syn 2.0.110",
+ "syn 2.0.119",
  "vcell",
  "yaml-rust2",
 ]
 
 [[package]]
 name = "avr-device-macros"
-version = "0.8.1"
-source = "git+https://github.com/stargrid-systems/avr-device?rev=73ba68ab5bd7bb03874bc456b329f4c141f1a08e#73ba68ab5bd7bb03874bc456b329f4c141f1a08e"
+version = "0.9.0"
+source = "git+https://github.com/stargrid-systems/avr-device?rev=18b19ea9365b1d6a9ccb437a717bff0cceddb571#18b19ea9365b1d6a9ccb437a717bff0cceddb571"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -446,7 +446,7 @@ dependencies = [
  "phf_shared",
  "proc-macro2",
  "quote",
- "syn 2.0.110",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -474,7 +474,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
- "syn 2.0.110",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -653,7 +653,7 @@ dependencies = [
  "regex",
  "svd-parser",
  "svd-rs",
- "syn 2.0.110",
+ "syn 2.0.119",
  "thiserror 2.0.20",
  "url",
 ]
@@ -696,9 +696,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.110"
+version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a99801b5bd34ede4cf3fc688c5919368fea4e4814a4664359503e6015b280aea"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -724,7 +724,7 @@ checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.110",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -760,7 +760,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.110",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -924,7 +924,7 @@ checksum = "de844c262c8848816172cef550288e7dc6c7b7814b4ee56b3e1553f275f1858e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.110",
+ "syn 2.0.119",
  "synstructure",
 ]
 
@@ -945,7 +945,7 @@ checksum = "11532158c46691caf0f2593ea8358fed6bbf68a0315e80aae9bd41fbade684a1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.110",
+ "syn 2.0.119",
  "synstructure",
 ]
 

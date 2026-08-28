@@ -32,7 +32,7 @@ p3t1755 = { path = "../libraries/p3t1755" }
 tca9535 = { path = "../libraries/tca9535" }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "18b19ea9365b1d6a9ccb437a717bff0cceddb571" }
 
 [profile.dev]
 # Dev keeps the panic machinery so panic records work during bring-up.

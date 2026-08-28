@@ -68,4 +68,4 @@ ufmt = { version = "0.2", default-features = false }
 zerocopy = { version = "0.8", default-features = false }
 
 [patch.crates-io]
-avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "73ba68ab5bd7bb03874bc456b329f4c141f1a08e" }
+avr-device = { git = "https://github.com/stargrid-systems/avr-device", rev = "18b19ea9365b1d6a9ccb437a717bff0cceddb571" }
