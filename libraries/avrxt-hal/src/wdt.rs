@@ -6,6 +6,10 @@
 //! [`CcpUnlock`] (the device's `CPU`) and does the CCP unlock plus the
 //! protected write with interrupts masked, so the unlock window cannot be
 //! interrupted.
+//!
+//! [`Watchdog::start`] and [`Watchdog::stop`] first wait out
+//! `STATUS.SYNCBUSY`. The hardware ignores a `CTRLA` write while the
+//! previous one is still syncing into the WDT clock domain.
 
 use crate::clock::CcpUnlock;
 
@@ -43,6 +47,10 @@ pub trait WdtInstance {
     /// Writes `CTRLA.PERIOD`. This is protected, so the caller must unlock CCP
     /// just before.
     fn write_period(&self, period: Period);
+    /// Spins until `STATUS.SYNCBUSY` is clear. A `CTRLA` write takes 2 to 3
+    /// WDT clock cycles (about 3 ms) to cross into the WDT clock domain, and
+    /// the hardware silently ignores `CTRLA` writes while that is pending.
+    fn wait_sync(&self);
 }
 
 /// The watchdog timer.
@@ -55,6 +63,8 @@ impl<T: WdtInstance> Watchdog<T> {
     #[inline]
     #[must_use]
     pub fn start<C: CcpUnlock>(cpu: &C, instance: T, period: Period) -> Self {
+        // Before the unlock: the CCP window is only 4 instructions.
+        instance.wait_sync();
         avr_device::interrupt::free(|_| {
             cpu.unlock_ioreg();
             instance.write_period(period);
@@ -72,6 +82,7 @@ impl<T: WdtInstance> Watchdog<T> {
     /// Disables the watchdog. Consumes the handle so the stopped watchdog can
     /// no longer be fed.
     pub fn stop<C: CcpUnlock>(self, cpu: &C) {
+        self.instance.wait_sync();
         avr_device::interrupt::free(|_| {
             cpu.unlock_ioreg();
             self.instance.write_period(Period::Off);
@@ -98,6 +109,9 @@ macro_rules! impl_wdt_instance {
                     Period::Clk4k => w.period()._4kclk(),
                     Period::Clk8k => w.period()._8kclk(),
                 });
+            }
+            fn wait_sync(&self) {
+                crate::wait::spin_until(|| self.status().read().syncbusy().bit_is_clear());
             }
         }
     };
