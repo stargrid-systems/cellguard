@@ -1,40 +1,19 @@
 //! `cellguard-cli` is the host-side tool for the `CellGuard` field bus.
 //!
-//! It speaks the cellcore's COBS-framed protocol over a serial link, so a
-//! host can push signed firmware images, probe device state, and read panic
-//! records.
-#![expect(
-    clippy::float_arithmetic,
-    reason = "host-only display scaling for telemetry values"
-)]
+//! This binary is a thin argument-parsing shell. The logic lives in the
+//! `cellguard_cli` library crate.
 
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::{fs, io};
 
-use cellboot::image::{ImageHeader, ImageKind, Region};
-use cellboot::state::{PersistentState, STATE_LEN};
-use cellcore::update::command::NackReason;
-use cellcore::update::verify;
-use cellguard_panic::{PanicRecord, RECORD_LEN};
-use cellguard_protocol::{
-    BOARD_MODEL_UNPROVISIONED, BalancerStatus, DeviceId, Kind, RAIL_ORDER, RAILS, RailSnapshot,
-    SerialNumber, Snapshot, TEMP_ORDER, TempSnapshot,
-};
+use cellguard_cli::commands::{self, InaRef, SnapshotKind, Target};
+use cellguard_protocol::Kind;
 use clap::{Parser, Subcommand};
-use hmac_sha256::HMAC;
-
-use self::transport::{Reply, Transport};
-
-mod transport;
 
 const DEFAULT_BAUD: u32 = 115_200;
 const DEFAULT_CHUNK: usize = 128;
-const DEFAULT_TARGET_ID: u16 = 1;
-const DEFAULT_CELLAGENT_TARGET_ID: u16 = 2;
 const DEFAULT_FW_VERSION: u32 = 1;
-const DEFAULT_KEY_HEX: &str = "ffffffffffffffffffffffffffffffff";
 
 #[derive(Parser)]
 #[command(
@@ -229,40 +208,6 @@ enum Command {
     },
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum Target {
-    /// The cellcore application region.
-    App,
-    /// The cellcore bootloader region.
-    Bootloader,
-    /// The cellagent application.
-    Cellagent,
-}
-
-impl Target {
-    const fn region(self) -> Region {
-        match self {
-            Self::App => Region::ApplicationCode,
-            Self::Bootloader => Region::Bootloader,
-            Self::Cellagent => Region::CellagentApp,
-        }
-    }
-
-    const fn kind(self) -> ImageKind {
-        match self {
-            Self::App | Self::Cellagent => ImageKind::Application,
-            Self::Bootloader => ImageKind::Bootloader,
-        }
-    }
-
-    const fn default_target_id(self) -> u16 {
-        match self {
-            Self::Cellagent => DEFAULT_CELLAGENT_TARGET_ID,
-            Self::App | Self::Bootloader => DEFAULT_TARGET_ID,
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
@@ -291,483 +236,55 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             fw_version,
             baud,
             chunk_size,
-        } => push_image(
+        } => commands::push_image(
             &port, node, &payload, target, key, target_id, fw_version, baud, chunk_size,
         ),
-        Command::Probe { port, node, baud } => probe(&port, node, baud),
-        Command::Identity { port, node, baud } => identity(&port, node, baud),
-        Command::PanicProbe { port, node, baud } => panic_probe(&port, node, baud),
+        Command::Probe { port, node, baud } => commands::probe(&port, node, baud),
+        Command::Identity { port, node, baud } => commands::identity(&port, node, baud),
+        Command::PanicProbe { port, node, baud } => commands::panic_probe(&port, node, baud),
         Command::Cells { port, node, baud } => {
-            read_snapshot(&port, node, baud, SnapshotKind::Cells, InaRef::Gnd)
+            commands::read_snapshot(&port, node, baud, SnapshotKind::Cells, InaRef::Gnd)
         }
         Command::Currents {
             port,
             node,
             baud,
             ina_ref,
-        } => read_snapshot(&port, node, baud, SnapshotKind::Currents, ina_ref),
-        Command::Rails { port, node, baud } => rails(&port, node, baud),
-        Command::Temps { port, node, baud } => temps(&port, node, baud),
-        Command::Balance { port, node, baud } => balance_status(&port, node, baud),
+        } => commands::read_snapshot(&port, node, baud, SnapshotKind::Currents, ina_ref),
+        Command::Rails { port, node, baud } => commands::rails(&port, node, baud),
+        Command::Temps { port, node, baud } => commands::temps(&port, node, baud),
+        Command::Balance { port, node, baud } => commands::balance_status(&port, node, baud),
         Command::SetBleed {
             port,
             node,
             baud,
             en_3r6,
             en_36r5,
-        } => ack(&port, node, baud, Kind::SetBleed, &[en_3r6, en_36r5]),
+        } => commands::ack(&port, node, baud, Kind::SetBleed, &[en_3r6, en_36r5]),
         Command::SetBleedPwm {
             port,
             node,
             baud,
             duty,
-        } => ack(&port, node, baud, Kind::SetBleedPwm, &duty.to_le_bytes()),
+        } => commands::ack(&port, node, baud, Kind::SetBleedPwm, &duty.to_le_bytes()),
         Command::SetPower {
             port,
             node,
             baud,
             flags,
-        } => ack(&port, node, baud, Kind::SetPower, &[flags]),
+        } => commands::ack(&port, node, baud, Kind::SetPower, &[flags]),
         Command::GateOff {
             port,
             node,
             baud,
             on,
-        } => ack(&port, node, baud, Kind::GateOff, &[on]),
+        } => commands::ack(&port, node, baud, Kind::GateOff, &[on]),
         Command::SetBalancer {
             port,
             node,
             baud,
             mask,
-        } => ack(&port, node, baud, Kind::SetBalancer, &[mask]),
-        Command::GateState { port, node, baud } => gate_state(&port, node, baud),
+        } => commands::ack(&port, node, baud, Kind::SetBalancer, &[mask]),
+        Command::GateState { port, node, baud } => commands::gate_state(&port, node, baud),
     }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the push-image CLI options"
-)]
-#[expect(clippy::cast_possible_truncation, reason = "checked at function entry")]
-fn push_image(
-    port: &str,
-    node: u8,
-    payload_path: &Path,
-    target: Target,
-    key_hex: Option<String>,
-    target_id: Option<u16>,
-    fw_version: u32,
-    baud: u32,
-    chunk_size: usize,
-) -> Result<(), Box<dyn Error>> {
-    let key = parse_key(&key_hex.unwrap_or_else(|| DEFAULT_KEY_HEX.to_string()))?;
-    let target_id = target_id.unwrap_or_else(|| target.default_target_id());
-    let payload = fs::read(payload_path)?;
-    if payload.len() > u32::MAX as usize {
-        return Err(format!(
-            "payload too large: {} bytes (max {})",
-            payload.len(),
-            u32::MAX
-        )
-        .into());
-    }
-
-    eprintln!(
-        "payload: {} bytes, region {:?}, target_id {}, fw_version {}",
-        payload.len(),
-        target.region(),
-        target_id,
-        fw_version
-    );
-
-    let header = ImageHeader {
-        kind: target.kind(),
-        region: target.region(),
-        target_id,
-        fw_version,
-        payload_len: 0,
-        payload_crc32: 0,
-        hmac: [0u8; 32],
-    };
-    let signed_header = verify::sign(header, HMAC::new(key), &payload)
-        .map_err(|e| format!("signing failed: {e}"))?;
-
-    let mut transport = Transport::open(port, baud)?;
-
-    eprintln!("sending BootBegin...");
-    let reply = transport.exchange(node, Kind::BootBegin, &signed_header)?;
-    expect_ack(&reply, 0)?;
-
-    let total = payload.len();
-    let mut offset = 0usize;
-    let mut data_buf = vec![0u8; 4 + chunk_size];
-    for chunk in payload.chunks(chunk_size) {
-        let head = data_buf
-            .get_mut(..4)
-            .ok_or("internal: data buffer shorter than its header")?;
-        head.copy_from_slice(&(offset as u32).to_le_bytes());
-        let body = data_buf
-            .get_mut(4..4 + chunk.len())
-            .ok_or("internal: chunk overruns the data buffer")?;
-        body.copy_from_slice(chunk);
-        let frame = data_buf
-            .get(..4 + chunk.len())
-            .ok_or("internal: chunk overruns the data buffer")?;
-        let reply = transport.exchange(node, Kind::BootData, frame)?;
-        let expected = offset + chunk.len();
-        expect_ack(&reply, expected as u32)?;
-        offset = expected;
-        eprint!("\ruploading: {offset}/{total} bytes");
-        let _ = io::Write::flush(&mut io::stderr());
-    }
-    eprintln!();
-
-    eprintln!("sending BootCommit...");
-    let reply = transport.exchange(node, Kind::BootCommit, &[])?;
-    expect_ack(&reply, payload.len() as u32)?;
-
-    eprintln!("image staged successfully");
-    let epilogue = match target {
-        Target::App => "the cellcore bootloader self-programs the image on the next reset",
-        Target::Bootloader => {
-            "the image stays staged in the boot EEPROM: flashing the boot section is a bench-only \
-             step"
-        }
-        Target::Cellagent => {
-            "the cellcore streams the image to the cellprog over the session link, which reflashes \
-             U403 over UPDI via mux channel 3"
-        }
-    };
-    eprintln!("{epilogue}");
-    Ok(())
-}
-
-fn probe(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::BootProbe, &[])?;
-    match reply.kind {
-        Kind::BootStatus => {
-            let state = parse_state(&reply.payload)?;
-            print_state(&state);
-            Ok(())
-        }
-        other => Err(format!("expected BootStatus, got {other:?}").into()),
-    }
-}
-
-fn identity(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let id_reply = transport.exchange(node, Kind::ReadDeviceId, &[])?;
-    if id_reply.kind != Kind::DeviceId {
-        return Err(format!("expected DeviceId, got {:?}", id_reply.kind).into());
-    }
-    let id = DeviceId::decode(&id_reply.payload).ok_or("device-id payload has the wrong shape")?;
-
-    let serial_reply = transport.exchange(node, Kind::ReadSerialNumber, &[])?;
-    if serial_reply.kind != Kind::SerialNumber {
-        return Err(format!("expected SerialNumber, got {:?}", serial_reply.kind).into());
-    }
-    let serial =
-        SerialNumber::decode(&serial_reply.payload).ok_or("serial payload has the wrong shape")?;
-
-    if id.board_model == BOARD_MODEL_UNPROVISIONED {
-        println!("board  : unprovisioned (no factory record)");
-    } else {
-        println!(
-            "board  : model {} rev {}",
-            id.board_model, id.board_revision
-        );
-    }
-    println!("fw     : {}", id.fw_version);
-    print!("serial : ");
-    for byte in serial.serial {
-        print!("{byte:02X}");
-    }
-    println!();
-    Ok(())
-}
-
-fn panic_probe(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::PanicProbe, &[])?;
-    match reply.kind {
-        Kind::PanicStatus => {
-            if reply.payload.is_empty() {
-                println!("no panic record");
-            } else if reply.payload.len() == RECORD_LEN {
-                let bytes: &[u8; RECORD_LEN] = reply
-                    .payload
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| "panic record has wrong length")?;
-                match PanicRecord::parse(bytes) {
-                    Ok(record) => print_panic(&record),
-                    Err(e) => eprintln!("panic record parse failed: {e}"),
-                }
-            } else {
-                eprintln!(
-                    "unexpected panic-status payload length: {}",
-                    reply.payload.len()
-                );
-            }
-            Ok(())
-        }
-        other => Err(format!("expected PanicStatus, got {other:?}").into()),
-    }
-}
-
-fn expect_ack(reply: &Reply, expected_offset: u32) -> Result<(), Box<dyn Error>> {
-    match reply.kind {
-        Kind::BootAck => {
-            let next_offset = reply
-                .payload
-                .get(..4)
-                .and_then(|b| b.try_into().ok())
-                .map_or(0, u32::from_le_bytes);
-            if next_offset != expected_offset {
-                return Err(format!(
-                    "unexpected next_offset: expected {expected_offset}, got {next_offset}"
-                )
-                .into());
-            }
-            Ok(())
-        }
-        Kind::BootNack => Err(format!("device rejected: {}", nack_reason(&reply.payload)).into()),
-        other => Err(format!("expected BootAck/BootNack, got {other:?}").into()),
-    }
-}
-
-/// Decodes a Nack payload byte into a human-readable reason.
-const fn nack_reason(payload: &[u8]) -> &str {
-    let Some(&code) = payload.first() else {
-        return "no reason code";
-    };
-    let Some(reason) = NackReason::from_code(code) else {
-        return "unknown reason code";
-    };
-    match reason {
-        NackReason::Malformed => "malformed command",
-        NackReason::WrongTarget => "wrong target",
-        NackReason::BadState => "bad session state",
-        NackReason::OutOfOrder => "chunk out of order",
-        NackReason::TooLarge => "image too large",
-        NackReason::StorageError => "storage error",
-        NackReason::VerifyFailed => "verify failed",
-        NackReason::Unauthorized => "unauthorized",
-        NackReason::RouteTimeout => "route timeout",
-        // The enum is non_exhaustive, so a wildcard arm is required.
-        _ => "unknown reason code",
-    }
-}
-
-fn parse_state(payload: &[u8]) -> Result<PersistentState, Box<dyn Error>> {
-    let bytes: &[u8; STATE_LEN] = payload
-        .get(..STATE_LEN)
-        .and_then(|s| s.try_into().ok())
-        .ok_or("status payload is not STATE_LEN bytes")?;
-    PersistentState::parse(bytes).map_err(|e| format!("state parse failed: {e}").into())
-}
-
-fn print_state(state: &PersistentState) {
-    println!("{:<16}: {}", "agent_version", state.agent_version);
-    println!("{:<16}: {}", "app_version", state.app_version);
-    println!("{:<16}: {:?}", "app_health", state.app_health);
-    println!("{:<16}: {:?}", "staged", state.staged);
-    println!("{:<16}: {:?}", "staged_region", state.staged_region);
-    println!("{:<16}: {}", "staged_version", state.staged_version);
-    println!("{:<16}: {:?}", "last_outcome", state.last_outcome);
-    println!("{:<16}: {}", "boot_count", state.boot_count);
-    println!("{:<16}: {}", "program_attempts", state.program_attempts);
-}
-
-fn print_panic(record: &PanicRecord) {
-    let file = core::str::from_utf8(
-        record
-            .file
-            .get(..usize::from(record.file_len))
-            .unwrap_or(&[]),
-    )
-    .unwrap_or("<invalid utf8>");
-    println!("panic at {file}:{}:{}", record.line, record.col);
-    println!("  reset_flags     : 0x{:02X}", record.reset_flags);
-    println!("  consecutive     : {}", record.consecutive_panics);
-}
-
-fn parse_key(hex: &str) -> Result<[u8; 16], Box<dyn Error>> {
-    if hex.len() != 32 {
-        return Err(format!("key must be 32 hex chars (16 bytes), got {}", hex.len()).into());
-    }
-    let mut nibbles = hex.as_bytes().iter().map(|&c| hex_val(c));
-    let mut key = [0u8; 16];
-    for byte in &mut key {
-        let hi = nibbles.next().ok_or("key too short")??;
-        let lo = nibbles.next().ok_or("key too short")??;
-        *byte = (hi << 4) | lo;
-    }
-    Ok(key)
-}
-
-fn hex_val(c: u8) -> Result<u8, Box<dyn Error>> {
-    match c {
-        b'0'..=b'9' => Ok(c - b'0'),
-        b'a'..=b'f' => Ok(c - b'a' + 10),
-        b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(format!("invalid hex char: {}", char::from(c)).into()),
-    }
-}
-
-#[derive(Clone, Copy)]
-enum SnapshotKind {
-    Cells,
-    Currents,
-}
-
-/// ADS131M08 internal reference in millivolts and full scale.
-const ADS_VREF_MV: f32 = 1200.0;
-const ADS_FULL_SCALE: f32 = 8_388_608.0;
-/// Cell-voltage divider ratio (820k:28k).
-const CELL_DIVIDER: f32 = 0.0330;
-/// INA190 transfer: volts out per ampere (47 mOhm shunt, gain 25).
-const INA_V_PER_A: f32 = 1.175;
-/// INA190 REF midpoint in bipolar mode (S501 at 3.15 V).
-const INA_REF_MIDPOINT_V: f32 = 3.15;
-
-/// The S501 `INA_REF` bench position the current readings assume.
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum InaRef {
-    /// Unipolar: zero current reads zero.
-    #[value(name = "gnd")]
-    Gnd,
-    /// Bipolar: the output centers at the INA190 REF midpoint.
-    #[value(name = "3v3")]
-    V3v3,
-}
-
-fn ina_amps(volts: f32, ina_ref: InaRef) -> f32 {
-    let offset = match ina_ref {
-        InaRef::Gnd => 0.0,
-        InaRef::V3v3 => INA_REF_MIDPOINT_V,
-    };
-    (volts - offset) / INA_V_PER_A
-}
-
-fn read_snapshot(
-    port: &str,
-    node: u8,
-    baud: u32,
-    what: SnapshotKind,
-    ina_ref: InaRef,
-) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let kind = match what {
-        SnapshotKind::Cells => Kind::ReadCellVoltages,
-        SnapshotKind::Currents => Kind::ReadBalanceCurrents,
-    };
-    let reply = transport.exchange(node, kind, &[])?;
-    let expected = match what {
-        SnapshotKind::Cells => Kind::CellVoltages,
-        SnapshotKind::Currents => Kind::BalanceCurrents,
-    };
-    if reply.kind != expected {
-        return Err(format!("expected {expected:?}, got {:?}", reply.kind).into());
-    }
-    let snap = Snapshot::decode(&reply.payload).ok_or("snapshot payload has the wrong shape")?;
-    println!("seq {}", snap.seq);
-    for (i, code) in snap.codes.iter().enumerate() {
-        #[expect(clippy::cast_precision_loss, reason = "24-bit codes fit f32 exactly")]
-        let volts = *code as f32 / ADS_FULL_SCALE * ADS_VREF_MV / 1000.0;
-        match what {
-            SnapshotKind::Cells => {
-                let cell_mv = volts / CELL_DIVIDER * 1000.0;
-                println!("cell {}: raw {code}, {:.1} mV", i + 1, cell_mv);
-            }
-            SnapshotKind::Currents => {
-                let amps = ina_amps(volts, ina_ref);
-                println!("cell {}: raw {code}, {amps:.3} A", i + 1);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Rail ADC reference in millivolts (10-bit MCU ADC).
-const RAIL_VREF_MV: f32 = 1800.0;
-const RAIL_FULL_SCALE: f32 = 1023.0;
-/// Rail divider ratios in `RAIL_ORDER`.
-const RAIL_DIVIDER: [f32; RAILS] = [0.052, 0.052, 0.0536, 0.0536, 0.0536, 0.5, 0.0536, 0.0536];
-
-fn rails(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::ReadRails, &[])?;
-    if reply.kind != Kind::Rails {
-        return Err(format!("expected Rails, got {:?}", reply.kind).into());
-    }
-    let snap = RailSnapshot::decode(&reply.payload).ok_or("rails payload has the wrong shape")?;
-    for ((name, code), ratio) in RAIL_ORDER.iter().zip(snap.codes).zip(RAIL_DIVIDER) {
-        let mv = f32::from(code) / RAIL_FULL_SCALE * RAIL_VREF_MV / ratio;
-        println!("{name}: {code} ({mv:.0} mV)");
-    }
-    Ok(())
-}
-
-fn temps(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::ReadTemperatures, &[])?;
-    if reply.kind != Kind::Temperatures {
-        return Err(format!("expected Temperatures, got {:?}", reply.kind).into());
-    }
-    let temps = TempSnapshot::decode(&reply.payload).ok_or("temps payload has the wrong shape")?;
-    for (name, centi) in TEMP_ORDER.iter().zip(temps.temps) {
-        if centi == cellguard_protocol::TEMP_INVALID {
-            println!("{name}: unavailable");
-        } else {
-            println!("{name}: {}.{:02} C", centi / 100, centi % 100);
-        }
-    }
-    Ok(())
-}
-
-fn balance_status(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::ReadBalancerStatus, &[])?;
-    if reply.kind != Kind::BalancerStatus {
-        return Err(format!("expected BalancerStatus, got {:?}", reply.kind).into());
-    }
-    let status =
-        BalancerStatus::decode(&reply.payload).ok_or("status payload has the wrong shape")?;
-    println!("en_3r6 mask: {:#04x}", status.en_3r6);
-    println!("en_36r5 mask: {:#04x}", status.en_36r5);
-    println!(
-        "pwm duty: {} ({:.2}%)",
-        status.pwm_duty,
-        f32::from(status.pwm_duty) / 655.36
-    );
-    println!("gate mask: {:#04x}", status.gate_mask);
-    println!("tiny_all_off: {}", status.tiny_all_off);
-    println!("emergency_gate_off: {}", status.emergency_gate_off);
-    println!("active_balancer_on: {}", status.active_balancer_on);
-    println!("en_all: {}", status.en_all);
-    println!("cellagent_alive: {}", status.cellagent_alive);
-    Ok(())
-}
-
-fn ack(port: &str, node: u8, baud: u32, kind: Kind, payload: &[u8]) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, kind, payload)?;
-    match reply.kind {
-        Kind::Ack => Ok(()),
-        Kind::Nack => Err(format!("nacked: {}", nack_reason(&reply.payload)).into()),
-        other => Err(format!("expected Ack, got {other:?}").into()),
-    }
-}
-
-fn gate_state(port: &str, node: u8, baud: u32) -> Result<(), Box<dyn Error>> {
-    let mut transport = Transport::open(port, baud)?;
-    let reply = transport.exchange(node, Kind::ReadBalancerGateState, &[])?;
-    if reply.kind != Kind::BalancerGateState {
-        return Err(format!("expected BalancerGateState, got {:?}", reply.kind).into());
-    }
-    let mask = reply.payload.first().copied().unwrap_or(0);
-    println!("gate mask: {mask:#04x}");
-    Ok(())
 }
