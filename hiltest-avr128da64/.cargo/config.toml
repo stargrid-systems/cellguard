@@ -1,0 +1,12 @@
+[build]
+target = "avr-none"
+# Standalone image over the whole 128K flash at 0x0: the avr-none default
+# linker script already sizes the region from the deviceinfo note, so no
+# text-origin defsyms are needed.
+rustflags = ["-C", "target-cpu=avr128da64"]
+
+[target.'cfg(target_arch = "avr")']
+runner = "ravedude"
+
+[unstable]
+build-std = ["core"]

@@ -1,0 +1,15 @@
+[general]
+
+[board]
+name = "avr128da64"
+
+[board.reset]
+automatic = true
+
+[board.avrdude]
+# The PICkit Basic does not supply target power. Power the board externally
+# when flashing.
+programmer = "pickit_basic_updi"
+partno = "avr128da64"
+baudrate = -1
+do-chip-erase = true
