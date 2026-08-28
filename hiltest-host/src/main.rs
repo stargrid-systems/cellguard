@@ -1,27 +1,18 @@
 //! `hiltest` drives the `CellGuard` HIL test harness from the host.
 //!
-//! It flashes the standalone test firmware (`hiltest-avr128da64`), runs the
-//! on-target tests over the debug serial port, and restores the production
-//! cellboot + cellcore stack afterwards. AVR firmware is normally built in
-//! the project devcontainer: every flashing subcommand accepts prebuilt ELF
+//! This binary is a thin argument-parsing shell. The logic lives in the
+//! `hiltest_host` library crate. AVR firmware is normally built in the
+//! project devcontainer: every flashing subcommand accepts prebuilt ELF
 //! paths for the host-only workflow.
 
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use hiltest_host::{avrdude, commands};
 use hiltest_protocol::TestId;
-
-use self::report::Summary;
-use self::serial::Lines;
-use self::session::Session;
-
-mod avrdude;
-mod report;
-mod serial;
-mod session;
 
 const DEFAULT_BAUD: u32 = 115_200;
 const PORT_ENV: &str = "HILTEST_PORT";
@@ -120,7 +111,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
             elf,
             timeout,
             tests,
-        } => run_tests(
+        } => commands::run_tests(
             &resolve_port(port)?,
             baud,
             flash,
@@ -134,7 +125,7 @@ fn run(cli: Cli) -> Result<ExitCode, Box<dyn Error>> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Console { port, baud } => console(&resolve_port(port)?, baud),
+        Command::Console { port, baud } => commands::console(&resolve_port(port)?, baud),
         Command::Restore { boot_elf, core_elf } => {
             avrdude::restore(boot_elf.as_deref(), core_elf.as_deref())?;
             Ok(ExitCode::SUCCESS)
@@ -147,51 +138,4 @@ fn resolve_port(arg: Option<String>) -> Result<String, Box<dyn Error>> {
         return Ok(port);
     }
     std::env::var(PORT_ENV).map_err(|_| format!("no --port given and {PORT_ENV} is not set").into())
-}
-
-fn select_tests(names: &[String]) -> Result<Vec<TestId>, Box<dyn Error>> {
-    if names.is_empty() {
-        return Ok(TestId::ALL.to_vec());
-    }
-    names
-        .iter()
-        .map(|name| {
-            TestId::from_name(name).ok_or_else(|| format!("unknown test id: {name}").into())
-        })
-        .collect()
-}
-
-fn run_tests(
-    port: &str,
-    baud: u32,
-    flash: bool,
-    elf: Option<&Path>,
-    timeout: Duration,
-    tests: &[String],
-) -> Result<ExitCode, Box<dyn Error>> {
-    let selected = select_tests(tests)?;
-    if flash {
-        avrdude::flash_hiltest(elf)?;
-    }
-    let mut session = Session::open(port, baud)?;
-    session.wait_ready(flash)?;
-    let mut summary = Summary::new();
-    for id in selected {
-        println!("running {}", id.name());
-        let verdict = session.run_test(id, timeout)?;
-        summary.record(id, verdict);
-    }
-    summary.print();
-    Ok(summary.exit_code())
-}
-
-/// Dumb line viewer. Runs until interrupted.
-fn console(port: &str, baud: u32) -> Result<ExitCode, Box<dyn Error>> {
-    let mut lines = Lines::open(port, baud)?;
-    loop {
-        let deadline = Instant::now() + Duration::from_secs(3600);
-        if let Some(line) = lines.next_line(deadline)? {
-            println!("{line}");
-        }
-    }
 }

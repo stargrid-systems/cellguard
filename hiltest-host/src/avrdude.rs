@@ -17,6 +17,10 @@ const PART: &str = "avr128da64";
 
 /// Builds the test firmware (unless `elf` is given) and flashes it with a
 /// chip erase.
+///
+/// # Errors
+///
+/// Returns an error when no ELF can be resolved or a child process fails.
 pub fn flash_hiltest(elf: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let elf = match elf {
         Some(path) => existing(path)?,
@@ -30,6 +34,10 @@ pub fn flash_hiltest(elf: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
 /// Restores the production stack: chip erase, BOOTSIZE fuse, cellboot,
 /// cellcore.
+///
+/// # Errors
+///
+/// Returns an error when an ELF cannot be resolved or a child process fails.
 pub fn restore(boot_elf: Option<&Path>, core_elf: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let boot = resolve("cellboot-avr128da64", boot_elf, "--boot-elf")?;
     let core = resolve("cellcore-avr128da64", core_elf, "--core-elf")?;
@@ -140,5 +148,30 @@ fn run(command: &mut Command, what: &str) -> Result<(), Box<dyn Error>> {
         Ok(())
     } else {
         Err(format!("{what} failed with {status}").into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avrdude_targets_only_the_approved_programmer_and_part() {
+        let command = avrdude();
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["-c", "pickit_basic_updi", "-p", "avr128da64"]);
+    }
+
+    #[test]
+    fn flash_op_formats_the_elf_write_operation() {
+        let op = flash_op(Path::new("/tmp/hiltest.elf"));
+        assert_eq!(op, "flash:w:/tmp/hiltest.elf:e");
+    }
+
+    #[test]
+    fn elf_path_points_at_the_conventional_release_elf() {
+        let path = elf_path("hiltest-avr128da64");
+        assert!(path.starts_with(repo_root()));
+        assert!(path.ends_with("hiltest-avr128da64/target/avr-none/release/hiltest-avr128da64"));
     }
 }

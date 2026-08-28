@@ -24,6 +24,10 @@ pub struct Session {
 
 impl Session {
     /// Opens the port. The input buffer is cleared by [`Lines::open`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the port cannot be opened.
     pub fn open(port: &str, baud: u32) -> io::Result<Self> {
         Ok(Self {
             lines: Lines::open(port, baud)?,
@@ -33,6 +37,10 @@ impl Session {
 
     /// Verifies the link. With `expect_banner` (right after a flash) it
     /// first waits for the firmware's boot banner and ready line.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the port fails or the firmware does not answer.
     pub fn wait_ready(&mut self, expect_banner: bool) -> io::Result<()> {
         if expect_banner {
             let deadline = Instant::now() + BANNER_TIMEOUT;
@@ -73,6 +81,11 @@ impl Session {
 
     /// Runs one test and waits for its result line. Reboot banners mid-test
     /// are tolerated: the deferred result arrives right after the banner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the port fails. A missing result line is a
+    /// [`Verdict::Timeout`], not an error.
     pub fn run_test(&mut self, id: TestId, timeout: Duration) -> io::Result<Verdict> {
         self.lines.send(&Command::Run(id.name()).to_string())?;
         let deadline = Instant::now() + timeout;
