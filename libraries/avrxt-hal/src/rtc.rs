@@ -139,3 +139,41 @@ impl_rtc_instance!(avr_device::avr128da64::RTC);
 impl_rtc_instance!(avr_device::attiny406::RTC);
 #[cfg(feature = "attiny416")]
 impl_rtc_instance!(avr_device::attiny416::RTC);
+
+#[cfg(test)]
+mod tests {
+    use super::{ClockSource, Prescaler};
+
+    #[test]
+    fn clock_source_codes() {
+        assert_eq!(ClockSource::Internal32k.code(), 0);
+        assert_eq!(ClockSource::Internal1k.code(), 1);
+        assert_eq!(ClockSource::External32k.code(), 2);
+        assert_eq!(ClockSource::ExternalClock.code(), 3);
+    }
+
+    #[test]
+    fn prescaler_codes() {
+        let cases = [
+            (Prescaler::Div1, 0),
+            (Prescaler::Div2, 1),
+            (Prescaler::Div4, 2),
+            (Prescaler::Div8, 3),
+            (Prescaler::Div16, 4),
+            (Prescaler::Div32, 5),
+            (Prescaler::Div64, 6),
+            (Prescaler::Div128, 7),
+            (Prescaler::Div256, 8),
+            (Prescaler::Div512, 9),
+            (Prescaler::Div1024, 10),
+            (Prescaler::Div2048, 11),
+            (Prescaler::Div4096, 12),
+            (Prescaler::Div8192, 13),
+            (Prescaler::Div16384, 14),
+            (Prescaler::Div32768, 15),
+        ];
+        for (prescaler, code) in cases {
+            assert_eq!(prescaler.code(), code);
+        }
+    }
+}

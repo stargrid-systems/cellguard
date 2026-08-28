@@ -396,3 +396,39 @@ impl_usarts!(
 impl_usarts!(chsize, pmode, sbmode; avr_device::attiny406::USART0);
 #[cfg(feature = "attiny416")]
 impl_usarts!(normal_chsize, normal_pmode, normal_sbmode; avr_device::attiny416::USART0);
+
+#[cfg(test)]
+mod tests {
+    use super::baud_reg;
+
+    #[test]
+    fn datasheet_pairs() {
+        assert_eq!(baud_reg(24_000_000, 115_200), Some(833));
+        assert_eq!(baud_reg(24_000_000, 9_600), Some(10_000));
+        assert_eq!(baud_reg(4_000_000, 9_600), Some(1_667));
+    }
+
+    #[test]
+    fn rounds_to_nearest() {
+        // Exact value is 138.9, so truncation would give 138.
+        assert_eq!(baud_reg(4_000_000, 115_200), Some(139));
+    }
+
+    #[test]
+    fn rejects_baud_too_low() {
+        assert_eq!(baud_reg(24_000_000, 300), None);
+    }
+
+    #[test]
+    fn rejects_baud_too_high() {
+        assert_eq!(baud_reg(4_000_000, 33_000_000), None);
+    }
+
+    #[test]
+    fn register_range_boundaries() {
+        assert_eq!(baud_reg(65_535, 4), Some(u16::MAX));
+        assert_eq!(baud_reg(65_536, 4), None);
+        assert_eq!(baud_reg(1_000_000, 8_000_000), Some(1));
+        assert_eq!(baud_reg(1_000_000, 9_000_000), None);
+    }
+}

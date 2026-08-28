@@ -173,3 +173,34 @@ impl_sigrow_instance!(avr_device::avr128db48::SIGROW);
 impl_sigrow_instance!(avr_device::avr128db64::SIGROW);
 #[cfg(feature = "avr128da64")]
 impl_sigrow_instance!(avr_device::avr128da64::SIGROW);
+
+#[cfg(test)]
+mod tests {
+    use super::TempCalibration;
+
+    const fn cal(slope: u16, offset: u16) -> TempCalibration {
+        TempCalibration { slope, offset }
+    }
+
+    #[test]
+    fn kelvin_with_unit_slope() {
+        // A slope of 4096 scales by exactly 1.
+        assert_eq!(cal(4096, 1000).kelvin(700), 300);
+        assert_eq!(cal(4096, 700).kelvin(700), 0);
+    }
+
+    #[test]
+    fn kelvin_rounds_to_nearest() {
+        // (2048 * 1 + 2048) / 4096 rounds up to 1.
+        assert_eq!(cal(1, 2048).kelvin(0), 1);
+        // (2047 * 1 + 2048) / 4096 rounds down to 0.
+        assert_eq!(cal(1, 2047).kelvin(0), 0);
+    }
+
+    #[test]
+    fn celsius_offsets_by_273() {
+        assert_eq!(cal(4096, 1000).celsius(700), 27);
+        assert_eq!(cal(4096, 973).celsius(700), 0);
+        assert_eq!(cal(4096, 963).celsius(700), -10);
+    }
+}

@@ -125,3 +125,15 @@ impl_tca_instance!(avr_device::avr128db48::TCA0);
 impl_tca_instance!(avr_device::avr128db64::TCA0);
 #[cfg(feature = "avr128da64")]
 impl_tca_instance!(avr_device::avr128da64::TCA0);
+
+#[cfg(test)]
+mod tests {
+    use super::Channel;
+
+    #[test]
+    fn channel_indices() {
+        assert_eq!(Channel::Wo0.index(), 0);
+        assert_eq!(Channel::Wo1.index(), 1);
+        assert_eq!(Channel::Wo2.index(), 2);
+    }
+}
